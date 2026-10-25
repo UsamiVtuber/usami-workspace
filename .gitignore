@@ -1,0 +1,20 @@
+# Segredos — jamais versionar
+.env
+
+# Assets de terceiros e pacotes grandes (fora do git)
+*.zip
+*.glb
+*.vrm
+Vrms/
+CubismSdkForWeb-5-r.5/
+Felis_v0.8.1/
+autumn-original-work/
+
+_backup/
+
+# Repo aninhado com versionamento próprio
+usami/
+
+# Genéricos de build — nada de dependências nem build no git da raiz
+node_modules/
+dist/

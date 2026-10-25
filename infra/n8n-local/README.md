@@ -3,6 +3,9 @@
 This stack runs n8n and PostgreSQL on this computer only. Its editor is at
 http://localhost:5678 and is not exposed to the local network.
 
+A stack que roda no notebook Nyarch (Arch) tem pasta e documentação próprias:
+[`nyarch/`](nyarch/README.md).
+
 ## Start
 
 From this directory, after Docker Desktop reports that its engine is running:

@@ -1,0 +1,7 @@
+# Configuracao do SearXNG para o n8n Assistant.
+# A imagem padrao serve so HTML; o search do n8n precisa do format=json.
+use_default_settings: true
+search:
+  formats:
+    - html
+    - json

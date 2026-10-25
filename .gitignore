@@ -1,5 +1,6 @@
 # Segredos — jamais versionar
 .env
+.qoder/settings.local.json
 
 # Assets de terceiros e pacotes grandes (fora do git)
 *.zip

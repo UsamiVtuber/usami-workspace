@@ -1,0 +1,85 @@
+# n8n do Nyarch (notebook Arch) — definido por compose desde 2026-10-25.
+# Antes era `docker run` avulso; o compose existe para que o vinculo com a rede do
+# code sandbox sobreviva a qualquer recriacao.
+#
+#   cd ~/n8n && docker compose up -d
+#
+# A rede do sandbox e externa: pertence a stack em ~/n8n-sandbox, que precisa estar
+# de pe antes (`cd ~/n8n-sandbox && docker compose up -d`).
+#
+# Segredos em ~/n8n/.env (0600): N8N_SANDBOX_SERVICE_API_KEY espelha SANDBOX_API_KEYS
+# de ~/n8n-sandbox/.env, e SEARXNG_SECRET e gerado. Nenhum segredo neste arquivo.
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n-usami-inbox
+    restart: unless-stopped
+    user: node
+    depends_on:
+      searxng:
+        condition: service_started
+    ports:
+      # Edicao local pela rede do cabo cruzado; nada exposto alem de 10.42.0.0/24.
+      - "10.42.0.1:5678:5678"
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_PROTOCOL: http
+      N8N_HOST: 10.42.0.1
+      N8N_PORT: "5678"
+      WEBHOOK_URL: http://10.42.0.1:5678
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      TZ: America/Sao_Paulo
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_RESTRICT_FILE_ACCESS_TO: /files/obsidian/usami,/home/node/vault/Inbox/Automations
+      # Usado pelos workflows para localizar o vault montado.
+      USAMI_VAULT_PATH: /home/node/vault
+      # Code sandbox auto-hospedado (n8n Assistant / Agents).
+      N8N_INSTANCE_AI_SANDBOX_ENABLED: "true"
+      N8N_INSTANCE_AI_SANDBOX_PROVIDER: n8n-sandbox
+      N8N_SANDBOX_SERVICE_URL: http://n8n-sandbox-api:8080
+      N8N_SANDBOX_SERVICE_API_KEY: ${N8N_SANDBOX_SERVICE_API_KEY:?defina em ~/n8n/.env}
+    volumes:
+      # OS TRES MOUNTS SAO OBRIGATORIOS. Sem eles o n8n sobe num banco vazio dentro
+      # do container e parece funcionar normalmente -- foi uma regressao real de 2026-10-25.
+      - type: bind
+        source: /dados/n8n/data
+        target: /home/node/.n8n
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /dados/obsidian/usami
+        target: /files/obsidian/usami
+        bind:
+          create_host_path: false
+      # SMB do vault (Inbox/Automations). Se /mnt/usami-automations estiver desmontado,
+      # o container ve a pasta vazia: confira o mount antes de recriar.
+      - type: bind
+        source: /mnt/usami-automations
+        target: /home/node/vault/Inbox/Automations
+        bind:
+          create_host_path: false
+    networks:
+      - n8n
+      - sandbox-service
+
+  searxng:
+    image: ghcr.io/searxng/searxng:latest
+    container_name: n8n-searxng
+    restart: unless-stopped
+    # Interno: o n8n alcaca por nome de servico. NUNCA publique porta daqui.
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?defina em ~/n8n/.env}
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - n8n
+
+networks:
+  n8n:
+    driver: bridge
+  sandbox-service:
+    external: true
+    name: n8n-sandbox_sandbox-service

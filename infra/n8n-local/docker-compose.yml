@@ -46,7 +46,7 @@ services:
       USAMI_VAULT_PATH: /home/node/vault
     volumes:
       - n8n_data:/home/node/.n8n
-      - "../Usami Obsidian/Usami:/home/node/vault"
+      - "../../vault/Usami Obsidian/Usami:/home/node/vault"
 
 volumes:
   n8n_data:

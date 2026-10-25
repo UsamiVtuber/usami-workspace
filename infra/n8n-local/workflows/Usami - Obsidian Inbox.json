@@ -1,0 +1,118 @@
+{
+  "name": "Usami - Obsidian Inbox",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-inbox",
+        "options": {}
+      },
+      "id": "b5a6c184-fc5e-4142-944d-1d9b43d6829a",
+      "name": "Receber evento da Usami",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        304
+      ],
+      "webhookId": "a4ca39e8-6361-4a28-93c9-8ced0179d76b"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) {\n  throw new Error('O corpo deve ser um objeto JSON.');\n}\n\nconst title = String(body.title ?? 'Evento da Usami').trim().slice(0, 120) || 'Evento da Usami';\nconst content = String(body.content ?? '').trim().slice(0, 12000);\nif (!content) {\n  throw new Error('content é obrigatório.');\n}\n\nconst createdAt = new Date().toISOString();\nconst timestamp = createdAt.replace(/[:.]/g, '-');\nconst slug = title\n  .normalize('NFKD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .toLowerCase()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-+|-+$/g, '')\n  .slice(0, 60) || 'evento';\nconst filename = `${timestamp}-${slug}.md`;\nconst kind = String(body.kind ?? 'event').trim().slice(0, 48) || 'event';\nconst markdown = `---\\nsource: usami-automation\\nkind: ${JSON.stringify(kind)}\\ncreated_at: ${createdAt}\\ntitle: ${JSON.stringify(title)}\\n---\\n\\n${content}\\n`;\n\nreturn [{ json: { filename, markdown } }];"
+      },
+      "id": "8d7cda66-8aae-4c0b-bc7d-75e16b2e441c",
+      "name": "Validar e formatar nota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "binaryPropertyName": "note",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "570a6c60-760e-4cad-b41a-a77090bfcae8",
+      "name": "Converter Markdown em arquivo",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [
+        720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/files/obsidian/usami/Inbox/Automations/' + $binary.note.fileName }}",
+        "dataPropertyName": "note",
+        "options": {}
+      },
+      "id": "a8147f34-e4ea-4af4-a6b8-4e1d25c63a11",
+      "name": "Salvar no Inbox autorizado",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        960,
+        304
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receber evento da Usami": {
+      "main": [
+        [
+          {
+            "node": "Validar e formatar nota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar e formatar nota": {
+      "main": [
+        [
+          {
+            "node": "Converter Markdown em arquivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converter Markdown em arquivo": {
+      "main": [
+        [
+          {
+            "node": "Salvar no Inbox autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6b6de372-16fe-49ab-bf06-f25c23901aad",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "24e0b2229fb1fac822e47b95860c989ae846d76fae4f7b7ae0e40de6e3bbe410"
+  },
+  "nodeGroups": [],
+  "id": "NnWm0PoOh4IBjtQS",
+  "tags": []
+}

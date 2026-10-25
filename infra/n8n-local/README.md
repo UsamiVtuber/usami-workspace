@@ -25,9 +25,50 @@ The named volumes `n8n_data` and `n8n_postgres_data` retain credentials and
 workflows across restarts. Do not run `docker compose down -v` unless the local
 n8n installation is intentionally being erased.
 
-## Before external access
+## Integração Usami ↔ n8n
 
-The configuration intentionally binds n8n to `127.0.0.1`. Before making
-webhooks externally reachable, replace the internal database password and set
-an HTTPS public URL in `WEBHOOK_URL`; a secure tunnel is preferable to opening
-a router port.
+A Usami e o n8n se comunicam em duas direções, ambas localhost:
+
+### Usami → n8n (respostas e eventos)
+
+Cada resposta do chat (`POST /api/chat` na Usami) dispara um webhook
+fire-and-forget para `http://localhost:5678/webhook/usami-events` com:
+
+- `userMessage`, `reply`, `gesture`, `actions` (animações com delayMs/trigger)
+- `emotion` (classificação da frase do usuário)
+- `affinity` (score e estágio de afinidade)
+- `source` (`nvidia` ou `openrouter`)
+- `timestamp`
+
+O workflow **Usami - Receber Respostas** (em `workflows/`) recebe esse webhook
+e grava um Markdown no vault Obsidian em
+`Inbox/Responses/`.
+
+Para importar: no editor do n8n, vá em Workflows → Importar e selecione
+`workflows/Usami - Receber Respostas.json`. O webhook ficará disponível em
+`POST http://localhost:5678/webhook/usami-events`.
+
+### n8n → Usami (controle de avatar)
+
+A Usami expõe endpoints para o n8n enviar comandos de volta:
+
+- `POST http://127.0.0.1:8787/api/n8n/command` — enfileira um comando
+  - `{ "type": "say", "message": "texto" }` — faz a Usami dizer algo
+  - `{ "type": "gesture", "name": "wave" }` — gesto do avatar
+  - `{ "type": "set_expression", "name": "happy", "weight": 1 }` — expressão VRM
+  - `{ "type": "set_morph", "name": "a", "value": 0.5 }` — morph target
+  - `{ "type": "set_mesh_visible", "name": "cabelo", "visible": false }` — mostra/esconde mesh
+- `GET http://127.0.0.1:8787/api/n8n/commands` — o cliente da Usami consome
+  essa fila a cada 2s e aplica os comandos no avatar localmente.
+
+Exemplo de nó HTTP Request no n8n para acionar um gesto:
+- Método: POST
+- URL: `http://127.0.0.1:8787/api/n8n/command`
+- Body JSON: `{ "type": "gesture", "name": "wave" }`
+
+## Antes de expor externamente
+
+A configuração intencionalmente vincula o n8n a `127.0.0.1`. Antes de tornar
+webhooks acessíveis externamente, troque a senha do banco interno e defina uma
+URL HTTPS pública em `WEBHOOK_URL`; um túnel seguro é preferível a abrir uma
+porta do roteador.

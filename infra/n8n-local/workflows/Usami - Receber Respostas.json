@@ -1,0 +1,75 @@
+{
+  "name": "Usami - Receber Respostas",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-usami-events",
+      "name": "Receber resposta da Usami",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "usami-events-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst timestamp = body.timestamp || new Date().toISOString();\nconst reply = String(body.reply ?? '').trim();\nconst userMessage = String(body.userMessage ?? '').trim();\nconst emotion = body.emotion ?? { label: 'neutral', confidence: 0 };\nconst affinity = body.affinity ?? { score: 0, stage: 'desconhecido' };\nconst actions = body.actions ?? [];\nconst source = body.source ?? 'desconhecido';\n\nif (!reply && !userMessage) {\n  throw new Error('Evento sem conteúdo (reply ou userMessage).');\n}\n\nconst createdAt = new Date(timestamp).toISOString();\nconst ts = createdAt.replace(/[:.]/g, '-');\nconst slug = (userMessage || reply).slice(0, 60)\n  .normalize('NFKD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .toLowerCase()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-+|-+$/g, '')\n  .slice(0, 60) || 'evento';\nconst filename = `${ts}-${slug}.md`;\n\nconst actionSummary = actions\n  .map(a => `- ${a.type}: ${a.name ?? ''}${a.value !== undefined ? ' → ' + a.value : ''}${a.delayMs !== undefined ? ' (+' + a.delayMs + 'ms)' : ''}`)\n  .join('\\n') || '(nenhuma ação)';\\n\nconst markdown = `---\\nsource: usami-response\\nkind: chat-reply\\ncreated_at: ${createdAt}\\nuser_message: ${JSON.stringify(userMessage)}\\nemotion_label: ${JSON.stringify(emotion?.label ?? 'neutral')}\\nemotion_confidence: ${emotion?.confidence ?? 0}\\naffinity_score: ${affinity?.score ?? 0}\\naffinity_stage: ${JSON.stringify(affinity?.stage ?? 'desconhecido')}\\nresponse_source: ${JSON.stringify(source)}\\nactions_count: ${actions.length}\\n---\\n\\n## Resposta da Usami\\n\\n${reply || '(sem texto)'}\\n\\n## Ações de animação\\n\\n${actionSummary}\\n\\n---\\n_Evento recebido via webhook usami-events às ${createdAt}_\\n\";\n\nreturn [{ json: { filename, markdown, userMessage, reply, emotion, affinity, actions, source, timestamp: createdAt } }];\n",
+        "resource": "code"
+      },
+      "id": "code-format-resposta",
+      "name": "Validar e formatar resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "binaryPropertyName": "note",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "convert-to-file",
+      "name": "Converter Markdown em arquivo",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/files/obsidian/usami/Inbox/Responses/' + $binary.note.fileName }}",
+        "dataPropertyName": "note",
+        "options": {}
+      },
+      "id": "write-to-vault",
+      "name": "Salvar no Inbox de respostas",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Receber resposta da Usami": {
+      "main": [[{ "node": "Validar e formatar resposta", "type": "main", "index": 0 }]]
+    },
+    "Validar e formatar resposta": {
+      "main": [[{ "node": "Converter Markdown em arquivo", "type": "main", "index": 0 }]]
+    },
+    "Converter Markdown em arquivo": {
+      "main": [[{ "node": "Salvar no Inbox de respostas", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "usami-respostas-001",
+  "meta": { "templateCredsSetupCompleted": true },
+  "pinData": {}
+}

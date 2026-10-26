@@ -13,6 +13,10 @@ autumn-original-work/
 
 _backup/
 
+# Dados locais do Obsidian: privados, nunca vão para um remoto.
+# (A regra `usami/` abaixo só os encobria por case-insensitive do Windows.)
+vault/
+
 # Repo aninhado com versionamento próprio
 usami/
 

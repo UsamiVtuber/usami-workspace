@@ -1,0 +1,248 @@
+{
+  "name": "Usami - Revisao de Tecnicas (agendado)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 4,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily-0400",
+      "name": "Agenda diaria 04:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://127.0.0.1:8787/api/techniques",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Origin",
+              "value": "http://127.0.0.1:5173"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "http-list-techniques",
+      "name": "Listar tecnicas (GET /api/techniques)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Avalia a resposta do GET /api/techniques, filtra o que espera revisao humana\n// e monta UMA nota diaria. Idempotencia: arquivo deterministico por lote (data local)\n// + dedupe por chave id|status. Nunca emite comando de movimento nem altera status.\nconst items = $input.all();\nconst first = items.length ? items[0].json : {};\n\n// Falha da API (no HTTP Request com continueOnFail o item traz a propriedade 'error').\nif (first.error || (first.techniques === undefined && first.total === undefined)) {\n  const raw = first.error;\n  const msg = typeof raw === 'string' ? raw : ((raw && raw.message) || 'sem resposta');\n  return [{ json: { ok: false, failure: 'API da Usami indisponivel: ' + msg + '. Nenhuma nota gravada.', batchDate: null } }];\n}\n\nconst THRESHOLD = 0.8;\nconst techniques = Array.isArray(first.techniques) ? first.techniques : [];\n\n// Chave deterministica do lote: data no fuso local do servidor (America/Sao_Paulo).\nconst batchDate = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',\n}).format(new Date());\n\n// Filtro: status 'proposta' + confidence abaixo do limiar + fontes presentes.\n// Dedupe por id|status para nunca repetir a mesma tecnica dentro do lote.\nconst seen = new Set();\nconst pending = [];\nfor (const t of techniques) {\n  const id = String(t && t.id || '');\n  const status = String(t && t.status || '');\n  const key = id + '|' + status;\n  if (!id || seen.has(key)) continue;\n  seen.add(key);\n  const conf = Number(t.confidence);\n  const hasSources = Array.isArray(t.sources) && t.sources.length > 0;\n  if (status === 'proposta' && Number.isFinite(conf) && conf < THRESHOLD && hasSources) {\n    pending.push(t);\n  }\n}\npending.sort((a, b) => String(a.id).localeCompare(String(b.id)));\n\nconst generatedAt = new Date().toISOString();\nconst lines = [];\nlines.push('---');\nlines.push('source: usami-automation');\nlines.push('kind: technique-review');\nlines.push('generated_at: ' + generatedAt);\nlines.push('batch_date: ' + batchDate);\nlines.push('review_status: proposta');\nlines.push('confidence_threshold: ' + THRESHOLD);\nlines.push('pending_count: ' + pending.length);\nlines.push('total_techniques_seen: ' + techniques.length);\nlines.push('---');\nlines.push('');\nlines.push('# Revisao de tecnicas - ' + batchDate);\nlines.push('');\nlines.push('Lista assincrona da base de conhecimento: tecnicas em status `proposta`, com confianca abaixo de ' + THRESHOLD + ' e com fontes (sources) registradas, aguardando aprovacao HUMANA.');\nlines.push('');\nlines.push('> Regra de ouro: nada aqui movimenta o avatar. Este workflow NAO emite comando de movimento e NAO aprova nem altera status de tecnica. A aprovacao (proposta -> validada) e decisao de uma PESSOA feita pela API da Usami (ex.: POST /api/technique com o status desejado); o n8n apenas lista e nunca chama endpoint de escrita.');\nlines.push('');\nlines.push('## Pendentes de aprovacao humana (' + pending.length + ')');\nlines.push('');\nif (pending.length === 0) {\n  lines.push('(nenhuma tecnica atende ao filtro de revisao neste lote)');\n} else {\n  for (const t of pending) {\n    const motions = Array.isArray(t.motions) ? t.motions.join(', ') : '(nenhuma)';\n    const sources = Array.isArray(t.sources) ? t.sources.join(', ') : '(nenhuma)';\n    lines.push('- **' + t.name + '** (`' + t.id + '`) - status: ' + t.status + ', confianca: ' + t.confidence);\n    lines.push('  - motions: ' + motions);\n    lines.push('  - sources: ' + sources);\n    lines.push('  - Acao: humano revisa a ficha em `usami/data/techniques/' + t.id + '.json` e aprova ou rejeita pela API.');\n  }\n}\nlines.push('');\nlines.push('---');\nlines.push('_Gerado por \\'Usami - Revisao de Tecnicas (agendado)\\'. Lote ' + batchDate + '. Rodar duas vezes no mesmo dia sobrescreve esta mesma nota (arquivo deterministico por data): sem nota duplicada e sem reprocessar tecnica ja listada._');\n\nconst filename = 'technique-review-' + batchDate + '.md';\nconst markdown = lines.join('\\n');\nreturn [{ json: { ok: true, batchDate, filename, markdown, pendingCount: pending.length } }];",
+        "resource": "code"
+      },
+      "id": "code-build-review-note",
+      "name": "Filtrar e montar nota de revisao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-api-ok",
+      "name": "API respondeu?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "={{ $json.failure }}"
+      },
+      "id": "stop-api-offline",
+      "name": "Parar com erro (API fora)",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "binaryPropertyName": "note",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "convert-to-file",
+      "name": "Converter Markdown em arquivo",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/home/node/vault/Inbox/Automations/' + $binary.note.fileName }}",
+        "dataPropertyName": "note",
+        "options": {}
+      },
+      "id": "write-to-vault",
+      "name": "Salvar nota no Inbox autorizado",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        420
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "noop-success",
+      "name": "Revisao registrada",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Agenda diaria 04:00": {
+      "main": [
+        [
+          {
+            "node": "Listar tecnicas (GET /api/techniques)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listar tecnicas (GET /api/techniques)": {
+      "main": [
+        [
+          {
+            "node": "Filtrar e montar nota de revisao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar e montar nota de revisao": {
+      "main": [
+        [
+          {
+            "node": "API respondeu?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API respondeu?": {
+      "main": [
+        [
+          {
+            "node": "Parar com erro (API fora)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Converter Markdown em arquivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converter Markdown em arquivo": {
+      "main": [
+        [
+          {
+            "node": "Salvar nota no Inbox autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar nota no Inbox autorizado": {
+      "main": [
+        [
+          {
+            "node": "Revisao registrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "versionId": "usami-revisao-tecnicas-001",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "tags": []
+}

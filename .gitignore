@@ -17,6 +17,15 @@ _backup/
 # (A regra `usami/` abaixo só os encobria por case-insensitive do Windows.)
 vault/
 
+# Estado de runtime escrito a partir da raiz quando um script roda sem cd usami/
+/data/
+
+# Skills instaladas de terceiros: cache regenerável pelo Agents/Skills/skills-lock.json
+Agents/Skills/.agents/
+
+# Repo próprio (ferramenta de observabilidade, versionada à parte)
+usami-monitor/
+
 # Repo aninhado com versionamento próprio
 usami/
 

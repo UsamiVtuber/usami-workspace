@@ -5,6 +5,41 @@ export de um workflow; importar no editor do n8n (Workflows → Importar) para u
 Nada aqui é publicado/ativado automaticamente — o arquivo `Usami - Revisao de
 Tecnicas (agendado).json` vem com `active: false` de propósito.
 
+## Instância autoritativa e URL real
+
+A instância que vale é a do **Nyarch** (`http://10.42.0.1:5678`; é para onde o
+MCP aponta e é o `WEBHOOK_URL` do `nyarch/docker-compose.yml`). A stack local
+deste diretório (`docker-compose.yml`, porta `127.0.0.1:5678`) está **desligada**
+e não recebe nada hoje. Consequências práticas:
+
+- O `usami/server.mjs` resolve `N8N_WEBHOOK_URL` do environment ou do
+  `A:/Usami Project/.env` (nada popula `process.env` a partir desse arquivo).
+  Sem essa linha no `.env`, o default `http://localhost:5678/...` vence e o
+  evento `usami.response` é enviado para lugar nenhum em silêncio.
+- Export versionado ≠ publicado. Confirme na instância (`search_workflows`) antes
+  de confiar num workflow. Estado atual: `Usami - Obsidian Inbox`
+  (`NnWm0PoOh4IBjtQS`) ativo e publicado; `Usami - Receber Respostas`
+  (`bJJ17mDS2I5r4De9`) **publicado e ativo** desde 2026-10-26 (webhook
+  `POST /webhook/usami-events` responde 200);
+  `Usami - Revisao de Tecnicas (agendado)` segue ausente (ver bloqueio abaixo).
+- A publicação é feita por **código SDK** (`validate_workflow` →
+  `create_workflow_from_code`), não pelo export JSON. O export de
+  `Usami - Receber Respostas` foi regerado a partir do que a instância devolveu,
+  então os `id`/`webhookId`/UUIDs de nó dele são os reais; importar aquele JSON
+  criaria uma segunda cópia com outros ids.
+
+## Bloqueio do "Revisao de Tecnicas" nesta instância
+
+O nó HTTP do export chama `GET http://127.0.0.1:8787/api/techniques`, escrito
+para a stack local do Windows. Na stack do Nyarch isso é o próprio container
+(como `usami/server.mjs:1807` escuta em `127.0.0.1:8787` **somente no loopback
+do Windows**), e o compose do Nyarch não define `extra_hosts` nem
+`network_mode: host` — então `host.docker.internal` também não resolve. A
+Windows está em `10.42.0.91` no mesmo link. Publicar esse workflow como está
+produziria nota de falha todo dia às 04:00. Precisa de uma decisão de exposição
+(bind não-loopback da API, túnel SSH reverso + `extra_hosts`, ou rodá-lo na
+stack local do Windows) antes de importar.
+
 Regra de ouro: **o n8n não move o avatar.** Estes workflows só fazem tarefas
 assíncronas/agendadas de casa (receber evento, listar/consolidar, escrever nota).
 Nenhum deles emite comando de movimento, controla osso/frame-loop nem chama
@@ -20,6 +55,17 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 - **Faz:** valida o corpo (exige `reply` ou `userMessage`; senão lança erro) e monta uma nota Markdown.
 - **Escreve em:** `Inbox/Responses/` (caminho do container `/files/obsidian/usami/Inbox/Responses/`), um arquivo por evento `{{timestamp}}-{{slug}}.md`.
 - **Idempotência:** não é por lote — cada webhook gera arquivo com timestamp; a chave anti-colisão é o próprio timestamp + slug da mensagem.
+- **Estado da gravação (2026-10-27): gravando, reparo aplicado e validado nos dois sentidos.** Exec 13 (`POST /webhook/usami-events` sintético, modo `webhook`): os quatro nós passaram e a nota de 486 B foi escrita em `/files/obsidian/usami/Inbox/Responses/2026-10-27T15-00-00-000Z-teste-de-gravacao-apos-corrigir-a-allowlist.md`. A sonda (exec 12 e 14) relê esse arquivo do disco e lê `Inbox/Automations/*.md` normalmente. Antes do reparo: exec 8 (sintética) e 9 (`POST /api/chat` real) montaram a nota nos três primeiros nós (474 B / 528 B) e morreram no último com `ENOENT ... realpath '/files/obsidian/usami/Inbox/Responses'` — a pasta não existia; criada a pasta, a exec 10 mudou para `Access to the file is not allowed.`
+- **Causa (fechada): separador errado em `N8N_RESTRICT_FILE_ACCESS_TO`.** O n8n lê a variável com `restrictFileAccessTo.split(';')` (`getAllowedPaths`, em `packages/core/src/execution-engine/node-execution-context/utils/file-system-helper-functions.ts`) e a doc de hosting diz "semicolon-separated list". O valor vivo usa **vírgula** (`/files/obsidian/usami,/home/node/vault/Inbox/Automations`), então a allowlist passa a ter **uma única entrada inválida** — a string inteira — e nenhum arquivo do vault era acessível, não só o `Inbox/Responses`.
+  - Versão apurada no host: imagem `docker.n8n.io/n8nio/n8n:latest`, `n8n --version` = **2.44.6**. Conferido no fonte da tag exata (`n8n@2.44.6`) e em `2.0.0`, `2.30.0`, `2.40.0` e `1.113.0`: todos separam por `;`. Ou seja, a vírgula nunca foi lida — não é regressão de versão.
+  - Hipótese de dono/modo foi **descartada com evidência** antes disso: `Automations` é `drwx------ luke luke` (700) e gravava, `Responses` é `drwxr-xr-x luke luke` (755), mesma propriedade.
+  - Evidência decisiva, sem escrever nada: sonda read-only (`Usami - Sonda Permissao de Arquivos`, `NLs9mCXGphBz3X59`, execução 11) — `read` de `/files/obsidian/usami/Inbox/Automations/*.md`, a pasta das gravações de sucesso de 24/10, devolve o mesmo `Access to the file is not allowed.`. As gravações antigas são pré-recreate de 25/10 (o espelho desta stack entrou no git em 25/10, commit `7496140`), então a restrição provavelmente chegou junto com aquele recreate.
+  - **Reparo (aplicado em 2026-10-27 pelo operador no host):** `N8N_RESTRICT_FILE_ACCESS_TO: /files/obsidian/usami;/home/node/vault/Inbox/Automations` em `~/n8n/docker-compose.yml` e `docker compose up -d`. O espelho versionado deste repositório está corrigido com o mesmo valor.
+  - **Risco operacional anotado:** a imagem está fixada em `latest`, então qualquer recreate do container troca o binário do n8n silenciosamente. Vale pinar a tag (ex.: `n8n:2.44.6`) para que uma mudança de comportamento de path não chegue junto com um conserto de mount.
+- **Sonda de permissão:** `Usami - Sonda Permissao de Arquivos` (`NLs9mCXGphBz3X59`) existe só para diagnóstico, com `operation: read` em três caminhos do vault e `onError: continueRegularOutput` — não escreve nem apaga nada. Já cumpriu o papel (execs 11/12/14); pode ser arquivada quando o `Responses` não for mais assunto.
+- **Rotas para criar/ajustar a pasta, e o que falha:** `n8n-nodes-base.executeCommand` **não existe nesta instância** (`validate_workflow`: `Unrecognized node type`; `search_nodes`: sem resultado) — o nó está desabilitado no deploy, então não há shell pelo n8n. `ssh` para `10.42.0.1` está com conexão recusada em 22/2222/22022 (5678 responde: host de pé, sshd não). Restou o caminho de fora (host/`docker exec`).
+- **Estado na instância do Nyarch:** o workflow está **ativo** (`bJJ17mDS2I5r4De9`), então cada `POST /api/chat` da Usami já gera nota em `Inbox/Responses/`. O envio é fire-and-forget: se o n8n estiver fora, o chat não sente e a nota simplesmente não nasce.
+- **Vault local:** o vault de verdade é `A:/Usami Project/vault/Usami Obsidian/Usami` (tem `.obsidian/`); `A:/Usami Obsidian` não existe. A pasta `Inbox/Responses/` já foi criada no vault real.
 
 ## Usami - Obsidian Inbox (e variante `(local)`)
 - **Gatilho:** webhook `POST /webhook/usami-inbox`.

@@ -30,18 +30,22 @@ n8n installation is intentionally being erased.
 
 ## Integração Usami ↔ n8n
 
-A Usami e o n8n se comunicam em duas direções, ambas localhost:
+A Usami e o n8n se comunicam em duas direções, ambas por endereço de laço
+(`127.0.0.1`/`localhost`) ou do link direto entre as máquinas (`10.42.0.1`):
 
 ### Usami → n8n (respostas e eventos)
 
 Cada resposta do chat (`POST /api/chat` na Usami) dispara um webhook
-fire-and-forget para `http://localhost:5678/webhook/usami-events` com:
+fire-and-forget para a URL em `N8N_WEBHOOK_URL` (hoje
+`http://10.42.0.1:5678/webhook/usami-events`, lida do `.env` da raiz pelo
+`server.mjs`; sem a variável o default é `localhost:5678`) com:
 
+- `event` (`usami.response`), `timestamp`, `source` (`nvidia` ou `openrouter`)
 - `userMessage`, `reply`, `gesture`, `actions` (animações com delayMs/trigger)
-- `emotion` (classificação da frase do usuário)
-- `affinity` (score e estágio de afinidade)
-- `source` (`nvidia` ou `openrouter`)
-- `timestamp`
+- `emotion`: `{ emotion, confidence, intensity, facs, source }` — o rótulo está
+  em `emotion.emotion`; o campo vem `null` quando a classificação falha
+- `affinity`: `{ affinity, stage }` — o score está em `affinity.affinity`; o
+  objeto todo some quando não há store de memória
 
 O workflow **Usami - Receber Respostas** (em `workflows/`) recebe esse webhook
 e grava um Markdown no vault Obsidian em

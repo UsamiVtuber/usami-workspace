@@ -1,3 +1,6 @@
+# Segredos em .env ao lado deste compose (veja .env.example). O valor precisa ser o
+# mesmo do banco ja inicializado no volume n8n_postgres_data; trocar a senha aqui nao
+# troca a do banco existente.
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,7 +10,7 @@ services:
       POSTGRES_DB: n8n
       POSTGRES_USER: n8n
       # Internal-only database password. Change before exposing this stack beyond localhost.
-      POSTGRES_PASSWORD: ***REMOVED***
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD em .env (veja .env.example)}
     volumes:
       - n8n_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +35,7 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: ***REMOVED***
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD em .env (veja .env.example)}
       GENERIC_TIMEZONE: America/Sao_Paulo
       TZ: America/Sao_Paulo
       N8N_HOST: localhost

@@ -8,6 +8,11 @@ A stack que roda no notebook Nyarch (Arch) tem pasta e documentação próprias:
 
 ## Start
 
+A senha do banco vem de `.env` nesta pasta (copie `.env.example`, preencha). O
+compose não carrega o `.env` da raiz do workspace — ele procura `.env` ao lado do
+arquivo, porque os comandos rodam a partir daqui. Sem a variável, o compose falha
+na hora com `${POSTGRES_PASSWORD:?...}` em vez de subir com senha vazia.
+
 From this directory, after Docker Desktop reports that its engine is running:
 
 ```powershell
@@ -78,4 +83,7 @@ Exemplo de nó HTTP Request no n8n para acionar um gesto:
 A configuração intencionalmente vincula o n8n a `127.0.0.1`. Antes de tornar
 webhooks acessíveis externamente, troque a senha do banco interno e defina uma
 URL HTTPS pública em `WEBHOOK_URL`; um túnel seguro é preferível a abrir uma
-porta do roteador.
+porta do roteador. Trocar a senha é dois passos: o `postgres:16-alpine` só usa
+`POSTGRES_PASSWORD` ao inicializar um volume vazio, então mude o `.env` **e** rode
+`ALTER USER n8n WITH PASSWORD ...` no banco existente — um sem o outro derruba a
+conexão do n8n.

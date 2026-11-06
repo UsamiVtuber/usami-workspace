@@ -24,6 +24,10 @@ vault/
 # Não é conteúdo do projeto e é regenerável pelo skills-lock.json dentro dele.
 Agents/
 
+# Projetos de terceiros usados só como referência de ideias (não são do Usami)
+airi/
+OpenAmika/
+
 # Repo próprio (ferramenta de observabilidade, versionada à parte)
 usami-monitor/
 

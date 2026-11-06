@@ -2,6 +2,17 @@
 
 Analysis of Kyndred (Tauri + WebView2 AI companion) reveals several high-value features to port to Usami.
 
+## Status (atualizado em 2026-11-01)
+
+| Fase | Estado |
+|------|--------|
+| 1 Atalhos globais e bandeja | Pendente — depende de escolher Electron ou Tauri |
+| 2 Janela pet | Pendente — mesma dependência |
+| 3 VRMA / idles expressivos | **Arquivada** — os `.vrma` disponíveis são incompatíveis com o shiro (VRM0); ver nota na Fase 3 |
+| 4 Polimento da UI de voz | Feita (mic badge, beacon, audio revive) |
+| 5 Memória e personalidade | Feita, exceto perfis por usuário (descartado) e consolidação de fatos da memória |
+| 6 Configurações nativas / `usami://` | Pendente — depende da Fase 1 |
+
 ---
 
 ## Phase 1: Global Hotkeys & System Tray (High Impact, Low Effort)
@@ -38,7 +49,15 @@ Analysis of Kyndred (Tauri + WebView2 AI companion) reveals several high-value f
 
 ## Phase 3: Enhanced Animation System
 
-### 3.1 VRMA Clip Support
+> **Arquivada (decisão do usuário).** A inspeção da página de chamada do Kyndred
+> (`/app/call`) não encontrou nenhuma referência a `vrma` nos scripts: o
+> personagem é carregado como `model.fbx` (FBXLoader), com VRM e Live2D como
+> alternativas. Logo, VRMA não é requisito para paridade. Os `.vrma` testados
+> ficam deformados porque o shiro é VRM0 e `merge-vrma.mjs` copia as trilhas
+> sem retargeting; a correção seria usar `@pixiv/three-vrm-animation` em runtime.
+> Alternativa mais barata: idles expressivos procedurais.
+
+### 3.1 VRMA Clip Support (arquivado)
 - Parse `.vrma` (VRM Animation) format
 - Integrate with motion director alongside GLTF clips
 - Kyndred clips: `dizzy_idle.vrma`, `kneeling_idle.vrma`, `sit_floor_idle.vrma`
@@ -95,6 +114,23 @@ Analysis of Kyndred (Tauri + WebView2 AI companion) reveals several high-value f
 - `usami://new-chat`
 - `usami://toggle-pet`
 - `usami://mute`
+
+---
+
+## Achados da inspeção web (getkyndred.com/app/call, 2026-11-01)
+
+Leitura apenas da página e dos scripts públicos; nenhuma chamada foi iniciada
+e nenhum dado de conta foi lido.
+
+- **Stack**: Next.js (Turbopack), Three r186, `FBXLoader` para o modelo; runtime Live2D separado. Cenário é vídeo em loop (`loop-wide.webm`) + plate estático, não sala 3D.
+- **STT**: `AudioWorklet` (`pcm-worklet.js`) reamostra o mic para PCM 16 kHz e envia por WebSocket ao Deepgram Flux; reamostra porque o iOS Safari ignora o `sampleRate` pedido.
+- **TTS**: o servidor streama eventos tipados (`tts.chunk`, `tts.frames`, `tts.words`, `tts.visemes`, `tts.cues`, `tts.done` com `firstChunkMs`/`totalMs`). Visemas e tempos de palavras vêm prontos do servidor; o Usami deriva a boca do espectro (Gemini TTS não fornece visemas).
+- **Controles da chamada**: mute, digitar, encerrar, parar a resposta, trocar sala, rewind (salvar últimos 30 s), mais controles. A chamada começa com um toque e o mic começa desligado.
+
+Candidatos a adotar (nenhum iniciado):
+1. Botão/atalho "parar a resposta" (entra junto com a Fase 1, `Right Ctrl`).
+2. STT em streaming por WebSocket no lugar de `SpeechRecognition` (sem Firefox, sem nível do mic). Mudança grande.
+3. Visemas/palavras vindos do TTS, só se trocarmos para um provedor que os forneça.
 
 ---
 

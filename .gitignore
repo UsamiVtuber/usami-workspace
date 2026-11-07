@@ -34,6 +34,9 @@ usami-monitor/
 # Repo aninhado com versionamento próprio
 usami/
 
+# Repo próprio do motor 3D WeebUI (github.com/Rukafuu/weebui)
+gpui-vrm/
+
 # Genéricos de build — nada de dependências nem build no git da raiz
 node_modules/
 dist/

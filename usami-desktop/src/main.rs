@@ -872,10 +872,24 @@ impl Render for UsamiApp {
                                                         .border_color(rgba(0xf5ebe415))
                                                         .child(
                                                             div()
-                                                                .text_xs()
-                                                                .font_weight(FontWeight::SEMIBOLD)
-                                                                .text_color(if is_user { rgb(0xd8b4e2) } else { rgb(0xc8a8e0) })
-                                                                .child(if is_user { "Você" } else { "Usami" }),
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .child(
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                                        .text_color(if is_user { rgb(0xd8b4e2) } else { rgb(0xc8a8e0) })
+                                                                        .child(if is_user { "Você" } else { "Usami" }),
+                                                                )
+                                                                .when(!is_user && msg.emotion.is_some(), |p| {
+                                                                    p.child(
+                                                                        div()
+                                                                            .text_xs()
+                                                                            .text_color(rgb(0xf7a8d2))
+                                                                            .child(format!("· {}", msg.emotion.as_deref().unwrap_or("tsundere"))),
+                                                                    )
+                                                                }),
                                                         )
                                                         .child(
                                                             div()

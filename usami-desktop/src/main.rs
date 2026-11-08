@@ -1,5 +1,6 @@
 pub mod api;
 pub mod audio;
+pub mod recorder;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,6 +71,9 @@ struct UsamiApp {
     is_calling: bool,
     call_started_at: Option<Instant>,
     call_seconds: u64,
+    is_listening: bool,
+    listener: Option<recorder::VoiceListener>,
+    mic_gate: Arc<recorder::MicGate>,
     is_companion_mode: bool,
     sleep_companion_started_at: Option<Instant>,
     sleep_companion_minutes_left: u32,
@@ -117,6 +121,25 @@ impl UsamiApp {
 
         let vrm_controller = VrmController::new();
         vrm_controller.set_emotion_with_options("tsundere", 4.5, false);
+
+        // A escuta segue a boca do avatar: 100 ms entre o TTS começar e o
+        // microfone fechar — bem abaixo dos 120 ms que abrem uma fala na VAD,
+        // então a própria voz da Usami nunca vira transcrição.
+        let mic_gate = Arc::new(recorder::MicGate::new());
+        let gate = Arc::clone(&mic_gate);
+        let speaking_controller = vrm_controller.clone();
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                loop {
+                    gate.set_agent(speaking_controller.is_speaking());
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+                }
+            }
+        })
+        .detach();
 
         let vrm_view = vrm_path.and_then(|path| {
             match VrmView::new(&path, vrma_dir, vrm_controller.clone()) {
@@ -193,6 +216,9 @@ impl UsamiApp {
             is_calling: false,
             call_started_at: None,
             call_seconds: 0,
+            is_listening: false,
+            listener: None,
+            mic_gate,
             is_companion_mode: false,
             sleep_companion_started_at: None,
             sleep_companion_minutes_left: 30,
@@ -219,14 +245,16 @@ impl UsamiApp {
         }
     }
 
-    fn start_call(&mut self) {
+    fn start_call(&mut self, cx: &mut Context<Self>) {
         self.is_calling = true;
         self.call_started_at = Some(Instant::now());
         self.call_seconds = 0;
         self.status_text = "SUA VEZ · 00:00".into();
+        self.start_listening(cx);
     }
 
     fn end_call(&mut self) {
+        self.stop_listening();
         self.is_calling = false;
         self.call_started_at = None;
         self.call_seconds = 0;
@@ -256,6 +284,110 @@ impl UsamiApp {
         self.vrm_controller.play_idle();
     }
 
+    /// Fecha a escuta enquanto a Usami pensa/fala e quando o usuário muta.
+    fn sync_mic_gate(&self) {
+        self.mic_gate
+            .set_user(self.is_muted || self.is_busy || !self.is_listening);
+    }
+
+    fn start_listening(&mut self, cx: &mut Context<Self>) {
+        self.poke(cx);
+        if self.is_listening {
+            return;
+        }
+        match recorder::VoiceListener::start(Arc::clone(&self.mic_gate)) {
+            Ok(mut listener) => {
+                let Some(segments) = listener.take_segments() else {
+                    self.status_text = "MIC: canal de áudio indisponível.".into();
+                    cx.notify();
+                    return;
+                };
+                self.listener = Some(listener);
+                self.is_listening = true;
+                self.sync_mic_gate();
+                self.status_text = "OUVINDO...".into();
+
+                // Consome as falas detectadas pela VAD e manda para o STT. O loop
+                // vive enquanto o listener existir; trocar de chamada recria tudo.
+                let api = Arc::clone(&self.api_client);
+                cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    let cx = cx.clone();
+                    async move {
+                        let mut segments = segments;
+                        while let Some(wav) = segments.recv().await {
+                            let transcript = api.transcribe(wav).await;
+                            let active = cx
+                                .update(|cx: &mut App| {
+                                    if let Some(this) = this.upgrade() {
+                                        this.update(cx, |view, cx| {
+                                            if !view.is_listening || !view.is_calling {
+                                                return false;
+                                            }
+                                            match transcript {
+                                                Ok(text) if !text.trim().is_empty() => {
+                                                    view.input_text = text.trim().to_string();
+                                                    if view.is_busy {
+                                                        // Não fala por cima: guarda no campo.
+                                                        view.status_text = "TEXTO PRONTO".into();
+                                                        cx.notify();
+                                                    } else {
+                                                        view.submit(cx);
+                                                    }
+                                                }
+                                                Ok(_) => {
+                                                    view.status_text = "NÃO ENTENDI".into();
+                                                    view.poke(cx);
+                                                    cx.notify();
+                                                }
+                                                Err(error) => {
+                                                    view.status_text =
+                                                        format!("ERRO STT: {error}").into();
+                                                    view.poke(cx);
+                                                    cx.notify();
+                                                }
+                                            }
+                                            true
+                                        })
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .unwrap_or(false);
+                            if !active {
+                                break;
+                            }
+                        }
+                    }
+                })
+                .detach();
+            }
+            Err(error) => {
+                self.is_listening = false;
+                self.sync_mic_gate();
+                self.status_text = format!("MIC: {error}").into();
+            }
+        }
+        cx.notify();
+    }
+
+    fn stop_listening(&mut self) {
+        self.is_listening = false;
+        self.sync_mic_gate();
+        if let Some(listener) = self.listener.take() {
+            listener.stop();
+        }
+    }
+
+    fn toggle_listening(&mut self, cx: &mut Context<Self>) {
+        if self.is_listening {
+            self.stop_listening();
+            self.status_text = "MICROFONE OFF".into();
+            cx.notify();
+        } else {
+            self.start_listening(cx);
+        }
+    }
+
     fn submit(&mut self, cx: &mut Context<Self>) {
         self.poke(cx);
         let text = self.input_text.trim().to_string();
@@ -265,6 +397,7 @@ impl UsamiApp {
 
         self.input_text.clear();
         self.is_busy = true;
+        self.sync_mic_gate();
         self.show_bubble = true;
         self.status_text = "PENSANDO".into();
 
@@ -293,6 +426,7 @@ impl UsamiApp {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
                             view.is_busy = false;
+                            view.sync_mic_gate();
                             view.poke(cx);
                             match res {
                                 Ok(response) => {
@@ -308,35 +442,38 @@ impl UsamiApp {
                                         "COM VOCÊ".into()
                                     };
 
-                                    // Aplica a emoção facial no avatar
-                                    view.vrm_controller.set_emotion(&emotion);
+                                    // Emoção não dispara clipe: o gesto é escolhido uma vez, abaixo.
+                                    view.vrm_controller.set_emotion_with_options(&emotion, 5.0, false);
 
-                                    // Aplica expressões e gestos retornados pelo backend
                                     for action in &response.actions {
-                                        match action.action_type.as_str() {
-                                            "gesture" | "play_clip" | "play_vrma" => {
-                                                if let Some(name) = &action.name {
-                                                    view.vrm_controller.play_vrma(name, false);
-                                                }
-                                            }
-                                            "set_expression" | "expression" | "emote" => {
-                                                if let Some(name) = &action.name {
-                                                    let weight = action.weight.or(action.value).unwrap_or(0.8);
-                                                    view.vrm_controller.set_expression(name, weight);
-                                                }
-                                            }
-                                            _ => {}
+                                        if matches!(
+                                            action.action_type.as_str(),
+                                            "set_expression" | "expression" | "emote"
+                                        ) && let Some(name) = &action.name
+                                        {
+                                            let weight = action.weight.or(action.value).unwrap_or(0.8);
+                                            view.vrm_controller.set_expression(name, weight);
                                         }
                                     }
-                                    if let Some(gesture) = &response.gesture
-                                        && gesture != "neutral"
-                                        && gesture != "idle"
-                                    {
+
+                                    // Um único gesto por turno: a primeira ação de clipe; sem ação,
+                                    // cai para o gesto do backend (nunca quando é só a emoção padrão).
+                                    let gesture = response
+                                        .actions
+                                        .iter()
+                                        .find_map(|action| match action.action_type.as_str() {
+                                            "gesture" | "play_clip" | "play_vrma" => action.name.clone(),
+                                            _ => None,
+                                        })
+                                        .or_else(|| {
+                                            response
+                                                .gesture
+                                                .clone()
+                                                .filter(|gesture| gesture != "neutral" && gesture != "idle")
+                                        });
+                                    if let Some(gesture) = gesture {
                                         view.vrm_controller.play_vrma(gesture, false);
                                     }
-
-                                    // Inicia o lip-sync e animação de fala procedural imediatamente!
-                                    view.vrm_controller.speak(&response.reply, None);
 
                                     view.chat_history.push(ChatMessage {
                                         sender: Sender::Usami,
@@ -353,6 +490,7 @@ impl UsamiApp {
 
                                     cx.notify();
 
+                                    // Sem áudio não há boca animada: mudo mostra só as ações.
                                     if !view.is_muted
                                         && let Some(player) = audio
                                     {
@@ -362,10 +500,55 @@ impl UsamiApp {
                                         let player = player.clone();
                                         let vrm_ctrl = view.vrm_controller.clone();
                                         crate::api::tokio_runtime().spawn(async move {
-                                            if let Ok(wav_bytes) = api_tts.fetch_tts_audio(&tts_text, &tts_style).await {
-                                                // Sincroniza o lip-sync com os dados reais de envelope da onda WAV
-                                                vrm_ctrl.speak(&tts_text, Some(wav_bytes.clone()));
-                                                let _ = player.play_wav(wav_bytes);
+                                            match api_tts.stream_tts(&tts_text, &tts_style).await {
+                                                Ok(crate::api::TtsStream::Pcm {
+                                                    sample_rate,
+                                                    mut response,
+                                                }) => {
+                                                    let mouth = vrm_ctrl.clone();
+                                                    let mut sink = player.play_pcm_stream(sample_rate, move |level| {
+                                                        mouth.set_speaking(true, level);
+                                                    });
+                                                    let mut started = false;
+                                                    loop {
+                                                        match response.chunk().await {
+                                                            Ok(Some(chunk)) => {
+                                                                if sink.push_i16_le(&chunk) && !started {
+                                                                    started = true;
+                                                                    vrm_ctrl.begin_speech_stream();
+                                                                }
+                                                            }
+                                                            Ok(None) => break,
+                                                            Err(error) => {
+                                                                eprintln!("[TTS] stream interrompido: {error}");
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                    let tail = sink.finish();
+                                                    if started {
+                                                        // A boca acompanha o áudio até o buffer esvaziar,
+                                                        // não até a rede fechar.
+                                                        let deadline = Instant::now() + Duration::from_secs(180);
+                                                        while !tail.is_drained() && Instant::now() < deadline {
+                                                            tokio::time::sleep(Duration::from_millis(50)).await;
+                                                        }
+                                                        vrm_ctrl.end_speech_stream();
+                                                    } else {
+                                                        eprintln!("[TTS] stream sem áudio; fala só na legenda");
+                                                        vrm_ctrl.speak(&tts_text, None);
+                                                    }
+                                                }
+                                                Ok(crate::api::TtsStream::Audio(bytes)) => {
+                                                    vrm_ctrl.speak(&tts_text, Some(bytes.clone()));
+                                                    if let Err(error) = player.play_wav(bytes) {
+                                                        eprintln!("[TTS] falha ao tocar áudio: {error}");
+                                                    }
+                                                }
+                                                Err(error) => {
+                                                    eprintln!("[TTS] streaming indisponível ({error}); fala só na legenda");
+                                                    vrm_ctrl.speak(&tts_text, None);
+                                                }
                                             }
                                         });
                                     }
@@ -401,13 +584,15 @@ impl Render for UsamiApp {
         let is_companion = self.is_companion_mode;
         let is_muted = self.is_muted;
         let is_idle = self.is_ui_idle;
+        let is_listening = self.is_listening;
         let active_drawer = self.active_drawer;
         let bond_level = self.bond_level;
         let show_bubble = self.show_bubble;
         let bg_asset = self.bg_asset_path.clone();
         let vrm_entity = self.vrm_view.clone();
         let status_label: SharedString = if is_calling {
-            format!("SUA VEZ · {:02}:{:02}", self.call_seconds / 60, self.call_seconds % 60).into()
+            let state = if is_listening { "OUVINDO" } else { "MIC OFF" };
+            format!("{state} · {:02}:{:02}", self.call_seconds / 60, self.call_seconds % 60).into()
         } else if is_busy {
             "PENSANDO".into()
         } else if is_companion {
@@ -895,7 +1080,7 @@ impl Render for UsamiApp {
                                             .bg(rgba(0xffffff0d))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                 this.poke(cx);
-                                                this.start_call();
+                                                this.start_call(cx);
                                                 cx.notify();
                                             }))
                                             .child(icon("phone", 16.0)),
@@ -914,6 +1099,7 @@ impl Render for UsamiApp {
                                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                 this.poke(cx);
                                                 this.is_muted = !this.is_muted;
+                                                this.sync_mic_gate();
                                                 cx.notify();
                                             }))
                                             .child(icon("volume", 16.0)),
@@ -962,8 +1148,14 @@ impl Render for UsamiApp {
                             .items_center()
                             .gap_2p5()
                             .child(
-                                div().id("call-mic").size(px(48.0)).rounded_full().flex().items_center().justify_center()
-                                    .bg(rgba(0x202329d9)).border_1().border_color(rgba(0xf5ebe420)).child(icon("pulse", 19.0)),
+                                div().id("call-mic").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(if self.is_listening { rgba(0xe5484dcc) } else { rgba(0x202329d9) })
+                                    .border_1()
+                                    .border_color(if self.is_listening { rgba(0xffa6c9) } else { rgba(0xf5ebe420) })
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.toggle_listening(cx);
+                                    }))
+                                    .child(icon("pulse", 19.0)),
                             )
                             .child(
                                 div().id("call-chat").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
@@ -980,7 +1172,7 @@ impl Render for UsamiApp {
                             .child(
                                 div().id("call-volume").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
                                     .bg(if is_muted { rgba(0xe5484d55) } else { rgba(0x202329d9) })
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.poke(cx); this.is_muted = !this.is_muted; cx.notify(); }))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.poke(cx); this.is_muted = !this.is_muted; this.sync_mic_gate(); cx.notify(); }))
                                     .child(icon("volume", 19.0)),
                             )
                             .child(

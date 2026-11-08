@@ -77,6 +77,11 @@ pub struct ChatResponse {
     pub speech_tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SttResponse {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TtsRequest {
     pub text: String,
@@ -113,7 +118,9 @@ impl UsamiApiClient {
     ) -> Result<ChatResponse, String> {
         let capabilities = serde_json::json!({
             "format": "VRM",
-            "gestures": ["tilt", "idle", "wave", "angry", "happy", "blush", "jump", "sad", "sleepy", "surprised", "clapping", "nod", "talking"],
+            // Nomes reais de clipe no gpui-vrm e aceitos por GESTURE_NAMES no
+            // servidor. "happy" saiu: é emoção (set_expression), não clipe.
+            "gestures": ["tilt", "idle", "wave", "angry", "blush", "jump", "sad", "sleepy", "surprised", "clapping", "clap", "nod", "talking", "goodbye"],
             "expressions": [
                 "happy", "angry", "sad", "relaxed", "surprised",
                 "01-prefab_happy01", "02-prefab_happy02", "08-prefab_angry02", "12-prefab_sad01",
@@ -155,30 +162,63 @@ impl UsamiApiClient {
         }
     }
 
-    pub async fn fetch_tts_audio(&self, text: &str, style_id: &str) -> Result<Vec<u8>, String> {
+    /// Pede o TTS em streaming. Deve ser chamado de dentro de `tokio_runtime`
+    /// porque a resposta é lida em pedaços pelo chamador.
+    pub async fn stream_tts(&self, text: &str, style_id: &str) -> Result<TtsStream, String> {
         let payload = TtsRequest {
             text: text.to_string(),
             style_id: style_id.to_string(),
-            stream: false,
+            stream: true,
         };
 
+        let response = self
+            .client
+            // O teto padrão de 90 s vale para o corpo inteiro; uma fala longa em
+            // streaming passaria disso e seria cortada no meio.
+            .post(format!("{}/api/tts", self.base_url))
+            .timeout(Duration::from_secs(180))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+
+        if is_pcm_stream(&response) {
+            let sample_rate = pcm_sample_rate(&response);
+            Ok(TtsStream::Pcm {
+                sample_rate,
+                response,
+            })
+        } else {
+            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+            Ok(TtsStream::Audio(bytes.to_vec()))
+        }
+    }
+
+    pub async fn transcribe(&self, wav: Vec<u8>) -> Result<String, String> {
         let client = self.client.clone();
-        let url = format!("{}/api/tts", self.base_url);
+        let url = format!("{}/api/stt", self.base_url);
 
         let handle = tokio_runtime().spawn(async move {
-            let bytes = client
+            let part = reqwest::multipart::Part::bytes(wav)
+                .file_name("mic.wav")
+                .mime_str("audio/wav")
+                .map_err(|e| e.to_string())?;
+            let form = reqwest::multipart::Form::new().part("audio", part);
+            let response = client
                 .post(url)
-                .json(&payload)
+                .multipart(form)
                 .send()
                 .await
                 .map_err(|e| e.to_string())?
                 .error_for_status()
                 .map_err(|e| e.to_string())?
-                .bytes()
+                .json::<SttResponse>()
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok::<Vec<u8>, String>(bytes.to_vec())
+            Ok::<String, String>(response.text)
         });
 
         match handle.await {
@@ -186,6 +226,40 @@ impl UsamiApiClient {
             Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
         }
     }
+}
+
+/// Resposta do `/api/tts` com `stream:true`: PCM cru quando o provedor entrega
+/// em pedaços, WAV/blob inteiro no cache HIT ou no fallback do servidor.
+pub enum TtsStream {
+    Pcm {
+        sample_rate: u32,
+        response: reqwest::Response,
+    },
+    Audio(Vec<u8>),
+}
+
+fn is_pcm_stream(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get("x-tts-stream")
+        .and_then(|value| value.to_str().ok())
+        == Some("1")
+}
+
+fn pcm_sample_rate(response: &reqwest::Response) -> u32 {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').find_map(|part| {
+                part.trim()
+                    .strip_prefix("rate=")
+                    .and_then(|rate| rate.trim().parse::<u32>().ok())
+            })
+        })
+        .filter(|rate| (8_000..=192_000).contains(rate))
+        .unwrap_or(24_000)
 }
 
 #[cfg(test)]
@@ -209,6 +283,7 @@ mod tests {
     fn spawn_server(
         status: &'static str,
         response_content_type: &'static str,
+        extra_headers: &'static str,
         response_body: &'static [u8],
     ) -> (String, mpsc::Receiver<CapturedRequest>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind do servidor de teste");
@@ -271,7 +346,7 @@ mod tests {
                 body: String::from_utf8_lossy(&body).to_string(),
             });
             let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: {response_content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\nContent-Type: {response_content_type}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                 response_body.len()
             );
             let _ = stream.write_all(response.as_bytes());
@@ -295,6 +370,7 @@ mod tests {
         let (base_url, requests) = spawn_server(
             "200 OK",
             "application/json",
+            "",
             br#"{"reply":"oi","gesture":"tilt","actions":[{"type":"gesture","name":"wave"}],"speechTags":["<laugh>"]}"#,
         );
         let client = UsamiApiClient::new(format!("{base_url}/"));
@@ -320,20 +396,47 @@ mod tests {
         assert_eq!(body["sleepCompanionActive"], true);
         assert_eq!(body["capabilities"]["format"], "VRM");
         assert_eq!(body["capabilities"]["sequences"], true);
-        assert!(body["capabilities"]["gestures"]
+        let gestures = body["capabilities"]["gestures"]
             .as_array()
-            .is_some_and(|gestures| gestures.iter().any(|gesture| gesture == "tilt")));
+            .expect("gestos anunciados");
+        for expected in ["tilt", "sleepy", "clapping", "goodbye"] {
+            assert!(
+                gestures.iter().any(|gesture| gesture == expected),
+                "gesto {expected} ausente do catálogo"
+            );
+        }
+        assert!(
+            !gestures.iter().any(|gesture| gesture == "happy"),
+            "'happy' é emoção, não clipe"
+        );
     }
 
     #[tokio::test]
-    async fn tts_posts_style_and_returns_audio_bytes() {
-        let (base_url, requests) = spawn_server("200 OK", "audio/wav", b"RIFF----WAVE");
+    async fn tts_stream_posts_stream_true_and_returns_pcm_chunks() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "audio/l16; codec=pcm; rate=24000",
+            "X-TTS-Stream: 1\r\n",
+            b"\x00\x01\x00\x02",
+        );
         let client = UsamiApiClient::new(base_url);
-        let bytes = client
-            .fetch_tts_audio("bom dia", "happy")
+        let TtsStream::Pcm {
+            sample_rate,
+            mut response,
+        } = client
+            .stream_tts("bom dia", "happy")
             .await
-            .expect("tts responde");
-        assert_eq!(bytes, b"RIFF----WAVE");
+            .expect("tts responde")
+        else {
+            panic!("esperava PCM em streaming");
+        };
+        assert_eq!(sample_rate, 24_000);
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.expect("pedaço do stream") {
+            body.extend_from_slice(&chunk);
+        }
+        assert_eq!(body, b"\x00\x01\x00\x02");
 
         let request = requests
             .recv_timeout(Duration::from_secs(5))
@@ -344,7 +447,50 @@ mod tests {
             serde_json::from_str(&request.body).expect("corpo JSON do tts");
         assert_eq!(body["text"], "bom dia");
         assert_eq!(body["styleId"], "happy");
-        assert_eq!(body["stream"], false);
+        assert_eq!(body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn tts_without_stream_header_falls_back_to_full_audio() {
+        let (base_url, _requests) = spawn_server("200 OK", "audio/wav", "", b"RIFF----WAVE");
+        let client = UsamiApiClient::new(base_url);
+        let TtsStream::Audio(bytes) = client
+            .stream_tts("bom dia", "happy")
+            .await
+            .expect("tts responde")
+        else {
+            panic!("cache HIT/devem voltar como áudio inteiro");
+        };
+        assert_eq!(bytes, b"RIFF----WAVE");
+    }
+
+    #[tokio::test]
+    async fn stt_posts_multipart_audio_and_returns_text() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"text":"bom dia"}"#,
+        );
+        let client = UsamiApiClient::new(base_url);
+        let text = client
+            .transcribe(b"RIFF----WAVE".to_vec())
+            .await
+            .expect("stt responde");
+        assert_eq!(text, "bom dia");
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/stt");
+        assert!(request
+            .content_type
+            .unwrap_or_default()
+            .starts_with("multipart/form-data"));
+        assert!(request.body.contains("name=\"audio\""));
+        assert!(request.body.contains("filename=\"mic.wav\""));
+        assert!(request.body.contains("RIFF"));
     }
 
     #[tokio::test]
@@ -352,6 +498,7 @@ mod tests {
         let (base_url, _requests) = spawn_server(
             "500 Internal Server Error",
             "application/json",
+            "",
             br#"{"error":"falhou"}"#,
         );
         let client = UsamiApiClient::new(base_url);

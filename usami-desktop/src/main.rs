@@ -48,7 +48,11 @@ struct UsamiApp {
     show_bubble: bool,
     is_busy: bool,
     is_calling: bool,
+    call_started_at: Option<Instant>,
+    call_seconds: u64,
     is_companion_mode: bool,
+    sleep_companion_started_at: Option<Instant>,
+    sleep_companion_minutes_left: u32,
     is_muted: bool,
     is_ui_idle: bool,
     last_interaction: Instant,
@@ -119,18 +123,41 @@ impl UsamiApp {
         ];
 
         // Loop em background para detectar inatividade e suavizar a UI (ui-idle)
-        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
                 loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    cx.background_executor().timer(Duration::from_millis(500)).await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
+                                let mut changed = false;
+                                if let Some(started) = view.call_started_at {
+                                    let seconds = started.elapsed().as_secs();
+                                    if view.call_seconds != seconds {
+                                        view.call_seconds = seconds;
+                                        changed = true;
+                                    }
+                                }
+                                if let Some(started) = view.sleep_companion_started_at {
+                                    let elapsed = started.elapsed();
+                                    let remaining = 30_u32.saturating_sub((elapsed.as_secs() / 60) as u32);
+                                    if view.sleep_companion_minutes_left != remaining {
+                                        view.sleep_companion_minutes_left = remaining;
+                                        changed = true;
+                                    }
+                                    if elapsed >= Duration::from_secs(30 * 60) {
+                                        view.stop_sleep_companion();
+                                        changed = true;
+                                    }
+                                }
                                 let has_drawer = view.active_drawer != ActiveDrawer::None;
                                 let is_idle = !has_drawer && view.last_interaction.elapsed() > Duration::from_millis(4500);
                                 if view.is_ui_idle != is_idle {
                                     view.is_ui_idle = is_idle;
+                                    changed = true;
+                                }
+                                if changed {
                                     cx.notify();
                                 }
                             });
@@ -150,7 +177,11 @@ impl UsamiApp {
             show_bubble: true,
             is_busy: false,
             is_calling: false,
+            call_started_at: None,
+            call_seconds: 0,
             is_companion_mode: false,
+            sleep_companion_started_at: None,
+            sleep_companion_minutes_left: 30,
             is_muted: false,
             is_ui_idle: false,
             last_interaction: Instant::now(),
@@ -172,6 +203,43 @@ impl UsamiApp {
             self.is_ui_idle = false;
             cx.notify();
         }
+    }
+
+    fn start_call(&mut self) {
+        self.is_calling = true;
+        self.call_started_at = Some(Instant::now());
+        self.call_seconds = 0;
+        self.status_text = "SUA VEZ · 00:00".into();
+    }
+
+    fn end_call(&mut self) {
+        self.is_calling = false;
+        self.call_started_at = None;
+        self.call_seconds = 0;
+        self.status_text = if self.is_companion_mode { "MODO COMPANION" } else { "COM VOCÊ" }.into();
+    }
+
+    fn toggle_sleep_companion(&mut self) {
+        if self.sleep_companion_started_at.is_some() {
+            self.stop_sleep_companion();
+        } else {
+            self.is_companion_mode = true;
+            self.sleep_companion_started_at = Some(Instant::now());
+            self.sleep_companion_minutes_left = 30;
+            self.last_emotion = "sleepy".into();
+            self.status_text = "MODO COMPANION".into();
+            self.vrm_controller.set_emotion("sleepy");
+        }
+    }
+
+    fn stop_sleep_companion(&mut self) {
+        self.sleep_companion_started_at = None;
+        self.sleep_companion_minutes_left = 30;
+        self.is_companion_mode = false;
+        self.last_emotion = "tsundere".into();
+        self.status_text = if self.is_calling { "SUA VEZ" } else { "COM VOCÊ" }.into();
+        self.vrm_controller.set_emotion_with_options("tsundere", 4.0, false);
+        self.vrm_controller.play_idle();
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
@@ -196,11 +264,12 @@ impl UsamiApp {
 
         let api = Arc::clone(&self.api_client);
         let audio = self.audio_player.clone();
+        let sleep_companion_active = self.sleep_companion_started_at.is_some();
 
-        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.send_chat(&text).await;
+                let res = api.send_chat(&text, sleep_companion_active).await;
 
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
@@ -292,6 +361,15 @@ impl Render for UsamiApp {
         let show_bubble = self.show_bubble;
         let bg_asset = self.bg_asset_path.clone();
         let vrm_entity = self.vrm_view.clone();
+        let status_label: SharedString = if is_calling {
+            format!("SUA VEZ · {:02}:{:02}", self.call_seconds / 60, self.call_seconds % 60).into()
+        } else if is_busy {
+            "PENSANDO".into()
+        } else if is_companion {
+            "MODO COMPANION".into()
+        } else {
+            "COM VOCÊ".into()
+        };
 
         div()
             .relative()
@@ -344,29 +422,22 @@ impl Render for UsamiApp {
                         rgba(0x0e061230)
                     }),
             )
-            // ── LAYER 2: SHIRO VRM 3D (CENTRO DA TELA, ANCORADA NO PISO, SEM CAIXAS) ──
+            // ── LAYER 2: SHIRO VRM 3D (RESPONSIVO FULLSCREEN, ANCORADA NO PISO, SEM CAIXA DE RECORTE) ──
             .child(
                 div()
                     .absolute()
                     .inset_0()
+                    .size_full()
                     .flex()
                     .items_end()
                     .justify_center()
-                    .child(
-                        div()
-                            .w(px(840.0))
-                            .h(px(720.0))
-                            .flex()
-                            .items_end()
-                            .justify_center()
-                            .child(if let Some(view) = vrm_entity {
-                                view.into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }),
-                    ),
+                    .child(if let Some(view) = vrm_entity {
+                        view.into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }),
             )
-            // ── LAYER 3: FLOATING SPEECH BUBBLE (.bubble.her) ──
+            // ── LAYER 3: FLOATING SPEECH BUBBLE COM RABICHO ANIME (.bubble.her) ──
             .when(show_bubble, |parent| {
                 parent.child(
                     div()
@@ -374,12 +445,15 @@ impl Render for UsamiApp {
                         .top(px(88.0))
                         .left(px(120.0))
                         .max_w(px(460.0))
-                        .p_4()
-                        .rounded_2xl()
-                        .bg(rgba(0x160b1ad9))
+                        .relative()
+                        .px_5()
+                        .py_4()
+                        .rounded(px(24.0))
+                        .rounded_br(px(10.0))
+                        .bg(rgba(0x160b1af2))
                         .border_1()
-                        .border_color(rgba(0xf5ebe420))
-                        .shadow_lg()
+                        .border_color(rgba(0xf5ebe425))
+                        .shadow_xl()
                         .id("floating-bubble")
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -387,32 +461,58 @@ impl Render for UsamiApp {
                             this.poke(cx);
                             cx.notify();
                         }))
+                        // Conteúdo do cabeçalho do balão
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .justify_between()
                                 .mb_1p5()
                                 .child(
                                     div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(0xd8b4e2))
-                                        .child("Usami"),
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(rgb(0xffa6c9))
+                                                .child("USAMI"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(0xd8b4e2))
+                                                .child(format!("· {}", self.last_emotion)),
+                                        ),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(rgb(0xc8a8e0))
-                                        .child(format!("· {}", self.last_emotion)),
+                                        .text_color(rgba(0xf5ebe450))
+                                        .child("✕"),
                                 ),
                         )
+                        // Texto da resposta
                         .child(
                             div()
                                 .text_sm()
-                                .line_height(px(22.0))
-                                .text_color(rgb(0xf5ebe4))
+                                .line_height(px(23.0))
+                                .text_color(rgb(0xf9f9fb))
                                 .child(self.last_reply.clone()),
+                        )
+                        // Rabicho de balão de fala apontando diretamente para o rosto da Usami
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(-20.0))
+                                .bottom(px(12.0))
+                                .child(
+                                    img(PathBuf::from(r"A:\Usami Project\usami-desktop\assets\icons\speech_tail.svg"))
+                                        .w(px(22.0))
+                                        .h(px(26.0)),
+                                ),
                         ),
                 )
             })
@@ -484,6 +584,7 @@ impl Render for UsamiApp {
                                         .border_color(rgba(0xf5ebe420))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.poke(cx);
+                                            this.vrm_controller.reset_camera();
                                             this.vrm_controller.play_idle();
                                             cx.notify();
                                         }))
@@ -520,7 +621,7 @@ impl Render for UsamiApp {
                                         .text_xs()
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(rgb(0xf5ebe4))
-                                        .child(self.status_text.clone()),
+                                        .child(status_label),
                                 ),
                         )
                         // Top Right: Clapperboard + Pill de Nível + Crédito
@@ -667,8 +768,8 @@ impl Render for UsamiApp {
                                         }
                                     ),
                             )
-                            // Ações Embutidas à Direita: Fone, Volume, Lua, Enviar
-                            .child(
+                            // No modo texto a barra mantém os mesmos quatro controles da web.
+                            .when(!is_calling, |parent| parent.child(
                                 div()
                                     .flex()
                                     .items_center()
@@ -683,15 +784,10 @@ impl Render for UsamiApp {
                                             .justify_center()
                                             .size(px(36.0))
                                             .rounded_full()
-                                            .bg(if is_calling { rgb(0xe5484d) } else { rgba(0xffffff0d) })
+                                            .bg(rgba(0xffffff0d))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                 this.poke(cx);
-                                                this.is_calling = !this.is_calling;
-                                                this.status_text = if this.is_calling {
-                                                    "EM CHAMADA".into()
-                                                } else {
-                                                    "COM VOCÊ".into()
-                                                };
+                                                this.start_call();
                                                 cx.notify();
                                             }))
                                             .child(icon("phone", 16.0)),
@@ -727,17 +823,7 @@ impl Render for UsamiApp {
                                             .bg(if is_companion { rgba(0x9a44f266) } else { rgba(0xffffff0d) })
                                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                 this.poke(cx);
-                                                this.is_companion_mode = !this.is_companion_mode;
-                                                if this.is_companion_mode {
-                                                    this.last_emotion = "sleepy".into();
-                                                    this.status_text = "MODO COMPANION".into();
-                                                    this.vrm_controller.set_emotion("sleepy");
-                                                } else {
-                                                    this.last_emotion = "tsundere".into();
-                                                    this.status_text = "COM VOCÊ".into();
-                                                    this.vrm_controller.set_emotion_with_options("tsundere", 4.0, false);
-                                                    this.vrm_controller.play_idle();
-                                                }
+                                                this.toggle_sleep_companion();
                                                 cx.notify();
                                             }))
                                             .child(icon("moon", 16.0)),
@@ -758,8 +844,44 @@ impl Render for UsamiApp {
                                             }))
                                             .child(icon("send", 16.0)),
                                     ),
-                            ),
+                            ))
                     )
+                    // Em chamada a web move os controles de voz para o dock abaixo do compositor.
+                    .when(is_calling, |parent| parent.child(
+                        div()
+                            .id("call-dock")
+                            .flex()
+                            .items_center()
+                            .gap_2p5()
+                            .child(
+                                div().id("call-mic").size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(rgba(0x202329d9)).border_1().border_color(rgba(0xf5ebe420)).child(icon("pulse", 19.0)),
+                            )
+                            .child(
+                                div().id("call-chat").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(rgba(0x202329d9)).border_1().border_color(rgba(0xf5ebe420))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.toggle_drawer(ActiveDrawer::Chat, cx); }))
+                                    .child(icon("chat_bubble", 19.0)),
+                            )
+                            .child(
+                                div().id("call-hangup").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(rgb(0xe5484d))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.poke(cx); this.end_call(); cx.notify(); }))
+                                    .child(icon("phone", 19.0)),
+                            )
+                            .child(
+                                div().id("call-volume").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(if is_muted { rgba(0xe5484d55) } else { rgba(0x202329d9) })
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.poke(cx); this.is_muted = !this.is_muted; cx.notify(); }))
+                                    .child(icon("volume", 19.0)),
+                            )
+                            .child(
+                                div().id("call-sleep").cursor_pointer().size(px(48.0)).rounded_full().flex().items_center().justify_center()
+                                    .bg(if is_companion { rgba(0x9a44f266) } else { rgba(0x202329d9) })
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.poke(cx); this.toggle_sleep_companion(); cx.notify(); }))
+                                    .child(icon("moon", 19.0)),
+                            ),
+                    ))
                     // Botão Pílula: 💬 MOSTRAR CONVERSA (some no idle)
                     .when(!is_idle, |parent| {
                         parent.child(

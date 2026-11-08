@@ -52,12 +52,16 @@ impl UsamiApiClient {
         }
     }
 
-    pub async fn send_chat(&self, message: &str) -> Result<ChatResponse, reqwest::Error> {
+    pub async fn send_chat(
+        &self,
+        message: &str,
+        sleep_companion_active: bool,
+    ) -> Result<ChatResponse, reqwest::Error> {
         let payload = ChatMessageRequest {
             message: message.to_string(),
             capabilities: None,
             wake_up_jolt: None,
-            sleep_companion_active: None,
+            sleep_companion_active: Some(sleep_companion_active),
         };
 
         let res = self

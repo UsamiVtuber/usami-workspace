@@ -1,7 +1,40 @@
 use std::sync::OnceLock;
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8787";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
+
 static TOKIO_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+/// Base do backend: `USAMI_API_BASE` quando definida e não vazia, senão o
+/// endereço local padrão. O resultado nunca termina com `/`.
+pub fn normalize_base_url(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+pub fn api_base_url_from_env() -> String {
+    normalize_base_url(std::env::var("USAMI_API_BASE").ok())
+}
+
+// Sem timeout, um backend desligado deixava o app em "PENSANDO" até o TCP
+// desistir. O teto de 90 s cobre o turno de chat mais lento + TTS.
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|error| {
+            eprintln!("[Usami API] Falha ao configurar timeouts ({error}); usando cliente padrão.");
+            reqwest::Client::new()
+        })
+}
 
 pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
     TOKIO_RT.get_or_init(|| {
@@ -60,9 +93,17 @@ pub struct UsamiApiClient {
 impl UsamiApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            client: reqwest::Client::new(),
+            base_url: normalize_base_url(Some(base_url.into())),
+            client: build_http_client(),
         }
+    }
+
+    pub fn from_env() -> Self {
+        Self::new(api_base_url_from_env())
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub async fn send_chat(
@@ -144,5 +185,176 @@ impl UsamiApiClient {
             Ok(res) => res,
             Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    struct CapturedRequest {
+        method: String,
+        path: String,
+        content_type: Option<String>,
+        body: String,
+    }
+
+    // Servidor HTTP mínimo: aceita uma requisição, captura método/caminho/corpo
+    // e responde o que o teste pedir. Sem dependência nova e sem porta fixa.
+    fn spawn_server(
+        status: &'static str,
+        response_content_type: &'static str,
+        response_body: &'static [u8],
+    ) -> (String, mpsc::Receiver<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind do servidor de teste");
+        let address = listener.local_addr().expect("endereço local do servidor");
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            let header_end = buffer
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+                .unwrap_or(buffer.len());
+            let head = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let mut body = buffer[header_end..].to_vec();
+            while body.len() < content_length {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..read]);
+            }
+            let request_line = head.lines().next().unwrap_or_default();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_string();
+            let path = parts.next().unwrap_or_default().to_string();
+            let content_type = head.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-type") {
+                    Some(value.trim().to_string())
+                } else {
+                    None
+                }
+            });
+            let _ = sender.send(CapturedRequest {
+                method,
+                path,
+                content_type,
+                body: String::from_utf8_lossy(&body).to_string(),
+            });
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {response_content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response_body);
+        });
+        (format!("http://{address}"), receiver)
+    }
+
+    #[test]
+    fn base_url_is_trimmed_and_defaulted() {
+        assert_eq!(normalize_base_url(None), DEFAULT_BASE_URL);
+        assert_eq!(normalize_base_url(Some("   ".to_string())), DEFAULT_BASE_URL);
+        assert_eq!(
+            normalize_base_url(Some("http://127.0.0.1:9000/".to_string())),
+            "http://127.0.0.1:9000"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_posts_contract_and_parses_reply() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            br#"{"reply":"oi","gesture":"tilt","actions":[{"type":"gesture","name":"wave"}],"speechTags":["<laugh>"]}"#,
+        );
+        let client = UsamiApiClient::new(format!("{base_url}/"));
+        let response = client.send_chat("olá", true).await.expect("chat responde");
+
+        assert_eq!(response.reply, "oi");
+        assert_eq!(response.gesture.as_deref(), Some("tilt"));
+        assert_eq!(response.actions.len(), 1);
+        assert_eq!(response.speech_tags, vec!["<laugh>"]);
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/chat");
+        assert!(request
+            .content_type
+            .unwrap_or_default()
+            .starts_with("application/json"));
+        let body: serde_json::Value =
+            serde_json::from_str(&request.body).expect("corpo JSON do chat");
+        assert_eq!(body["message"], "olá");
+        assert_eq!(body["sleepCompanionActive"], true);
+        assert_eq!(body["capabilities"]["format"], "VRM");
+        assert_eq!(body["capabilities"]["sequences"], true);
+        assert!(body["capabilities"]["gestures"]
+            .as_array()
+            .is_some_and(|gestures| gestures.iter().any(|gesture| gesture == "tilt")));
+    }
+
+    #[tokio::test]
+    async fn tts_posts_style_and_returns_audio_bytes() {
+        let (base_url, requests) = spawn_server("200 OK", "audio/wav", b"RIFF----WAVE");
+        let client = UsamiApiClient::new(base_url);
+        let bytes = client
+            .fetch_tts_audio("bom dia", "happy")
+            .await
+            .expect("tts responde");
+        assert_eq!(bytes, b"RIFF----WAVE");
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/tts");
+        let body: serde_json::Value =
+            serde_json::from_str(&request.body).expect("corpo JSON do tts");
+        assert_eq!(body["text"], "bom dia");
+        assert_eq!(body["styleId"], "happy");
+        assert_eq!(body["stream"], false);
+    }
+
+    #[tokio::test]
+    async fn http_error_status_becomes_err() {
+        let (base_url, _requests) = spawn_server(
+            "500 Internal Server Error",
+            "application/json",
+            br#"{"error":"falhou"}"#,
+        );
+        let client = UsamiApiClient::new(base_url);
+        assert!(client.send_chat("oi", false).await.is_err());
     }
 }

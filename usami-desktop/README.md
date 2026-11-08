@@ -19,3 +19,20 @@ Aplicativo nativo de alta performance para a companion Usami no desktop, utiliza
 cd usami-desktop
 cargo run
 ```
+
+O backend do core precisa estar no ar (`cd usami; npm run api`). Os assets são
+resolvidos a partir da pasta da crate (`CARGO_MANIFEST_DIR`), então o app roda de
+qualquer diretório. Variáveis opcionais:
+
+- `USAMI_API_BASE` — base do backend (padrão `http://127.0.0.1:8787`); conexão
+  com timeout de 5 s e requisição com teto de 90 s.
+- `USAMI_VRM_PATH` — arquivo `.vrm` (padrão `../usami/public/models/shiro.vrm`).
+- `USAMI_VRMA_DIR` — pasta de animações `.vrma` (padrão `../usami/public/animations/vrma`).
+- `USAMI_BACKGROUND` — imagem de fundo (padrão `assets/background.png`).
+
+## Testes
+```powershell
+cargo test
+```
+Cobre o contrato de `/api/chat` e `/api/tts` contra um servidor HTTP local,
+erros HTTP e a resolução de caminhos de assets.

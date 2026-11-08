@@ -32,9 +32,29 @@ struct ChatMessage {
     emotion: Option<String>,
 }
 
+// Caminhos relativos à crate: o app roda de qualquer lugar do disco e continua
+// achando ícones, fundo, VRM e VRMA. Variáveis abaixo permitem apontar outra
+// instalação sem recompilar.
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn asset_path(relative: &str) -> PathBuf {
+    manifest_dir().join(relative)
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+}
+
+fn first_existing(candidates: impl IntoIterator<Item = Option<PathBuf>>) -> Option<PathBuf> {
+    candidates.into_iter().flatten().find(|path| path.exists())
+}
+
 fn icon(name: &str, size_px: f32) -> impl IntoElement {
-    let path = PathBuf::from(format!(r"A:\Usami Project\usami-desktop\assets\icons\{}.svg", name));
-    img(path)
+    img(asset_path(&format!("assets/icons/{name}.svg")))
         .size(px(size_px))
         .flex_shrink_0()
 }
@@ -77,29 +97,23 @@ impl UsamiApp {
             }
         };
 
-        let candidate_path = PathBuf::from(r"A:\Usami Project\usami-desktop\assets\background.png");
-        let bg_asset_path = if candidate_path.exists() {
-            Some(candidate_path)
-        } else {
-            let alt = PathBuf::from(r"A:\Usami Project\usami\public\background.png");
-            if alt.exists() { Some(alt) } else { None }
-        };
+        let bg_asset_path = first_existing([
+            env_path("USAMI_BACKGROUND"),
+            Some(asset_path("assets/background.png")),
+            Some(asset_path("../usami/public/background.png")),
+        ]);
 
-        let vrm_path = [
-            PathBuf::from(r"A:\Usami Project\usami\public\models\shiro.vrm"),
-            PathBuf::from("../usami/public/models/shiro.vrm"),
-            PathBuf::from("assets/shiro.vrm"),
-        ]
-        .into_iter()
-        .find(|p| p.exists());
+        let vrm_path = first_existing([
+            env_path("USAMI_VRM_PATH"),
+            Some(asset_path("../usami/public/models/shiro.vrm")),
+            Some(asset_path("assets/shiro.vrm")),
+        ]);
 
-        let vrma_dir = [
-            PathBuf::from(r"A:\Usami Project\usami\public\animations\vrma"),
-            PathBuf::from("../usami/public/animations/vrma"),
-            PathBuf::from("assets/vrma"),
-        ]
-        .into_iter()
-        .find(|p| p.exists());
+        let vrma_dir = first_existing([
+            env_path("USAMI_VRMA_DIR"),
+            Some(asset_path("../usami/public/animations/vrma")),
+            Some(asset_path("assets/vrma")),
+        ]);
 
         let vrm_controller = VrmController::new();
         vrm_controller.set_emotion_with_options("tsundere", 4.5, false);
@@ -190,7 +204,7 @@ impl UsamiApp {
             bond_level: 2,
             bond_exp_pct: 74,
             bg_asset_path,
-            api_client: Arc::new(UsamiApiClient::new("http://127.0.0.1:8787")),
+            api_client: Arc::new(UsamiApiClient::from_env()),
             audio_player: player,
             vrm_controller,
             vrm_view,
@@ -577,7 +591,7 @@ impl Render for UsamiApp {
                                 .right(px(-20.0))
                                 .bottom(px(12.0))
                                 .child(
-                                    img(PathBuf::from(r"A:\Usami Project\usami-desktop\assets\icons\speech_tail.svg"))
+                                    img(asset_path("assets/icons/speech_tail.svg"))
                                         .w(px(22.0))
                                         .h(px(26.0)),
                                 ),
@@ -1232,7 +1246,7 @@ impl Render for UsamiApp {
                                                 .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0xd8b4e2)).child("STATUS DO MOTOR"))
                                                 .child(div().mt_2().text_xs().text_color(rgb(0xf5ebe4)).child("• Renderizador: WGPU 60 FPS (Nativo)"))
                                                 .child(div().mt_1().text_xs().text_color(rgb(0xf5ebe4)).child("• Modelo: 白ー (shiro) VRM 1.0"))
-                                                .child(div().mt_1().text_xs().text_color(rgb(0xf5ebe4)).child("• Backend: 127.0.0.1:8787")),
+                                                .child(div().mt_1().text_xs().text_color(rgb(0xf5ebe4)).child(SharedString::from(format!("• Backend: {}", self.api_client.base_url())))),
                                         )
                                 }
                                 ActiveDrawer::None => div(),
@@ -1265,4 +1279,39 @@ fn main() {
         )
         .unwrap();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
+    // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
+    use super::{asset_path, first_existing, manifest_dir};
+
+    #[test]
+    fn icon_paths_resolve_from_crate_dir() {
+        let path = asset_path("assets/icons/chat.svg");
+        assert!(path.is_absolute());
+        assert!(path.starts_with(manifest_dir()));
+        assert!(path.exists(), "ícone esperado em {}", path.display());
+    }
+
+    #[test]
+    fn first_existing_skips_missing_candidates() {
+        let dir = std::env::temp_dir().join(format!(
+            "usami-desktop-path-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("cria diretório temporário");
+        let missing = dir.join("missing.png");
+        let present = dir.join("present.png");
+        std::fs::write(&present, b"x").expect("cria arquivo de teste");
+
+        assert_eq!(
+            first_existing([Some(missing.clone()), Some(present.clone())]),
+            Some(present)
+        );
+        assert_eq!(first_existing([Some(missing), None]), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

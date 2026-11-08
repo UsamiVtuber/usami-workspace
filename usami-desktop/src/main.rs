@@ -2,8 +2,8 @@ pub mod api;
 pub mod audio;
 pub mod recorder;
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use gpui::*;
 use gpui::prelude::FluentBuilder;
@@ -40,8 +40,23 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Pasta empacotada (release): `assets/` ao lado do executável. Em
+/// desenvolvimento não existe, então cai para a pasta da crate.
+fn asset_base_dir() -> &'static Path {
+    static BASE: OnceLock<PathBuf> = OnceLock::new();
+    BASE.get_or_init(|| {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+            && dir.join("assets").is_dir()
+        {
+            return dir.to_path_buf();
+        }
+        manifest_dir()
+    })
+}
+
 fn asset_path(relative: &str) -> PathBuf {
-    manifest_dir().join(relative)
+    asset_base_dir().join(relative)
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="22" height="26" viewBox="0 0 22 26" fill="none">
-  <!-- Preenchimento perfeitamente integrado ao fundo da bolha -->
-  <path d="M 0,0 C 7,2 15,9 21,16 C 14,17 6,20 0,22 Z" fill="#160b1a" fill-opacity="0.92" />
-  <!-- Contorno sutil nas bordas externas que se conectam à borda da bolha -->
-  <path d="M 0,0 C 7,2 15,9 21,16 C 14,17 6,20 0,22" stroke="#f5ebe4" stroke-opacity="0.22" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <!-- Rabicho desenhado com o mesmo fill/borda do corpo da bolha;
+       a base (x=0) fica sobreposta à borda reta do balão. -->
+  <path d="M 0,1 C 8,2.5 16,5 22,11 C 16,15 8,19 0,23 Z" fill="#160b1a" fill-opacity="0.949" />
+  <path d="M 0,1 C 8,2.5 16,5 22,11 C 16,15 8,19 0,23" stroke="#f5ebe4" stroke-opacity="0.145" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

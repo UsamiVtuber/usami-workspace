@@ -63,6 +63,8 @@ fn icon(name: &str, size_px: f32) -> impl IntoElement {
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
+    input_active: bool,
+    caret_on: bool,
     status_text: SharedString,
     last_reply: SharedString,
     last_emotion: SharedString,
@@ -194,6 +196,12 @@ impl UsamiApp {
                                     view.is_ui_idle = is_idle;
                                     changed = true;
                                 }
+                                // Caret pisca enquanto o composer está ativo (o mesmo
+                                // timer já redesenha a UI, então não há custo extra).
+                                if view.input_active {
+                                    view.caret_on = !view.caret_on;
+                                    changed = true;
+                                }
                                 if changed {
                                     cx.notify();
                                 }
@@ -208,6 +216,8 @@ impl UsamiApp {
         Self {
             focus_handle: cx.focus_handle(),
             input_text: String::new(),
+            input_active: false,
+            caret_on: true,
             status_text: "COM VOCÊ".into(),
             last_reply: "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!".into(),
             last_emotion: "tsundere".into(),
@@ -396,6 +406,7 @@ impl UsamiApp {
         }
 
         self.input_text.clear();
+        self.input_active = false;
         self.is_busy = true;
         self.sync_mic_gate();
         self.show_bubble = true;
@@ -403,6 +414,8 @@ impl UsamiApp {
 
         // Reação imediata de escuta e reflexão enquanto o LLM processa
         self.vrm_controller.play_vrma("thinking", false);
+        // Limpa as expressões do turno anterior: sem isso elas se acumulam na cabeça.
+        self.vrm_controller.clear_expressions();
         self.vrm_controller.set_expression("19-prefab_doubt", 0.45);
 
         self.chat_history.push(ChatMessage {
@@ -445,6 +458,8 @@ impl UsamiApp {
                                     // Emoção não dispara clipe: o gesto é escolhido uma vez, abaixo.
                                     view.vrm_controller.set_emotion_with_options(&emotion, 5.0, false);
 
+                                    // Substitui (em vez de somar) as expressões do turno.
+                                    view.vrm_controller.clear_expressions();
                                     for action in &response.actions {
                                         if matches!(
                                             action.action_type.as_str(),
@@ -623,10 +638,12 @@ impl Render for UsamiApp {
                         if let Some(item) = cx.read_from_clipboard()
                             && let Some(text) = item.text()
                         {
+                            this.input_active = true;
                             this.input_text.push_str(&text);
                             cx.notify();
                         }
                     } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
+                        this.input_active = true;
                         if let Some(idx) = this.input_text.rfind(' ') {
                             this.input_text.truncate(idx);
                         } else {
@@ -648,22 +665,27 @@ impl Render for UsamiApp {
                 if key == "enter" {
                     this.submit(cx);
                 } else if key == "backspace" {
+                    this.input_active = true;
                     this.input_text.pop();
                     cx.notify();
                 } else if key == "escape" {
+                    this.input_active = false;
                     this.active_drawer = ActiveDrawer::None;
                     cx.notify();
                 } else if key == "space" || key == " " {
+                    this.input_active = true;
                     this.input_text.push(' ');
                     cx.notify();
                 } else if let Some(ref ch) = ks.key_char {
                     if !ch.chars().any(|c| c.is_control()) {
+                        this.input_active = true;
                         this.input_text.push_str(ch);
                         cx.notify();
                     }
                 } else if key.chars().count() == 1 {
                     let c = key.chars().next().unwrap();
                     if !c.is_control() {
+                        this.input_active = true;
                         this.input_text.push(c);
                         cx.notify();
                     }
@@ -717,7 +739,6 @@ impl Render for UsamiApp {
                         .px_5()
                         .py_4()
                         .rounded(px(24.0))
-                        .rounded_br(px(10.0))
                         .bg(rgba(0x160b1af2))
                         .border_1()
                         .border_color(rgba(0xf5ebe425))
@@ -774,12 +795,12 @@ impl Render for UsamiApp {
                         .child(
                             div()
                                 .absolute()
-                                .right(px(-20.0))
-                                .bottom(px(12.0))
+                                .right(px(-13.0))
+                                .bottom(px(30.0))
                                 .child(
                                     img(asset_path("assets/icons/speech_tail.svg"))
-                                        .w(px(22.0))
-                                        .h(px(26.0)),
+                                        .w(px(24.0))
+                                        .h(px(24.0)),
                                 ),
                         ),
                 )
@@ -997,12 +1018,16 @@ impl Render for UsamiApp {
                             }))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.poke(cx);
+                                this.input_active = true;
+                                this.caret_on = true;
                                 window.focus(&this.focus_handle);
+                                cx.notify();
                             }))
                             // Ícone Imagem / Anexo
                             .child(
                                 div()
                                     .id("composer-img-btn")
+                                    .flex_shrink_0()
                                     .cursor_pointer()
                                     .flex()
                                     .items_center()
@@ -1020,50 +1045,69 @@ impl Render for UsamiApp {
                                 div()
                                     .id("input-box")
                                     .flex_1()
+                                    .min_w(px(0.0))
                                     .px_2()
                                     .py_2()
                                     .cursor_text()
                                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                         this.poke(cx);
+                                        this.input_active = true;
+                                        this.caret_on = true;
                                         window.focus(&this.focus_handle);
+                                        cx.notify();
                                     }))
                                     .child(
                                         div()
                                             .flex()
+                                            .flex_1()
+                                            .min_w(px(0.0))
                                             .items_center()
-                                            .child(
-                                                if self.input_text.is_empty() {
+                                            .when(
+                                                self.input_text.is_empty() && !self.input_active,
+                                                |row| {
+                                                    row.child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(rgba(0xf5ebe46b))
+                                                            .truncate()
+                                                            .child("Diga alguma coisa..."),
+                                                    )
+                                                },
+                                            )
+                                            .when(!self.input_text.is_empty(), |row| {
+                                                row.child(
                                                     div()
+                                                        .flex_1()
+                                                        .min_w(px(0.0))
                                                         .text_sm()
-                                                        .text_color(rgba(0xf5ebe46b))
-                                                        .child("Diga alguma coisa...")
-                                                        .into_any_element()
-                                                } else {
+                                                        .text_color(rgb(0xf5ebe4))
+                                                        // `truncate()` não aplica a
+                                                        // reticência no GPUI 0.2.2 com
+                                                        // nowrap; line_clamp força a
+                                                        // medição com largura definida.
+                                                        .line_clamp(1)
+                                                        .text_ellipsis()
+                                                        .child(self.input_text.clone()),
+                                                )
+                                            })
+                                            // O caret é estado da UI (some com o composer inativo);
+                                            // o timer de 500 ms alterna o pisca.
+                                            .when(self.input_active && self.caret_on, |row| {
+                                                row.child(
                                                     div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .child(
-                                                            div()
-                                                                .text_sm()
-                                                                .text_color(rgb(0xf5ebe4))
-                                                                .child(self.input_text.clone()),
-                                                        )
-                                                        // Cursor vertical suave indicando foco ativo após o texto digitado
-                                                        .child(
-                                                            div()
-                                                                .w(px(1.5))
-                                                                .h(px(15.0))
-                                                                .ml(px(1.0))
-                                                                .bg(rgb(0xffa6c9)),
-                                                        )
-                                                        .into_any_element()
-                                                }
-                                            ),
+                                                        .flex_shrink_0()
+                                                        .w(px(1.5))
+                                                        .h(px(15.0))
+                                                        .ml(px(1.0))
+                                                        .bg(rgb(0xffa6c9)),
+                                                )
+                                            }),
                                     ),
                             )
                             // No modo texto a barra mantém os mesmos quatro controles da web.
                             .when(!is_calling, |parent| parent.child(
                                 div()
+                                    .flex_shrink_0()
                                     .flex()
                                     .items_center()
                                     .gap_1p5()

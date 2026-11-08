@@ -254,6 +254,10 @@ impl UsamiApp {
         self.show_bubble = true;
         self.status_text = "PENSANDO".into();
 
+        // Reação imediata de escuta e reflexão enquanto o LLM processa
+        self.vrm_controller.play_vrma("thinking", false);
+        self.vrm_controller.set_expression("19-prefab_doubt", 0.45);
+
         self.chat_history.push(ChatMessage {
             sender: Sender::User,
             text: text.clone(),
@@ -278,7 +282,7 @@ impl UsamiApp {
                             view.poke(cx);
                             match res {
                                 Ok(response) => {
-                                    let emotion = response.gesture.unwrap_or_else(|| "tsundere".into());
+                                    let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
                                     view.last_reply = response.reply.clone().into();
                                     view.last_emotion = emotion.clone().into();
                                     view.show_bubble = true;
@@ -290,12 +294,39 @@ impl UsamiApp {
                                         "COM VOCÊ".into()
                                     };
 
+                                    // Aplica a emoção facial no avatar
                                     view.vrm_controller.set_emotion(&emotion);
+
+                                    // Aplica expressões e gestos retornados pelo backend
+                                    for action in &response.actions {
+                                        match action.action_type.as_str() {
+                                            "gesture" | "play_clip" | "play_vrma" => {
+                                                if let Some(name) = &action.name {
+                                                    view.vrm_controller.play_vrma(name, false);
+                                                }
+                                            }
+                                            "set_expression" | "expression" | "emote" => {
+                                                if let Some(name) = &action.name {
+                                                    let weight = action.weight.or(action.value).unwrap_or(0.8);
+                                                    view.vrm_controller.set_expression(name, weight);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    if let Some(gesture) = &response.gesture {
+                                        if gesture != "neutral" && gesture != "idle" {
+                                            view.vrm_controller.play_vrma(gesture, false);
+                                        }
+                                    }
+
+                                    // Inicia o lip-sync e animação de fala procedural imediatamente!
+                                    view.vrm_controller.speak(&response.reply, None);
 
                                     view.chat_history.push(ChatMessage {
                                         sender: Sender::Usami,
                                         text: response.reply.clone(),
-                                        emotion: Some(emotion),
+                                        emotion: Some(emotion.clone()),
                                     });
 
                                     if view.bond_exp_pct < 100 {
@@ -311,16 +342,15 @@ impl UsamiApp {
                                         if let Some(player) = audio {
                                             let api_tts = Arc::clone(&view.api_client);
                                             let tts_text = response.reply;
-                                            std::thread::spawn(move || {
-                                                let rt = tokio::runtime::Builder::new_current_thread()
-                                                    .enable_all()
-                                                    .build()
-                                                    .unwrap();
-                                                rt.block_on(async {
-                                                    if let Ok(wav_bytes) = api_tts.fetch_tts_audio(&tts_text, "neutral").await {
-                                                        let _ = player.play_wav(wav_bytes);
-                                                    }
-                                                });
+                                            let tts_style = emotion;
+                                            let player = player.clone();
+                                            let vrm_ctrl = view.vrm_controller.clone();
+                                            crate::api::tokio_runtime().spawn(async move {
+                                                if let Ok(wav_bytes) = api_tts.fetch_tts_audio(&tts_text, &tts_style).await {
+                                                    // Sincroniza o lip-sync com os dados reais de envelope da onda WAV
+                                                    vrm_ctrl.speak(&tts_text, Some(wav_bytes.clone()));
+                                                    let _ = player.play_wav(wav_bytes);
+                                                }
                                             });
                                         }
                                     }
@@ -384,7 +414,37 @@ impl Render for UsamiApp {
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.poke(cx);
-                let key = &event.keystroke.key;
+                let ks = &event.keystroke;
+                let key = ks.key.as_str();
+
+                // Atalhos com Control (ex: Ctrl+V para colar, Ctrl+Backspace / Ctrl+W para apagar palavra)
+                if ks.modifiers.control && !ks.modifiers.alt {
+                    if key.eq_ignore_ascii_case("v") {
+                        if let Some(item) = cx.read_from_clipboard() {
+                            if let Some(text) = item.text() {
+                                this.input_text.push_str(&text);
+                                cx.notify();
+                            }
+                        }
+                    } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
+                        if let Some(idx) = this.input_text.rfind(' ') {
+                            this.input_text.truncate(idx);
+                        } else {
+                            this.input_text.clear();
+                        }
+                        cx.notify();
+                    } else if key.eq_ignore_ascii_case("u") {
+                        this.input_text.clear();
+                        cx.notify();
+                    }
+                    return;
+                }
+
+                // Ignora teclas com Alt isolado
+                if ks.modifiers.alt && !ks.modifiers.control {
+                    return;
+                }
+
                 if key == "enter" {
                     this.submit(cx);
                 } else if key == "backspace" {
@@ -393,12 +453,20 @@ impl Render for UsamiApp {
                 } else if key == "escape" {
                     this.active_drawer = ActiveDrawer::None;
                     cx.notify();
-                } else if let Some(ref ch) = event.keystroke.key_char {
-                    this.input_text.push_str(ch);
+                } else if key == "space" || key == " " {
+                    this.input_text.push(' ');
                     cx.notify();
-                } else if key.chars().count() == 1 && !key.starts_with("ctrl") && !key.starts_with("alt") {
-                    this.input_text.push_str(key);
-                    cx.notify();
+                } else if let Some(ref ch) = ks.key_char {
+                    if !ch.chars().any(|c| c.is_control()) {
+                        this.input_text.push_str(ch);
+                        cx.notify();
+                    }
+                } else if key.chars().count() == 1 {
+                    let c = key.chars().next().unwrap();
+                    if !c.is_control() {
+                        this.input_text.push(c);
+                        cx.notify();
+                    }
                 }
             }))
             // ── LAYER 0: CENÁRIO DA CIDADE / QUARTO À NOITE (BACKDROP) ──
@@ -727,6 +795,10 @@ impl Render for UsamiApp {
                             .on_mouse_move(cx.listener(|this, _, _, cx| {
                                 this.poke(cx);
                             }))
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.poke(cx);
+                                window.focus(&this.focus_handle);
+                            }))
                             // Ícone Imagem / Anexo
                             .child(
                                 div()
@@ -750,22 +822,43 @@ impl Render for UsamiApp {
                                     .flex_1()
                                     .px_2()
                                     .py_2()
+                                    .cursor_text()
                                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                         this.poke(cx);
                                         window.focus(&this.focus_handle);
                                     }))
                                     .child(
-                                        if self.input_text.is_empty() {
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgba(0xf5ebe46b))
-                                                .child("Diga alguma coisa...")
-                                        } else {
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgb(0xf5ebe4))
-                                                .child(self.input_text.clone())
-                                        }
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                if self.input_text.is_empty() {
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(rgba(0xf5ebe46b))
+                                                        .child("Diga alguma coisa...")
+                                                        .into_any_element()
+                                                } else {
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(rgb(0xf5ebe4))
+                                                                .child(self.input_text.clone()),
+                                                        )
+                                                        // Cursor vertical suave indicando foco ativo após o texto digitado
+                                                        .child(
+                                                            div()
+                                                                .w(px(1.5))
+                                                                .h(px(15.0))
+                                                                .ml(px(1.0))
+                                                                .bg(rgb(0xffa6c9)),
+                                                        )
+                                                        .into_any_element()
+                                                }
+                                            ),
                                     ),
                             )
                             // No modo texto a barra mantém os mesmos quatro controles da web.

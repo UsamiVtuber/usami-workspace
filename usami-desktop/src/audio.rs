@@ -10,7 +10,7 @@ impl AudioPlayer {
     pub fn try_new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let sink = DeviceSinkBuilder::open_default_sink()
             .map_err(|e| format!("Falha ao abrir dispositivo de áudio padrão: {e}"))?;
-        let player = Player::connect_new(&sink.mixer());
+        let player = Player::connect_new(sink.mixer());
         Ok(Self {
             _sink: sink,
             player,

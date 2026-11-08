@@ -328,10 +328,11 @@ impl UsamiApp {
                                             _ => {}
                                         }
                                     }
-                                    if let Some(gesture) = &response.gesture {
-                                        if gesture != "neutral" && gesture != "idle" {
-                                            view.vrm_controller.play_vrma(gesture, false);
-                                        }
+                                    if let Some(gesture) = &response.gesture
+                                        && gesture != "neutral"
+                                        && gesture != "idle"
+                                    {
+                                        view.vrm_controller.play_vrma(gesture, false);
                                     }
 
                                     // Inicia o lip-sync e animação de fala procedural imediatamente!
@@ -352,21 +353,21 @@ impl UsamiApp {
 
                                     cx.notify();
 
-                                    if !view.is_muted {
-                                        if let Some(player) = audio {
-                                            let api_tts = Arc::clone(&view.api_client);
-                                            let tts_text = response.reply;
-                                            let tts_style = emotion;
-                                            let player = player.clone();
-                                            let vrm_ctrl = view.vrm_controller.clone();
-                                            crate::api::tokio_runtime().spawn(async move {
-                                                if let Ok(wav_bytes) = api_tts.fetch_tts_audio(&tts_text, &tts_style).await {
-                                                    // Sincroniza o lip-sync com os dados reais de envelope da onda WAV
-                                                    vrm_ctrl.speak(&tts_text, Some(wav_bytes.clone()));
-                                                    let _ = player.play_wav(wav_bytes);
-                                                }
-                                            });
-                                        }
+                                    if !view.is_muted
+                                        && let Some(player) = audio
+                                    {
+                                        let api_tts = Arc::clone(&view.api_client);
+                                        let tts_text = response.reply;
+                                        let tts_style = emotion;
+                                        let player = player.clone();
+                                        let vrm_ctrl = view.vrm_controller.clone();
+                                        crate::api::tokio_runtime().spawn(async move {
+                                            if let Ok(wav_bytes) = api_tts.fetch_tts_audio(&tts_text, &tts_style).await {
+                                                // Sincroniza o lip-sync com os dados reais de envelope da onda WAV
+                                                vrm_ctrl.speak(&tts_text, Some(wav_bytes.clone()));
+                                                let _ = player.play_wav(wav_bytes);
+                                            }
+                                        });
                                     }
                                 }
                                 Err(err) => {
@@ -434,11 +435,11 @@ impl Render for UsamiApp {
                 // Atalhos com Control (ex: Ctrl+V para colar, Ctrl+Backspace / Ctrl+W para apagar palavra)
                 if ks.modifiers.control && !ks.modifiers.alt {
                     if key.eq_ignore_ascii_case("v") {
-                        if let Some(item) = cx.read_from_clipboard() {
-                            if let Some(text) = item.text() {
-                                this.input_text.push_str(&text);
-                                cx.notify();
-                            }
+                        if let Some(item) = cx.read_from_clipboard()
+                            && let Some(text) = item.text()
+                        {
+                            this.input_text.push_str(&text);
+                            cx.notify();
                         }
                     } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
                         if let Some(idx) = this.input_text.rfind(' ') {
@@ -1272,7 +1273,7 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(|cx| UsamiApp::new(cx));
+                let view = cx.new(UsamiApp::new);
                 window.focus(&view.read(cx).focus_handle);
                 view
             },

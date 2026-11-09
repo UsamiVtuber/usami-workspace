@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
-  <!-- Rabicho desenhado com o mesmo fill/borda do corpo da bolha;
-       a base (x=0) fica sobreposta à borda reta do balão. -->
-  <path d="M 0,1 C 8,2.5 16,5 22,11 C 16,15 8,19 0,23 Z" fill="#160b1a" fill-opacity="0.949" />
-  <path d="M 0,1 C 8,2.5 16,5 22,11 C 16,15 8,19 0,23" stroke="#f5ebe4" stroke-opacity="0.145" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="11" viewBox="0 0 20 11" fill="none">
+  <!-- Rabicho de balão no estilo .bubble.her::after: triângulo para baixo,
+       com a mesma cor do corpo e borda só nas laterais visíveis. O topo fica
+       coberto pelo balão, então não recebe stroke. -->
+  <path d="M0 0 H20 L10 11 Z" fill="#070D1F" fill-opacity="0.85" />
+  <path d="M0 0 L10 11 L20 0" stroke="#F9F9FB" stroke-opacity="0.22" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

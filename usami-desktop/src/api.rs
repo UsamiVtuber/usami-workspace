@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,53 @@ pub fn api_base_url_from_env() -> String {
     normalize_base_url(std::env::var("USAMI_API_BASE").ok())
 }
 
+fn read_token_from_env_file(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || !trimmed.starts_with("USAMI_API_TOKEN") {
+            continue;
+        }
+        if let Some((key, val)) = trimmed.split_once('=') {
+            if key.trim() == "USAMI_API_TOKEN" {
+                let token = val.trim().trim_matches('"').trim_matches('\'').trim();
+                if !token.is_empty() {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn api_token_from_env() -> Option<String> {
-    std::env::var("USAMI_API_TOKEN")
+    if let Some(token) = std::env::var("USAMI_API_TOKEN")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+    {
+        return Some(token);
+    }
+
+    // Fallback de desenvolvimento e desktop local: busca `.env` próximo
+    let candidates = [
+        PathBuf::from(".env"),
+        PathBuf::from("../.env"),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(".env")))
+            .unwrap_or_default(),
+    ];
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            if let Some(token) = read_token_from_env_file(&candidate) {
+                return Some(token);
+            }
+        }
+    }
+
+    None
 }
 
 // Sem timeout, um backend desligado deixava o app em "PENSANDO" até o TCP
@@ -1086,5 +1129,20 @@ mod tests {
         let req1 = requests.recv_timeout(Duration::from_secs(5)).expect("recebe get");
         assert_eq!(req1.method, "GET");
         assert_eq!(req1.path, "/api/proactive/events");
+    }
+
+    #[test]
+    fn read_token_from_env_file_parses_cleanly() {
+        let temp_dir = std::env::temp_dir().join(format!("usami_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join(".env");
+        let content = "# comentario\nUSAMI_API_TOKEN=\"segredo-123\"\nOUTRA_VAR=teste\n";
+        std::fs::write(&file_path, content).expect("escreve .env temporario");
+
+        let token = read_token_from_env_file(&file_path);
+        assert_eq!(token.as_deref(), Some("segredo-123"));
+
+        let _ = std::fs::remove_file(file_path);
+        let _ = std::fs::remove_dir(temp_dir);
     }
 }

@@ -1,5 +1,7 @@
 pub mod api;
 pub mod audio;
+#[cfg(target_os = "windows")]
+mod presence;
 pub mod recorder;
 mod theme;
 
@@ -136,6 +138,7 @@ fn settings_code(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
+#[allow(dead_code)]
 fn settings_disabled_button(label: &'static str) -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -167,6 +170,7 @@ fn settings_danger_button(label: &'static str) -> impl IntoElement {
         .child(label)
 }
 
+#[allow(dead_code)]
 fn settings_disabled_input(placeholder: &'static str) -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -199,6 +203,7 @@ fn settings_dl_row(key: &'static str, value: impl Into<SharedString>) -> impl In
         .child(div().text_color(t.color.pearl).child(value.into()))
 }
 
+#[allow(dead_code)]
 fn settings_disabled_slider() -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -230,6 +235,7 @@ fn settings_disabled_slider() -> impl IntoElement {
 // `.trait-row` do web: rótulo à esquerda, valor em destaque à direita e o
 // slider logo abaixo. O trilho repete `settings_disabled_slider` sem as margens
 // verticais, que aqui vêm do `gap` da linha.
+#[allow(dead_code)]
 fn settings_trait_row(label: &'static str) -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -289,6 +295,7 @@ fn settings_trait_row(label: &'static str) -> impl IntoElement {
         )
 }
 
+#[allow(dead_code)]
 fn settings_disabled_textarea() -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -353,6 +360,29 @@ struct UsamiApp {
     audio_player: Option<Arc<AudioPlayer>>,
     vrm_controller: VrmController,
     vrm_view: Option<Entity<VrmView>>,
+    last_source: Option<SharedString>,
+    last_timing: Option<api::ChatTiming>,
+    server_affinity: Option<i32>,
+    server_stage: Option<SharedString>,
+    memory_data: Option<api::MemoryData>,
+    memory_loading: bool,
+    memory_error: Option<SharedString>,
+    memory_confirm_active: bool,
+    memory_status: Option<SharedString>,
+    personality_data: Option<api::PersonalityData>,
+    personality_loading: bool,
+    personality_error: Option<SharedString>,
+    personality_status: Option<SharedString>,
+    #[cfg(target_os = "windows")]
+    presence_subscription: Option<Subscription>,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for UsamiApp {
+    fn drop(&mut self) {
+        // Mantém a assinatura de `on_window_closed` viva até o app encerrar.
+        self.presence_subscription.take();
+    }
 }
 
 impl UsamiApp {
@@ -507,7 +537,30 @@ impl UsamiApp {
             audio_player: player,
             vrm_controller,
             vrm_view,
+            last_source: None,
+            last_timing: None,
+            server_affinity: None,
+            server_stage: None,
+            memory_data: None,
+            memory_loading: false,
+            memory_error: None,
+            memory_confirm_active: false,
+            memory_status: None,
+            personality_data: None,
+            personality_loading: false,
+            personality_error: None,
+            personality_status: None,
+            #[cfg(target_os = "windows")]
+            presence_subscription: None,
         }
+    }
+
+    /// Sobe bandeja, atalho global e toggles. O HWND só existe depois de
+    /// `open_window`, então isto roda uma vez na abertura da janela.
+    #[cfg(target_os = "windows")]
+    fn attach_presence(&mut self, window: &Window, cx: &mut Context<Self>) {
+        presence::start(window);
+        self.presence_subscription = Some(cx.on_window_closed(|_| presence::shutdown()));
     }
 
     fn poke(&mut self, cx: &mut Context<Self>) {
@@ -759,11 +812,20 @@ impl UsamiApp {
                                         emotion: Some(emotion.clone()),
                                     });
 
-                                    if view.bond_exp_pct < 100 {
+                                    view.last_source = response.source.clone().map(Into::into);
+                                    view.last_timing = response.timing.clone();
+                                    if let Some(aff) = response.affinity {
+                                        view.server_affinity = Some(aff);
+                                        view.bond_level = ((aff as u32) / 10).max(1);
+                                        view.bond_exp_pct = ((aff as u32) % 10) * 10;
+                                    } else if view.bond_exp_pct < 100 {
                                         view.bond_exp_pct += 2;
                                     } else {
                                         view.bond_level += 1;
                                         view.bond_exp_pct = 5;
+                                    }
+                                    if let Some(stage) = response.stage.clone() {
+                                        view.server_stage = Some(stage.into());
                                     }
 
                                     cx.notify();
@@ -850,8 +912,290 @@ impl UsamiApp {
             self.active_drawer = ActiveDrawer::None;
         } else {
             self.active_drawer = drawer;
+            if drawer == ActiveDrawer::Settings {
+                self.load_active_settings_tab(cx);
+            }
         }
         cx.notify();
+    }
+
+    fn set_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
+        self.settings_tab = tab;
+        self.load_active_settings_tab(cx);
+        cx.notify();
+    }
+
+    fn load_active_settings_tab(&mut self, cx: &mut Context<Self>) {
+        match self.settings_tab {
+            SettingsTab::Memory => {
+                if self.memory_data.is_none() && !self.memory_loading {
+                    self.fetch_memory(cx);
+                }
+            }
+            SettingsTab::Personality => {
+                if self.personality_data.is_none() && !self.personality_loading {
+                    self.fetch_personality(cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn fetch_memory(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            self.memory_error = Some("USAMI_API_TOKEN não configurado no ambiente".into());
+            return;
+        }
+        self.memory_loading = true;
+        self.memory_error = None;
+        self.memory_status = None;
+        let api = Arc::clone(&self.api_client);
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_memory().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.memory_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    if let Some(ref aff) = resp.memory.affinity {
+                                        view.server_affinity = Some(aff.score);
+                                        view.bond_level = ((aff.score as u32) / 10).max(1);
+                                        view.bond_exp_pct = ((aff.score as u32) % 10) * 10;
+                                    }
+                                    view.memory_data = Some(resp.memory);
+                                    view.memory_error = None;
+                                }
+                                Err(err) => {
+                                    view.memory_error = Some(err.into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn delete_memory_fact(&mut self, section: String, fact: String, cx: &mut Context<Self>) {
+        if !self.memory_confirm_active {
+            return;
+        }
+        self.memory_loading = true;
+        self.memory_status = None;
+        let api = Arc::clone(&self.api_client);
+        let payload = api::MemoryForgetRequest {
+            kind: "fact".into(),
+            confirm: "APAGAR".into(),
+            section: Some(section),
+            fact: Some(fact),
+            date: None,
+        };
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.forget_memory(&payload).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.memory_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    if let Some(mem) = resp.memory {
+                                        view.memory_data = Some(mem);
+                                    }
+                                    view.memory_status = Some("Fato removido com sucesso.".into());
+                                    view.memory_error = None;
+                                }
+                                Err(err) => {
+                                    view.memory_error = Some(format!("Falha ao excluir: {err}").into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn delete_memory_all(&mut self, cx: &mut Context<Self>) {
+        if !self.memory_confirm_active {
+            return;
+        }
+        self.memory_loading = true;
+        self.memory_status = None;
+        let api = Arc::clone(&self.api_client);
+        let payload = api::MemoryForgetRequest {
+            kind: "all".into(),
+            confirm: "APAGAR".into(),
+            section: None,
+            fact: None,
+            date: None,
+        };
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.forget_memory(&payload).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.memory_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    if let Some(mem) = resp.memory {
+                                        view.memory_data = Some(mem);
+                                    } else {
+                                        view.memory_data = Some(api::MemoryData::default());
+                                    }
+                                    view.memory_confirm_active = false;
+                                    view.memory_status = Some("Toda a memória foi redefinida.".into());
+                                    view.memory_error = None;
+                                }
+                                Err(err) => {
+                                    view.memory_error = Some(format!("Falha ao apagar tudo: {err}").into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn fetch_personality(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            self.personality_error = Some("USAMI_API_TOKEN não configurado no ambiente".into());
+            return;
+        }
+        self.personality_loading = true;
+        self.personality_error = None;
+        self.personality_status = None;
+        let api = Arc::clone(&self.api_client);
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_personality().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.personality_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    view.personality_data = Some(resp.personality);
+                                    view.personality_error = None;
+                                }
+                                Err(err) => {
+                                    view.personality_error = Some(err.into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn adjust_trait(&mut self, trait_name: &'static str, delta: i32) {
+        if let Some(ref mut data) = self.personality_data {
+            let val = match trait_name {
+                "warmth" => &mut data.traits.warmth,
+                "curiosity" => &mut data.traits.curiosity,
+                "playfulness" => &mut data.traits.playfulness,
+                "pride" => &mut data.traits.pride,
+                _ => return,
+            };
+            let new_val = (*val as i32 + delta).clamp(0, 100) as u32;
+            *val = new_val;
+        }
+    }
+
+    fn save_personality(&mut self, cx: &mut Context<Self>) {
+        let Some(data) = self.personality_data.clone() else { return };
+        self.personality_loading = true;
+        self.personality_status = None;
+        let api = Arc::clone(&self.api_client);
+        let payload = api::PersonalityUpdateRequest {
+            traits: Some(data.traits),
+            custom_prompt: Some(data.custom_prompt),
+            reset: None,
+        };
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.update_personality(&payload).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.personality_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    view.personality_data = Some(resp.personality);
+                                    view.personality_status = Some("Personalidade salva no servidor!".into());
+                                    view.personality_error = None;
+                                }
+                                Err(err) => {
+                                    view.personality_error = Some(format!("Falha ao salvar: {err}").into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn reset_personality(&mut self, cx: &mut Context<Self>) {
+        self.personality_loading = true;
+        self.personality_status = None;
+        let api = Arc::clone(&self.api_client);
+        let payload = api::PersonalityUpdateRequest {
+            traits: None,
+            custom_prompt: None,
+            reset: Some(true),
+        };
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.update_personality(&payload).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.personality_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    view.personality_data = Some(resp.personality);
+                                    view.personality_status = Some("Personalidade restaurada para o padrão (50).".into());
+                                    view.personality_error = None;
+                                }
+                                Err(err) => {
+                                    view.personality_error = Some(format!("Falha ao restaurar: {err}").into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
     }
 }
 
@@ -2125,8 +2469,7 @@ impl Render for UsamiApp {
                                                             }
                                                         })
                                                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                            this.settings_tab = tab;
-                                                            cx.notify();
+                                                            this.set_settings_tab(tab, cx);
                                                         }))
                                                         .child(label)
                                                 }),
@@ -2141,278 +2484,846 @@ impl Render for UsamiApp {
                                             .flex_col()
                                             .overflow_y_scroll()
                                             .child(match settings_tab {
-                                                SettingsTab::Chat => div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .child(
-                                                        div()
-                                                            .p(px(sp.s4))
-                                                            .rounded(px(r.md))
-                                                            .bg(c.card_bg)
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(ty.xs))
-                                                                    .font_family(theme::FONT_DISPLAY)
-                                                                    .font_weight(FontWeight::BOLD)
-                                                                    .text_color(c.primary)
-                                                                    .child("STATUS DO MOTOR"),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .mt(px(sp.s2))
-                                                                    .text_size(px(ty.sm))
-                                                                    .text_color(c.pearl)
-                                                                    .child("• Renderizador: WGPU 60 FPS (Nativo)"),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .mt(px(sp.s1))
-                                                                    .text_size(px(ty.sm))
-                                                                    .text_color(c.pearl)
-                                                                    .child("• Modelo: 白ー (shiro) VRM 1.0"),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .mt(px(sp.s1))
-                                                                    .text_size(px(ty.sm))
-                                                                    .text_color(c.pearl)
-                                                                    .child(SharedString::from(format!(
-                                                                        "• Backend: {}",
-                                                                        self.api_client.base_url()
-                                                                    ))),
-                                                            ),
-                                                    ),
-                                                SettingsTab::Voice => div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .child(settings_h3("VOZ OFICIAL"))
-                                                    .child(settings_p(
-                                                        "Gemini 3.8 Flash TTS com a voz desenhada para a Usami. A configuração fica no servidor local, não neste navegador.",
-                                                    ))
-                                                    .child(settings_p(
-                                                        "O tom muda por emoção e o texto pode pedir sons curtos como:",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s1_5))
-                                                            .mb(px(sp.s3))
-                                                            .child(settings_code("<laugh>"))
-                                                            .child(settings_code("<chuckle>"))
-                                                            .child(settings_code("<sigh>"))
-                                                            .child(settings_code("<short pause>")),
-                                                    )
-                                                    .child(settings_p(
-                                                        "A tag vira áudio e não aparece no balão.",
-                                                    ))
-                                                    .child(settings_hint(
-                                                        "Para trocar voz ou modelo, ajuste no .env e reinicie npm run api.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s1_5))
-                                                            .mt(px(sp.s2))
-                                                            .child(settings_code("GEMINI_TTS_VOICE"))
-                                                            .child(settings_code("GEMINI_TTS_MODEL"))
-                                                            .child(settings_code(".env"))
-                                                            .child(settings_code("npm run api")),
-                                                    )
-                                                    .child(settings_h3("PRIVACIDADE"))
-                                                    .child(settings_p(
-                                                        "A chave da API permanece no servidor. O painel não pede nem guarda chaves.",
-                                                    )),
+                                                SettingsTab::Chat => {
+                                                    let base_url = self.api_client.base_url();
+                                                    let has_token = self.api_client.has_token();
+                                                    let msg_count = self.chat_history.len();
+                                                    let last_source = self.last_source.clone();
+                                                    let last_timing = self.last_timing.clone();
+                                                    let server_affinity = self.server_affinity;
+                                                    let server_stage = self.server_stage.clone();
+                                                    let source_str = last_source.as_ref().map(|s| s.as_ref()).unwrap_or("Nenhuma interação recente");
+                                                    let stage_str = server_stage.as_ref().map(|s| s.as_ref()).unwrap_or("—");
+
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .child(settings_h3("CONEXÃO COM O BACKEND"))
+                                                        .child(
+                                                            div()
+                                                                .p(px(sp.s3))
+                                                                .rounded(px(r.md))
+                                                                .bg(c.card_bg)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .justify_between()
+                                                                        .items_center()
+                                                                        .child(
+                                                                            div()
+                                                                                .text_size(px(ty.xs))
+                                                                                .font_family(theme::FONT_DISPLAY)
+                                                                                .font_weight(FontWeight::BOLD)
+                                                                                .text_color(c.primary)
+                                                                                .child("MOTOR LOCAL"),
+                                                                        )
+                                                                        .child(
+                                                                            div()
+                                                                                .px(px(6.0))
+                                                                                .py(px(2.0))
+                                                                                .rounded(px(4.0))
+                                                                                .bg(if has_token { rgba(0x5cb85c22) } else { rgba(0xf0ad4e22) })
+                                                                                .border_1()
+                                                                                .border_color(if has_token { rgba(0x5cb85c66) } else { rgba(0xf0ad4e66) })
+                                                                                .text_size(px(ty.xs))
+                                                                                .text_color(if has_token { rgb(0x5cb85c) } else { rgb(0xf0ad4e) })
+                                                                                .child(if has_token { "TOKEN ATIVO" } else { "SEM TOKEN" }),
+                                                                        ),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s2))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .child(SharedString::from(format!("• URL: {}", base_url))),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s1))
+                                                                        .text_size(px(ty.xs))
+                                                                        .text_color(c.muted)
+                                                                        .child(if has_token {
+                                                                            "Autenticado via USAMI_API_TOKEN. Acesso a Memória e Jeito liberado."
+                                                                        } else {
+                                                                            "Defina USAMI_API_TOKEN no ambiente para liberar acesso a Memória e Jeito."
+                                                                        }),
+                                                                ),
+                                                        )
+                                                        .child(settings_h3("ÚLTIMO TURNO DE RESPOSTA"))
+                                                        .child(
+                                                            div()
+                                                                .p(px(sp.s3))
+                                                                .rounded(px(r.md))
+                                                                .bg(c.card_bg)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(ty.xs))
+                                                                        .font_family(theme::FONT_DISPLAY)
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(c.primary)
+                                                                        .child("TELEMETRIA DA IA"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s2))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .child(SharedString::from(format!(
+                                                                            "• Fonte: {}",
+                                                                            source_str
+                                                                        ))),
+                                                                )
+                                                                .when_some(last_timing, |parent, timing| {
+                                                                    parent
+                                                                        .when_some(timing.llm_ms, |p, ms| {
+                                                                            p.child(
+                                                                                div()
+                                                                                    .mt(px(sp.s1))
+                                                                                    .text_size(px(ty.sm))
+                                                                                    .text_color(c.pearl)
+                                                                                    .child(SharedString::from(format!("• LLM: {} ms", ms))),
+                                                                            )
+                                                                        })
+                                                                        .when_some(timing.surface_ms, |p, ms| {
+                                                                            p.child(
+                                                                                div()
+                                                                                    .mt(px(sp.s1))
+                                                                                    .text_size(px(ty.sm))
+                                                                                    .text_color(c.pearl)
+                                                                                    .child(SharedString::from(format!("• Superfície: {} ms", ms))),
+                                                                            )
+                                                                        })
+                                                                        .when_some(timing.total_ms, |p, ms| {
+                                                                            p.child(
+                                                                                div()
+                                                                                    .mt(px(sp.s1))
+                                                                                    .text_size(px(ty.sm))
+                                                                                    .text_color(c.pearl)
+                                                                                    .child(SharedString::from(format!("• Total: {} ms", ms))),
+                                                                            )
+                                                                        })
+                                                                })
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s1))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .child(SharedString::from(format!(
+                                                                            "• Vínculo no servidor: {} (estágio: {})",
+                                                                            server_affinity.map(|a| format!("{}/100", a)).unwrap_or_else(|| "—".into()),
+                                                                            stage_str
+                                                                        ))),
+                                                                ),
+                                                        )
+                                                        .child(settings_h3("HISTÓRICO LOCAL DA SESSÃO"))
+                                                        .child(settings_p(SharedString::from(format!(
+                                                            "Total de {} mensagem(ns) nesta janela.",
+                                                            msg_count
+                                                        ))))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .child(
+                                                                    div()
+                                                                        .id("clear-session-history-btn")
+                                                                        .cursor_pointer()
+                                                                        .px(px(14.0))
+                                                                        .py(px(8.0))
+                                                                        .rounded(px(r.sm))
+                                                                        .bg(c.surface_soft)
+                                                                        .border_1()
+                                                                        .border_color(c.line)
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .hover(|s| s.bg(c.line_strong))
+                                                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                            this.chat_history.clear();
+                                                                            this.show_bubble = false;
+                                                                            cx.notify();
+                                                                        }))
+                                                                        .child("Limpar histórico da sessão"),
+                                                                ),
+                                                        )
+                                                }
+                                                SettingsTab::Voice => {
+                                                    let has_token = self.api_client.has_token();
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .child(settings_h3("VOZ OFICIAL"))
+                                                        .child(settings_p(
+                                                            "Gemini 3.8 Flash TTS com a voz desenhada para a Usami. A síntese é executada no servidor local.",
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .p(px(sp.s3))
+                                                                .rounded(px(r.md))
+                                                                .bg(c.card_bg)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(ty.xs))
+                                                                        .font_family(theme::FONT_DISPLAY)
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(c.primary)
+                                                                        .child("TRANSCRIÇÃO DE VOZ (STT)"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s2))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .child(if has_token {
+                                                                            "• STT ativo: envio de áudio autenticado via x-usami-token."
+                                                                        } else {
+                                                                            "• STT requer token: defina USAMI_API_TOKEN para habilitar transcrição."
+                                                                        }),
+                                                                ),
+                                                        )
+                                                        .child(settings_h3("EXPRESSÕES SONORAS"))
+                                                        .child(settings_p(
+                                                            "O tom muda por emoção e o texto pode acionar sons curtos:",
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .flex_wrap()
+                                                                .gap(px(sp.s1_5))
+                                                                .mb(px(sp.s3))
+                                                                .child(settings_code("<laugh>"))
+                                                                .child(settings_code("<chuckle>"))
+                                                                .child(settings_code("<sigh>"))
+                                                                .child(settings_code("<short pause>")),
+                                                        )
+                                                        .child(settings_p(
+                                                            "A tag vira áudio no sintetizador e é ocultada no balão de fala.",
+                                                        ))
+                                                        .child(settings_hint(
+                                                            "Para trocar voz ou modelo, ajuste no usami/.env (GEMINI_TTS_VOICE, GEMINI_TTS_MODEL).",
+                                                        ))
+                                                        .child(settings_h3("PRIVACIDADE"))
+                                                        .child(settings_p(
+                                                            "A chave da API Gemini permanece exclusivamente no servidor local.",
+                                                        ))
+                                                }
                                                 SettingsTab::Avatar => div()
                                                     .flex()
                                                     .flex_col()
-                                                    .child(settings_hint(
-                                                        "Os controles de modelo e cenário continuam no app web; aqui eles aparecem apenas como referência visual.",
-                                                    ))
-                                                    .child(settings_h3("CENÁRIO DE FUNDO"))
-                                                    .child(settings_p(
-                                                        "Personalize o fundo do palco e o nível de desfoque.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .mt(px(14.0))
-                                                            .text_size(px(ty.sm))
-                                                            .text_color(c.pearl)
-                                                            .child("Desfoque: 0px"),
-                                                    )
-                                                    .child(settings_disabled_slider())
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s2))
-                                                            .mt(px(sp.s3))
-                                                            .child(settings_disabled_button("Trocar imagem de fundo")),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s2))
-                                                            .mb(px(sp.s3))
-                                                            .child(settings_disabled_button("Entrar em tela cheia")),
-                                                    )
-                                                    .child(settings_h3("MODELO"))
-                                                    .child(settings_p(
-                                                        "Teste os controles reais do modelo. O arquivo permanece neste navegador.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .my(px(18.0))
-                                                            .w_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .py(px(14.0))
-                                                            .rounded(px(r.md))
-                                                            .bg(t.send_bg())
-                                                            .border_1()
-                                                            .border_color(rgba(0xffa6c959))
-                                                            .text_size(px(ty.sm))
-                                                            .text_color(c.pearl)
-                                                            .opacity(0.4)
-                                                            .child("Escolher GLB, VRM ou FBX"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .mt(px(14.0))
-                                                            .text_size(px(ty.sm))
-                                                            .text_color(c.pearl)
-                                                            .child("Modelo local (public/)"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .mt(px(sp.s2))
-                                                            .mb(px(14.0))
-                                                            .child(settings_disabled_input("/models/exemplo.vrm")),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s2))
-                                                            .mb(px(sp.s3))
-                                                            .child(settings_disabled_button("Carregar caminho")),
-                                                    )
-                                                    .child(settings_p(
-                                                        "Arquivos grandes não cabem no upload; caminhos servidos por /public. Ex.: /models/shiro.vrm",
-                                                    ))
-                                                    .child(settings_h3("INSPEÇÃO DO MODELO"))
-                                                    .child(settings_dl_row("Formato", "VRM 1.0"))
+                                                    .child(settings_h3("RENDERIZADOR 3D NATIVO"))
+                                                    .child(settings_dl_row("Formato", "VRM 1.0 (GLTF Estendido)"))
                                                     .child(settings_dl_row("Modelo", "白ー (shiro)"))
                                                     .child(settings_dl_row("Renderizador", "WGPU 60 FPS (Nativo)"))
+                                                    .child(settings_dl_row("Janela", "Transparência nativa + Drag"))
                                                     .child(settings_hint(
-                                                        "Movimentos, meshes, animações, ossos e expressões seguem disponíveis apenas no app web.",
+                                                        "A renderização gráfica opera via WGPU com aceleração de hardware nativa.",
+                                                    ))
+                                                    .child(settings_h3("CENÁRIO E ANIMAÇÕES"))
+                                                    .child(settings_p(
+                                                        "O app desktop foca na presença direta da Usami na área de trabalho. Cenários completos e controle de ossos pertencem à versão web.",
                                                     )),
-                                                SettingsTab::Memory => div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .child(settings_h3("O QUE ELA GUARDOU"))
-                                                    .child(settings_hint(
-                                                        "0 fato(s) durável(is) · 0 recente(s) · 0 resumo(s) · afinidade 0/100. Tudo fica no memory.json do servidor local.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .mt(px(sp.s4))
-                                                            .mb(px(sp.s1_5))
-                                                            .text_size(px(ty.sm))
-                                                            .text_color(c.pearl)
-                                                            .child("Digite APAGAR para liberar as exclusões"),
-                                                    )
-                                                    .child(settings_disabled_input("APAGAR"))
-                                                    .child(settings_hint(
-                                                        "Sem a palavra, nenhum botão apaga. As exclusões são imediatas e não têm desfazer.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .mt(px(sp.s2))
-                                                            .text_size(px(ty.sm))
-                                                            .text_color(c.muted)
-                                                            .child("Nenhum fato duradouro ainda."),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .mt(px(18.0))
+                                                SettingsTab::Memory => {
+                                                    let has_token = self.api_client.has_token();
+                                                    let loading = self.memory_loading;
+                                                    let error = self.memory_error.clone();
+                                                    let status = self.memory_status.clone();
+                                                    let confirm_active = self.memory_confirm_active;
+                                                    let memory_opt = self.memory_data.clone();
+                                                    let server_stage = self.server_stage.clone();
+                                                    let stage_str = server_stage.as_ref().map(|s| s.as_ref()).unwrap_or("Pendente");
+
+                                                    let mut view = div().flex().flex_col();
+
+                                                    view = view.child(settings_h3("MEMÓRIA DA USAMI"));
+
+                                                    if !has_token {
+                                                        view = view.child(
+                                                            div()
+                                                                .p(px(sp.s3_5))
+                                                                .rounded(px(r.md))
+                                                                .bg(rgba(0xf0ad4e15))
+                                                                .border_1()
+                                                                .border_color(rgba(0xf0ad4e55))
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(ty.sm))
+                                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                                        .text_color(rgb(0xf0ad4e))
+                                                                        .child("AUTENTICAÇÃO NECESSÁRIA"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s1_5))
+                                                                        .text_size(px(ty.xs))
+                                                                        .text_color(c.pearl)
+                                                                        .child("A leitura e exclusão de memórias exige o token do servidor. Configure a variável de ambiente USAMI_API_TOKEN e abra o app novamente."),
+                                                                ),
+                                                        );
+                                                    } else {
+                                                        // Barra de ações de topo
+                                                        let mut top_bar = div()
                                                             .flex()
-                                                            .child(settings_danger_button("Apagar tudo")),
-                                                    )
-                                                    .child(settings_hint(
-                                                        "O histórico do navegador (aba Conversa) é separado disso.",
-                                                    ))
-                                                    .child(settings_hint(
-                                                        "Este painel do app desktop ainda não lê nem apaga a memória; os fatos ficam no app web.",
-                                                    )),
-                                                SettingsTab::Personality => div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .child(settings_h3("JEITO DA USAMI"))
-                                                    .child(settings_hint(
-                                                        "50 é a personalidade original. Os ajustes refinam o tom; as regras de ouro e a honestidade dela continuam as mesmas.",
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .mt(px(sp.s3_5))
-                                                            .flex()
-                                                            .flex_col()
-                                                            .gap(px(14.0))
-                                                            .child(settings_trait_row("Carinho"))
-                                                            .child(settings_trait_row("Curiosidade"))
-                                                            .child(settings_trait_row("Brincadeira"))
-                                                            .child(settings_trait_row("Orgulho (tsundere)"))
-                                                            .child(
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .mb(px(sp.s3));
+
+                                                        top_bar = top_bar.child(
+                                                            div()
+                                                                .id("reload-memory-btn")
+                                                                .cursor_pointer()
+                                                                .px(px(12.0))
+                                                                .py(px(6.0))
+                                                                .rounded(px(r.sm))
+                                                                .bg(c.surface_soft)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .text_size(px(ty.xs))
+                                                                .text_color(c.pearl)
+                                                                .hover(|s| s.bg(c.line_strong))
+                                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                    this.fetch_memory(cx);
+                                                                }))
+                                                                .child("Recarregar memória"),
+                                                        );
+
+                                                        view = view.child(top_bar);
+
+                                                        if loading {
+                                                            view = view.child(settings_hint("Carregando memórias do servidor..."));
+                                                        }
+
+                                                        if let Some(err) = error {
+                                                            view = view.child(
                                                                 div()
+                                                                    .p(px(sp.s2))
+                                                                    .rounded(px(r.sm))
+                                                                    .bg(c.danger_muted_bg)
+                                                                    .border_1()
+                                                                    .border_color(c.danger_muted_border)
+                                                                    .text_size(px(ty.xs))
+                                                                    .text_color(c.danger_muted)
+                                                                    .child(SharedString::from(format!("Erro: {}", err))),
+                                                            );
+                                                        }
+
+                                                        if let Some(st) = status {
+                                                            view = view.child(
+                                                                div()
+                                                                    .p(px(sp.s2))
+                                                                    .rounded(px(r.sm))
+                                                                    .bg(rgba(0x5cb85c22))
+                                                                    .border_1()
+                                                                    .border_color(rgba(0x5cb85c66))
+                                                                    .text_size(px(ty.xs))
+                                                                    .text_color(rgb(0x5cb85c))
+                                                                    .child(SharedString::from(st)),
+                                                            );
+                                                        }
+
+                                                        if let Some(mem) = memory_opt {
+                                                            view = view.child(
+                                                                div()
+                                                                    .p(px(sp.s3))
+                                                                    .rounded(px(r.md))
+                                                                    .bg(c.card_bg)
+                                                                    .border_1()
+                                                                    .border_color(c.line)
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(ty.xs))
+                                                                            .font_weight(FontWeight::BOLD)
+                                                                            .text_color(c.primary)
+                                                                            .child("RESUMO"),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .mt(px(sp.s1))
+                                                                            .text_size(px(ty.xs))
+                                                                            .text_color(c.pearl)
+                                                                            .child(SharedString::from(format!(
+                                                                                "• {} fato(s) durável(is) · {} recente(s) · {} resumo(s)",
+                                                                                mem.durable_count(),
+                                                                                mem.recent_facts.len(),
+                                                                                mem.summaries.len()
+                                                                            ))),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .mt(px(sp.s1))
+                                                                            .text_size(px(ty.xs))
+                                                                            .text_color(c.muted)
+                                                                            .child(SharedString::from(format!(
+                                                                                "• Afinidade: {}/100 (estágio: {})",
+                                                                                mem.affinity.as_ref().map(|a| a.score).unwrap_or(0),
+                                                                                stage_str
+                                                                            ))),
+                                                                    ),
+                                                            );
+
+                                                            // Banner de liberação de exclusão
+                                                            view = view.child(
+                                                                div()
+                                                                    .mt(px(sp.s3))
+                                                                    .p(px(sp.s2_5))
+                                                                    .rounded(px(r.md))
+                                                                    .bg(if confirm_active { rgba(0xd9534f22) } else { c.surface_soft })
+                                                                    .border_1()
+                                                                    .border_color(if confirm_active { rgba(0xd9534f66) } else { c.line })
+                                                                    .child(
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .justify_between()
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_size(px(ty.xs))
+                                                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                                                    .text_color(if confirm_active { rgb(0xd9534f) } else { c.pearl })
+                                                                                    .child(if confirm_active {
+                                                                                        "MODO EXCLUSÃO ATIVO: exclusões liberadas."
+                                                                                    } else {
+                                                                                        "Exclusões bloqueadas por segurança."
+                                                                                    }),
+                                                                            )
+                                                                            .child(
+                                                                                div()
+                                                                                    .id("toggle-memory-confirm-btn")
+                                                                                    .cursor_pointer()
+                                                                                    .px(px(10.0))
+                                                                                    .py(px(4.0))
+                                                                                    .rounded(px(r.sm))
+                                                                                    .bg(if confirm_active { rgba(0xd9534f44) } else { c.card_bg })
+                                                                                    .border_1()
+                                                                                    .border_color(if confirm_active { rgb(0xd9534f) } else { c.line_strong })
+                                                                                    .text_size(px(ty.xs))
+                                                                                    .text_color(c.pearl)
+                                                                                    .hover(|s| s.bg(c.line_strong))
+                                                                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                                        this.memory_confirm_active = !this.memory_confirm_active;
+                                                                                        cx.notify();
+                                                                                    }))
+                                                                                    .child(if confirm_active { "Bloquear" } else { "Liberar exclusões" }),
+                                                                            ),
+                                                                    ),
+                                                            );
+
+                                                            // Renderização das seções de fatos
+                                                            let sec_list: [(&'static str, &'static str, &Vec<String>); 6] = [
+                                                                ("user", "IDENTIDADE DO USUÁRIO", &mem.sections.user),
+                                                                ("preferences", "PREFERÊNCIAS", &mem.sections.preferences),
+                                                                ("hobbies", "HOBBIES E INTERESSES", &mem.sections.hobbies),
+                                                                ("relationship", "VÍNCULO E RELAÇÃO", &mem.sections.relationship),
+                                                                ("dates", "DATAS E ROTINAS", &mem.sections.dates),
+                                                                ("other", "OUTROS FATOS", &mem.sections.other),
+                                                            ];
+
+                                                            let mut has_any_fact = false;
+                                                            let mut fact_idx: usize = 0;
+
+                                                            for (sec_key, sec_title, facts) in sec_list {
+                                                                if facts.is_empty() {
+                                                                    continue;
+                                                                }
+                                                                has_any_fact = true;
+
+                                                                view = view.child(settings_h3(sec_title));
+
+                                                                for fact in facts {
+                                                                    fact_idx += 1;
+                                                                    let fact_text = fact.clone();
+                                                                    let sec_name = sec_key.to_string();
+
+                                                                    let mut row = div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_between()
+                                                                        .py(px(6.0))
+                                                                        .border_b_1()
+                                                                        .border_color(c.line)
+                                                                        .child(
+                                                                            div()
+                                                                                .flex_1()
+                                                                                .text_size(px(ty.sm))
+                                                                                .text_color(c.pearl)
+                                                                                .child(SharedString::from(format!("• {}", fact_text))),
+                                                                        );
+
+                                                                    if confirm_active {
+                                                                        let del_fact = fact_text.clone();
+                                                                        let del_sec = sec_name.clone();
+                                                                        row = row.child(
+                                                                            div()
+                                                                                .id(ElementId::NamedInteger("del-fact".into(), fact_idx as u64))
+                                                                                .cursor_pointer()
+                                                                                .px(px(8.0))
+                                                                                .py(px(2.0))
+                                                                                .rounded(px(4.0))
+                                                                                .bg(c.danger_muted_bg)
+                                                                                .border_1()
+                                                                                .border_color(c.danger_muted_border)
+                                                                                .text_size(px(ty.xs))
+                                                                                .text_color(c.danger_muted)
+                                                                                .hover(|s| s.bg(rgba(0xd9534f33)))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                    this.delete_memory_fact(del_sec.clone(), del_fact.clone(), cx);
+                                                                                }))
+                                                                                .child("Excluir"),
+                                                                        );
+                                                                    }
+
+                                                                    view = view.child(row);
+                                                                }
+                                                            }
+
+                                                            if !has_any_fact {
+                                                                view = view.child(
+                                                                    div()
+                                                                        .mt(px(sp.s3))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.muted)
+                                                                        .child("Nenhum fato duradouro registrado ainda."),
+                                                                );
+                                                            }
+
+                                                            // Ação perigosa geral
+                                                            view = view.child(settings_h3("ZONA DE RISCO"));
+                                                            view = view.child(settings_p(
+                                                                "A exclusão total remove todos os fatos duráveis e o histórico salvo no memory.json do servidor local.",
+                                                            ));
+
+                                                            if confirm_active {
+                                                                view = view.child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .child(
+                                                                            div()
+                                                                                .id("delete-all-memory-btn")
+                                                                                .cursor_pointer()
+                                                                                .px(px(16.0))
+                                                                                .py(px(8.0))
+                                                                                .rounded(px(r.sm))
+                                                                                .bg(rgb(0xd9534f))
+                                                                                .text_size(px(ty.sm))
+                                                                                .font_weight(FontWeight::BOLD)
+                                                                                .text_color(rgb(0xffffff))
+                                                                                .hover(|s| s.bg(rgb(0xc9302c)))
+                                                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                                    this.delete_memory_all(cx);
+                                                                                }))
+                                                                                .child("Apagar toda a memória"),
+                                                                        ),
+                                                                );
+                                                            } else {
+                                                                view = view.child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .child(settings_danger_button("Apagar toda a memória (requer liberação)")),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+
+                                                    view
+                                                }
+                                                SettingsTab::Personality => {
+                                                    let has_token = self.api_client.has_token();
+                                                    let loading = self.personality_loading;
+                                                    let error = self.personality_error.clone();
+                                                    let status = self.personality_status.clone();
+                                                    let p_opt = self.personality_data.clone();
+
+                                                    let mut view = div().flex().flex_col();
+
+                                                    view = view.child(settings_h3("JEITO DA USAMI"));
+
+                                                    if !has_token {
+                                                        view = view.child(
+                                                            div()
+                                                                .p(px(sp.s3_5))
+                                                                .rounded(px(r.md))
+                                                                .bg(rgba(0xf0ad4e15))
+                                                                .border_1()
+                                                                .border_color(rgba(0xf0ad4e55))
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(ty.sm))
+                                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                                        .text_color(rgb(0xf0ad4e))
+                                                                        .child("AUTENTICAÇÃO NECESSÁRIA"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s1_5))
+                                                                        .text_size(px(ty.xs))
+                                                                        .text_color(c.pearl)
+                                                                        .child("O ajuste de traços e instruções da personalidade exige USAMI_API_TOKEN configurado."),
+                                                                ),
+                                                        );
+                                                    } else {
+                                                        let mut top_bar = div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .mb(px(sp.s3));
+
+                                                        top_bar = top_bar.child(
+                                                            div()
+                                                                .id("reload-personality-btn")
+                                                                .cursor_pointer()
+                                                                .px(px(12.0))
+                                                                .py(px(6.0))
+                                                                .rounded(px(r.sm))
+                                                                .bg(c.surface_soft)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .text_size(px(ty.xs))
+                                                                .text_color(c.pearl)
+                                                                .hover(|s| s.bg(c.line_strong))
+                                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                    this.fetch_personality(cx);
+                                                                }))
+                                                                .child("Recarregar do servidor"),
+                                                        );
+
+                                                        view = view.child(top_bar);
+
+                                                        if loading {
+                                                            view = view.child(settings_hint("Carregando traços do servidor..."));
+                                                        }
+
+                                                        if let Some(err) = error {
+                                                            view = view.child(
+                                                                div()
+                                                                    .p(px(sp.s2))
+                                                                    .rounded(px(r.sm))
+                                                                    .bg(c.danger_muted_bg)
+                                                                    .border_1()
+                                                                    .border_color(c.danger_muted_border)
+                                                                    .text_size(px(ty.xs))
+                                                                    .text_color(c.danger_muted)
+                                                                    .child(SharedString::from(format!("Erro: {}", err))),
+                                                            );
+                                                        }
+
+                                                        if let Some(st) = status {
+                                                            view = view.child(
+                                                                div()
+                                                                    .p(px(sp.s2))
+                                                                    .rounded(px(r.sm))
+                                                                    .bg(rgba(0x5cb85c22))
+                                                                    .border_1()
+                                                                    .border_color(rgba(0x5cb85c66))
+                                                                    .text_size(px(ty.xs))
+                                                                    .text_color(rgb(0x5cb85c))
+                                                                    .child(SharedString::from(st)),
+                                                            );
+                                                        }
+
+                                                        if let Some(p) = p_opt {
+                                                            view = view.child(settings_hint(
+                                                                "50 é a personalidade padrão. Ajuste os traços de 5 em 5 pontos para calibrar o tom da Usami.",
+                                                            ));
+
+                                                            let traits_meta: [(&'static str, &'static str, u32); 4] = [
+                                                                ("warmth", "Carinho", p.traits.warmth),
+                                                                ("curiosity", "Curiosidade", p.traits.curiosity),
+                                                                ("playfulness", "Brincadeira", p.traits.playfulness),
+                                                                ("pride", "Orgulho (tsundere)", p.traits.pride),
+                                                            ];
+
+                                                            let mut traits_col = div().mt(px(sp.s3)).flex().flex_col().gap(px(12.0));
+
+                                                            for (idx, (key, label, val)) in traits_meta.into_iter().enumerate() {
+                                                                let trait_key_down = key;
+                                                                let trait_key_up = key;
+                                                                let bar_w = ((val as f32 / 100.0) * 320.0).clamp(0.0, 320.0);
+
+                                                                let trait_box = div()
                                                                     .flex()
                                                                     .flex_col()
-                                                                    .gap(px(6.0))
+                                                                    .gap(px(4.0))
                                                                     .child(
                                                                         div()
                                                                             .flex()
                                                                             .justify_between()
                                                                             .items_center()
-                                                                            .text_size(px(ty.md))
+                                                                            .text_size(px(ty.sm))
                                                                             .text_color(c.pearl)
-                                                                            .child("Instruções extras")
+                                                                            .child(label)
                                                                             .child(
                                                                                 div()
-                                                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                                                    .text_color(c.primary)
-                                                                                    .child("0/600"),
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .gap(px(sp.s2))
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .font_weight(FontWeight::BOLD)
+                                                                                            .text_color(c.primary)
+                                                                                            .child(SharedString::from(format!("{}", val))),
+                                                                                    )
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .id(ElementId::NamedInteger("trait-dec".into(), idx as u64))
+                                                                                            .cursor_pointer()
+                                                                                            .px(px(8.0))
+                                                                                            .py(px(2.0))
+                                                                                            .rounded(px(4.0))
+                                                                                            .bg(c.surface_soft)
+                                                                                            .border_1()
+                                                                                            .border_color(c.line)
+                                                                                            .text_size(px(ty.xs))
+                                                                                            .text_color(c.pearl)
+                                                                                            .hover(|s| s.bg(c.line_strong))
+                                                                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                                this.adjust_trait(trait_key_down, -5);
+                                                                                                cx.notify();
+                                                                                            }))
+                                                                                            .child("-5"),
+                                                                                    )
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .id(ElementId::NamedInteger("trait-inc".into(), idx as u64))
+                                                                                            .cursor_pointer()
+                                                                                            .px(px(8.0))
+                                                                                            .py(px(2.0))
+                                                                                            .rounded(px(4.0))
+                                                                                            .bg(c.surface_soft)
+                                                                                            .border_1()
+                                                                                            .border_color(c.line)
+                                                                                            .text_size(px(ty.xs))
+                                                                                            .text_color(c.pearl)
+                                                                                            .hover(|s| s.bg(c.line_strong))
+                                                                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                                this.adjust_trait(trait_key_up, 5);
+                                                                                                cx.notify();
+                                                                                            }))
+                                                                                            .child("+5"),
+                                                                                    ),
                                                                             ),
                                                                     )
-                                                                    .child(settings_disabled_textarea()),
-                                                            ),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .mt(px(sp.s4))
-                                                            .flex()
-                                                            .flex_wrap()
-                                                            .gap(px(sp.s2))
-                                                            .child(settings_disabled_button("Salvar"))
-                                                            .child(settings_disabled_button("Restaurar padrão")),
-                                                    )
-                                                    .child(settings_hint(
-                                                        "Os sliders e o texto ficam desligados aqui; a personalidade é editada no app web.",
-                                                    )),
+                                                                    .child(
+                                                                        div()
+                                                                            .h(px(6.0))
+                                                                            .w_full()
+                                                                            .rounded_full()
+                                                                            .bg(c.surface_soft)
+                                                                            .border_1()
+                                                                            .border_color(c.line)
+                                                                            .child(
+                                                                                div()
+                                                                                    .h_full()
+                                                                                    .w(px(bar_w))
+                                                                                    .rounded_full()
+                                                                                    .bg(c.primary),
+                                                                            ),
+                                                                    );
+
+                                                                traits_col = traits_col.child(trait_box);
+                                                            }
+
+                                                            view = view.child(traits_col);
+
+                                                            // Instruções extras
+                                                            view = view.child(
+                                                                div()
+                                                                    .mt(px(sp.s4))
+                                                                    .flex()
+                                                                    .justify_between()
+                                                                    .items_center()
+                                                                    .child(settings_h3("INSTRUÇÕES EXTRAS"))
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(ty.xs))
+                                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                                            .text_color(c.primary)
+                                                                            .child(SharedString::from(format!(
+                                                                                "{}/600",
+                                                                                p.custom_prompt.chars().count()
+                                                                            ))),
+                                                                    ),
+                                                            );
+
+                                                            let prompt_display: SharedString = if p.custom_prompt.trim().is_empty() {
+                                                                "Nenhuma instrução extra configurada.".into()
+                                                            } else {
+                                                                p.custom_prompt.clone().into()
+                                                            };
+
+                                                            view = view.child(
+                                                                div()
+                                                                    .p(px(sp.s2_5))
+                                                                    .rounded(px(r.md))
+                                                                    .bg(c.icon_bg)
+                                                                    .border_1()
+                                                                    .border_color(c.line)
+                                                                    .text_size(px(ty.sm))
+                                                                    .text_color(c.pearl)
+                                                                    .child(prompt_display),
+                                                            );
+
+                                                            // Botões Salvar e Restaurar
+                                                            view = view.child(
+                                                                div()
+                                                                    .mt(px(sp.s4))
+                                                                    .flex()
+                                                                    .gap(px(sp.s2))
+                                                                    .child(
+                                                                        div()
+                                                                            .id("save-personality-btn")
+                                                                            .cursor_pointer()
+                                                                            .px(px(16.0))
+                                                                            .py(px(8.0))
+                                                                            .rounded(px(r.sm))
+                                                                            .bg(c.primary)
+                                                                            .text_size(px(ty.sm))
+                                                                            .font_weight(FontWeight::BOLD)
+                                                                            .text_color(c.pearl)
+                                                                            .hover(|s| s.opacity(0.85))
+                                                                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                                this.save_personality(cx);
+                                                                            }))
+                                                                            .child("Salvar alterações"),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .id("reset-personality-btn")
+                                                                            .cursor_pointer()
+                                                                            .px(px(16.0))
+                                                                            .py(px(8.0))
+                                                                            .rounded(px(r.sm))
+                                                                            .bg(c.surface_soft)
+                                                                            .border_1()
+                                                                            .border_color(c.line)
+                                                                            .text_size(px(ty.sm))
+                                                                            .text_color(c.pearl)
+                                                                            .hover(|s| s.bg(c.line_strong))
+                                                                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                                this.reset_personality(cx);
+                                                                            }))
+                                                                            .child("Restaurar padrão"),
+                                                                    ),
+                                                            );
+                                                        }
+                                                    }
+
+                                                    view
+                                                }
                                                 SettingsTab::About => div()
                                                     .flex()
                                                     .flex_col()
                                                     .child(settings_h3("USAMI COMPANION"))
                                                     .child(settings_p(
-                                                        "Versão 0.2.0 — companion com avatar 3D/Live2D e voz própria.",
+                                                        "Versão 0.2.0 — desktop companion nativo com avatar 3D/VRM e voz própria.",
                                                     ))
-                                                    .child(settings_h3("TECNOLOGIAS"))
-                                                    .child(settings_list_item("React 19 + Vite"))
-                                                    .child(settings_list_item("Three.js + @pixiv/three-vrm (VRM/GLB)"))
-                                                    .child(settings_list_item("Live2D Cubism 3 (opcional)"))
-                                                    .child(settings_list_item("OpenRouter / NVIDIA (LLM) + Gemini (TTS)"))
-                                                    .child(settings_list_item("Web Speech API para a chamada de voz"))
+                                                    .child(settings_h3("ARQUITETURA NATIVA"))
+                                                    .child(settings_list_item("Desktop: Rust + GPUI 0.2.2 + WGPU 60 FPS"))
+                                                    .child(settings_list_item("Avatar: 白ー (shiro) VRM 1.0 com renderização direta nativa"))
+                                                    .child(settings_list_item("Backend: Node.js (127.0.0.1:8787) com OpenRouter / NVIDIA (LLM) + Gemini (TTS)"))
+                                                    .child(settings_list_item("Presença Win32: Bandeja do sistema, atalho global (Alt+Espaço) e autostart"))
                                                     .child(settings_h3("CRÉDITOS"))
                                                     .child(
                                                         div()
@@ -2427,13 +3338,7 @@ impl Render for UsamiApp {
                                                             .child("•")
                                                             .child("Modelo 3D:")
                                                             .child(div().font_weight(FontWeight::BOLD).child("白ー (shiro)"))
-                                                            .child("por")
-                                                            .child(
-                                                                div()
-                                                                    .text_color(c.primary)
-                                                                    .underline()
-                                                                    .child("Sweet_nya555"),
-                                                            ),
+                                                            .child("por Sweet_nya555"),
                                                     )
                                                     .child(
                                                         div()
@@ -2446,17 +3351,11 @@ impl Render for UsamiApp {
                                                             .line_height(px(21.0))
                                                             .text_color(c.pearl)
                                                             .child("•")
-                                                            .child("Ícones:")
-                                                            .child(
-                                                                div()
-                                                                    .text_color(c.primary)
-                                                                    .underline()
-                                                                    .child("Lucide"),
-                                                            ),
+                                                            .child("Ícones: Lucide"),
                                                     )
                                                     .child(settings_h3("PRIVACIDADE"))
                                                     .child(settings_p(
-                                                        "Texto e voz passam pela API local em 127.0.0.1:8787, que lê as chaves do .env. O histórico da conversa fica no localStorage deste navegador.",
+                                                        "Comunicação local em 127.0.0.1:8787. As credenciais e dados sensíveis residem unicamente no servidor local.",
                                                     ))
                                                     .child(
                                                         div()
@@ -2464,10 +3363,9 @@ impl Render for UsamiApp {
                                                             .flex_wrap()
                                                             .gap(px(sp.s1_5))
                                                             .child(settings_code("127.0.0.1:8787"))
-                                                            .child(settings_code(".env"))
-                                                            .child(settings_code("localStorage")),
+                                                            .child(settings_code("USAMI_API_TOKEN"))
+                                                            .child(settings_code("usami/.env")),
                                                     ),
-
                                             }),
                                     )
                             }
@@ -2645,6 +3543,8 @@ fn main() {
             |window, cx| {
                 let view = cx.new(UsamiApp::new);
                 window.focus(&view.read(cx).focus_handle);
+                #[cfg(target_os = "windows")]
+                view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view
             },
         )

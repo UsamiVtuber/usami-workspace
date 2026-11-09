@@ -23,6 +23,13 @@ pub fn api_base_url_from_env() -> String {
     normalize_base_url(std::env::var("USAMI_API_BASE").ok())
 }
 
+pub fn api_token_from_env() -> Option<String> {
+    std::env::var("USAMI_API_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 // Sem timeout, um backend desligado deixava o app em "PENSANDO" até o TCP
 // desistir. O teto de 90 s cobre o turno de chat mais lento + TTS.
 fn build_http_client() -> reqwest::Client {
@@ -67,6 +74,16 @@ pub struct Action {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatTiming {
+    #[serde(rename = "surfaceMs", default)]
+    pub surface_ms: Option<u64>,
+    #[serde(rename = "llmMs", default)]
+    pub llm_ms: Option<u64>,
+    #[serde(rename = "totalMs", default)]
+    pub total_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub reply: String,
     pub gesture: Option<String>,
@@ -75,6 +92,171 @@ pub struct ChatResponse {
     pub source: Option<String>,
     #[serde(rename = "speechTags", default)]
     pub speech_tags: Vec<String>,
+    #[serde(default)]
+    pub timing: Option<ChatTiming>,
+    #[serde(default)]
+    pub affinity: Option<i32>,
+    #[serde(default)]
+    pub stage: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryUser {
+    pub name: Option<String>,
+    pub nickname: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemorySections {
+    #[serde(default)]
+    pub user: Vec<String>,
+    #[serde(default)]
+    pub preferences: Vec<String>,
+    #[serde(default)]
+    pub hobbies: Vec<String>,
+    #[serde(default)]
+    pub relationship: Vec<String>,
+    #[serde(default)]
+    pub dates: Vec<String>,
+    #[serde(default)]
+    pub other: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentFact {
+    pub fact: String,
+    pub section: String,
+    pub date: Option<String>,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub expired: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySummary {
+    pub date: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryHistoryItem {
+    pub date: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryAffinity {
+    #[serde(default)]
+    pub score: i32,
+    #[serde(rename = "lastDailyGainDate")]
+    pub last_daily_gain_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryData {
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub user: Option<MemoryUser>,
+    #[serde(default)]
+    pub sections: MemorySections,
+    #[serde(rename = "recentFacts", default)]
+    pub recent_facts: Vec<RecentFact>,
+    #[serde(default)]
+    pub summaries: Vec<MemorySummary>,
+    #[serde(default)]
+    pub history: Vec<MemoryHistoryItem>,
+    #[serde(default)]
+    pub affinity: Option<MemoryAffinity>,
+}
+
+impl MemoryData {
+    pub fn durable_count(&self) -> usize {
+        self.sections.user.len()
+            + self.sections.preferences.len()
+            + self.sections.hobbies.len()
+            + self.sections.relationship.len()
+            + self.sections.dates.len()
+            + self.sections.other.len()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryResponse {
+    pub ok: bool,
+    pub memory: MemoryData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryForgetRequest {
+    pub kind: String,
+    pub confirm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryForgetResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub removed: Option<usize>,
+    #[serde(default)]
+    pub memory: Option<MemoryData>,
+}
+
+fn default_trait_val() -> u32 {
+    50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersonalityTraits {
+    #[serde(default = "default_trait_val")]
+    pub warmth: u32,
+    #[serde(default = "default_trait_val")]
+    pub curiosity: u32,
+    #[serde(default = "default_trait_val")]
+    pub playfulness: u32,
+    #[serde(default = "default_trait_val")]
+    pub pride: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersonalityData {
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub traits: PersonalityTraits,
+    #[serde(rename = "customPrompt", default)]
+    pub custom_prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraitMeta {
+    pub key: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalityResponse {
+    pub ok: bool,
+    pub personality: PersonalityData,
+    #[serde(default)]
+    pub traits: Vec<TraitMeta>,
+    #[serde(rename = "customPromptMax", default)]
+    pub custom_prompt_max: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalityUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traits: Option<PersonalityTraits>,
+    #[serde(rename = "customPrompt", skip_serializing_if = "Option::is_none")]
+    pub custom_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,23 +274,37 @@ pub struct TtsRequest {
 
 pub struct UsamiApiClient {
     base_url: String,
+    token: Option<String>,
     client: reqwest::Client,
 }
 
 impl UsamiApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_token(base_url, None)
+    }
+
+    pub fn with_token(base_url: impl Into<String>, token: Option<String>) -> Self {
         Self {
             base_url: normalize_base_url(Some(base_url.into())),
+            token,
             client: build_http_client(),
         }
     }
 
     pub fn from_env() -> Self {
-        Self::new(api_base_url_from_env())
+        Self::with_token(api_base_url_from_env(), api_token_from_env())
     }
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
     }
 
     pub async fn send_chat(
@@ -199,6 +395,7 @@ impl UsamiApiClient {
     pub async fn transcribe(&self, wav: Vec<u8>) -> Result<String, String> {
         let client = self.client.clone();
         let url = format!("{}/api/stt", self.base_url);
+        let token = self.token.clone();
 
         let handle = tokio_runtime().spawn(async move {
             let part = reqwest::multipart::Part::bytes(wav)
@@ -206,9 +403,11 @@ impl UsamiApiClient {
                 .mime_str("audio/wav")
                 .map_err(|e| e.to_string())?;
             let form = reqwest::multipart::Form::new().part("audio", part);
-            let response = client
-                .post(url)
-                .multipart(form)
+            let mut req = client.post(url).multipart(form);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let response = req
                 .send()
                 .await
                 .map_err(|e| e.to_string())?
@@ -219,6 +418,130 @@ impl UsamiApiClient {
                 .map_err(|e| e.to_string())?;
 
             Ok::<String, String>(response.text)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_memory(&self) -> Result<MemoryResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/memory", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<MemoryResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<MemoryResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn forget_memory(
+        &self,
+        payload: &MemoryForgetRequest,
+    ) -> Result<MemoryForgetResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/memory/forget", self.base_url);
+        let token = self.token.clone();
+        let payload = payload.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<MemoryForgetResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<MemoryForgetResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_personality(&self) -> Result<PersonalityResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/personality", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<PersonalityResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<PersonalityResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn update_personality(
+        &self,
+        payload: &PersonalityUpdateRequest,
+    ) -> Result<PersonalityResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/personality", self.base_url);
+        let token = self.token.clone();
+        let payload = payload.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<PersonalityResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<PersonalityResponse, String>(res)
         });
 
         match handle.await {
@@ -503,5 +826,91 @@ mod tests {
         );
         let client = UsamiApiClient::new(base_url);
         assert!(client.send_chat("oi", false).await.is_err());
+    }
+
+    #[test]
+    fn memory_response_parses_and_counts_durable_facts() {
+        let json = r#"{
+            "ok": true,
+            "memory": {
+                "version": 1,
+                "sections": {
+                    "user": ["Capitão"],
+                    "preferences": ["Gosta de chá verde", "Prefere temas escuros"],
+                    "hobbies": ["Desenvolvimento de software"],
+                    "relationship": ["Amigos próximos"],
+                    "dates": ["Aniversário em maio"],
+                    "other": []
+                },
+                "recentFacts": [
+                    {"fact": "Trabalhou até tarde ontem", "section": "daily", "expiresAt": null, "expired": false}
+                ],
+                "summaries": [
+                    {"date": "2026-11-08", "summary": "Conversamos sobre Rust e GPUI."}
+                ],
+                "affinity": {
+                    "score": 65,
+                    "lastDailyGainDate": "2026-11-08"
+                }
+            }
+        }"#;
+
+        let res: MemoryResponse = serde_json::from_str(json).expect("deserializa memory json");
+        assert!(res.ok);
+        let data = res.memory;
+        assert_eq!(data.durable_count(), 6);
+        assert_eq!(data.recent_facts.len(), 1);
+        assert_eq!(data.summaries.len(), 1);
+        assert_eq!(data.affinity.map(|a| a.score), Some(65));
+    }
+
+    #[test]
+    fn personality_response_parses_traits_and_prompt() {
+        let json = r#"{
+            "ok": true,
+            "personality": {
+                "traits": {
+                    "warmth": 75,
+                    "curiosity": 60,
+                    "playfulness": 45,
+                    "pride": 80
+                },
+                "customPrompt": "Lembre de me chamar de capitão."
+            },
+            "traits": [
+                {"key": "warmth", "label": "Carinho"}
+            ]
+        }"#;
+
+        let res: PersonalityResponse = serde_json::from_str(json).expect("deserializa personality json");
+        assert!(res.ok);
+        let p = res.personality;
+        assert_eq!(p.traits.warmth, 75);
+        assert_eq!(p.traits.curiosity, 60);
+        assert_eq!(p.traits.playfulness, 45);
+        assert_eq!(p.traits.pride, 80);
+        assert_eq!(p.custom_prompt, "Lembre de me chamar de capitão.");
+    }
+
+    #[tokio::test]
+    async fn api_client_attaches_token_header_when_present() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"personality":{"traits":{"warmth":50,"curiosity":50,"playfulness":50,"pride":50},"customPrompt":""}}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("meu-token-secreto".into()));
+        assert!(client.has_token());
+        assert_eq!(client.token(), Some("meu-token-secreto"));
+
+        let res = client.get_personality().await.expect("busca personalidade");
+        assert!(res.ok);
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/personality");
     }
 }

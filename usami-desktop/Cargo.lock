@@ -6632,11 +6632,13 @@ dependencies = [
  "cpal",
  "gpui",
  "gpui-vrm",
+ "raw-window-handle",
  "reqwest",
  "rodio",
  "serde",
  "serde_json",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

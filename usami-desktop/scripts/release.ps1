@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Builda o Usami Desktop e publica o zip no repo público de releases.
@@ -26,10 +26,18 @@ $zip = "$stage.zip"
 
 if (-not $DryRun) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "gh não encontrado no PATH" }
+    # O `gh` escreve "release not found" em stderr; com ErrorActionPreference=Stop
+    # o PowerShell 5.1 trata isso como erro terminal. Roda a checagem em modo
+    # tolerante e decide pelo código de saída.
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     gh auth status *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Faça login com 'gh auth login' antes de publicar" }
+    $authOk = $LASTEXITCODE -eq 0
     gh release view "v$version" --repo $repo *> $null
-    if ($LASTEXITCODE -eq 0) { throw "A release v$version já existe em $repo" }
+    $releaseExists = $LASTEXITCODE -eq 0
+    $ErrorActionPreference = $previousErrorAction
+    if (-not $authOk) { throw "Faça login com 'gh auth login' antes de publicar" }
+    if ($releaseExists) { throw "A release v$version já existe em $repo" }
 }
 
 Push-Location $crate
@@ -53,8 +61,18 @@ if ($DryRun) {
     return
 }
 
+# O PowerShell 5.1 lê .ps1 sem BOM como ANSI (por isso este arquivo é salvo em
+# UTF-8 com BOM) e entrega texto não-ASCII a comandos nativos conforme o code
+# page do console. Escrever as notas em UTF-8 e passar o arquivo não depende de
+# nenhum dos dois.
+$notesPath = Join-Path ([System.IO.Path]::GetTempPath()) "usami-desktop-v$version-notes.md"
+$notes = 'Pacote Windows x64. Requer o backend em 127.0.0.1:8787 e um modelo .vrm próprio; instruções no README do zip.'
+[System.IO.File]::WriteAllText($notesPath, $notes, (New-Object System.Text.UTF8Encoding($false)))
+
 gh release create "v$version" $zip `
     --repo $repo `
     --title "Usami Desktop $version" `
     --target main `
-    --notes "Pacote Windows x64. Requer o backend em 127.0.0.1:8787 e um modelo .vrm próprio; instruções no README do zip."
+    --notes-file $notesPath
+
+Remove-Item $notesPath -Force -ErrorAction SilentlyContinue

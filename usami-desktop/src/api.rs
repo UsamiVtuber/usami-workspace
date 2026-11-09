@@ -370,6 +370,62 @@ pub struct TtsRequest {
     pub stream: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MediaAnalyzeRequest {
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaAnalyzeResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub reply: String,
+    #[serde(default)]
+    pub gesture: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
+    #[serde(default)]
+    pub ocr: Vec<String>,
+    #[serde(default)]
+    pub transcript: Option<String>,
+    #[serde(rename = "crossReference", default)]
+    pub cross_reference: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 pub struct UsamiApiClient {
     base_url: String,
     token: Option<String>,
@@ -716,6 +772,58 @@ impl UsamiApiClient {
                 .map_err(|e| e.to_string())?;
 
             Ok::<ProactiveAckResponse, String>(data)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn analyze_media(
+        &self,
+        mime_type: &str,
+        data_base64: &str,
+        filename: Option<&str>,
+        prompt: Option<&str>,
+        capabilities: Option<serde_json::Value>,
+    ) -> Result<MediaAnalyzeResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/media/analyze", self.base_url);
+        let token = self.token.clone();
+        let payload = MediaAnalyzeRequest {
+            mime_type: mime_type.to_string(),
+            data: data_base64.to_string(),
+            filename: filename.map(ToString::to_string),
+            prompt: prompt.map(ToString::to_string),
+            capabilities,
+        };
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload)
+                .header("x-usami-client", "usami-desktop");
+
+            if let Some(t) = token {
+                req = req.header("x-usami-token", t);
+            }
+
+            let res = req
+                .send()
+                .await
+                .map_err(|e| format!("Falha de conexão com a API de análise de mídia: {e}"))?;
+
+            let status = res.status();
+            if !status.is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+                return Err(format!("Erro HTTP {status} na análise de mídia: {err_text}"));
+            }
+
+            let data = res
+                .json::<MediaAnalyzeResponse>()
+                .await
+                .map_err(|e| format!("Resposta inválida da API de mídia: {e}"))?;
+
+            Ok::<MediaAnalyzeResponse, String>(data)
         });
 
         match handle.await {
@@ -1144,5 +1252,45 @@ mod tests {
 
         let _ = std::fs::remove_file(file_path);
         let _ = std::fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn test_base64_encode_matches_standard() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[tokio::test]
+    async fn media_analyze_posts_payload_and_parses_response() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"reply":"Que imagem bonita!","gesture":"nod","actions":[{"type":"gesture","name":"nod"}]}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("token-media".into()));
+        let res = client
+            .analyze_media("image/png", "Zm9v", Some("foto.png"), Some("olha isso"), None)
+            .await
+            .expect("analisa midia");
+
+        assert!(res.ok);
+        assert_eq!(res.reply, "Que imagem bonita!");
+        assert_eq!(res.gesture.as_deref(), Some("nod"));
+        assert_eq!(res.actions.len(), 1);
+
+        let req = requests.recv_timeout(Duration::from_secs(5)).expect("recebe post");
+        assert_eq!(req.method, "POST");
+        assert_eq!(req.path, "/api/media/analyze");
+        let body: serde_json::Value = serde_json::from_str(&req.body).expect("corpo json");
+        assert_eq!(body["mimeType"], "image/png");
+        assert_eq!(body["data"], "Zm9v");
+        assert_eq!(body["filename"], "foto.png");
+        assert_eq!(body["prompt"], "olha isso");
     }
 }

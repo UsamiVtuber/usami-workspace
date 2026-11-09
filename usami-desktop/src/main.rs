@@ -359,6 +359,14 @@ fn save_proactive_seen_to_disk(seen: &std::collections::HashSet<String>) {
     }
 }
 
+#[derive(Clone, Debug)]
+struct AttachedMedia {
+    filename: String,
+    mime_type: String,
+    data_base64: String,
+    size_bytes: usize,
+}
+
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
@@ -408,6 +416,7 @@ struct UsamiApp {
     proactive_seen: std::collections::HashSet<String>,
     proactive_queue: Vec<api::ProactiveEvent>,
     last_proactive_speech: Instant,
+    attached_media: Option<AttachedMedia>,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
 }
@@ -600,6 +609,7 @@ impl UsamiApp {
             proactive_seen: load_proactive_seen_from_disk(),
             proactive_queue: Vec::new(),
             last_proactive_speech: Instant::now() - Duration::from_secs(300),
+            attached_media: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
         }
@@ -764,10 +774,68 @@ impl UsamiApp {
         }
     }
 
+    fn attach_file_prompt(&mut self, cx: &mut Context<Self>) {
+        self.poke(cx);
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Selecione uma imagem para a Usami".into()),
+        });
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(Ok(Some(paths))) = receiver.await {
+                    if let Some(path) = paths.into_iter().next() {
+                        if let Ok(bytes) = std::fs::read(&path) {
+                            let b64 = api::base64_encode(&bytes);
+                            let filename = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("imagem.png")
+                                .to_string();
+                            let mime = match path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .map(|s| s.to_ascii_lowercase())
+                                .as_deref()
+                            {
+                                Some("jpg") | Some("jpeg") => "image/jpeg",
+                                Some("png") => "image/png",
+                                Some("webp") => "image/webp",
+                                Some("gif") => "image/gif",
+                                Some("bmp") => "image/bmp",
+                                _ => "image/png",
+                            };
+                            let _ = cx.update(|cx: &mut App| {
+                                if let Some(this) = this.upgrade() {
+                                    this.update(cx, |view, cx| {
+                                        view.attached_media = Some(AttachedMedia {
+                                            filename,
+                                            mime_type: mime.into(),
+                                            data_base64: b64,
+                                            size_bytes: bytes.len(),
+                                        });
+                                        view.input_active = true;
+                                        cx.notify();
+                                    });
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     fn submit(&mut self, cx: &mut Context<Self>) {
         self.poke(cx);
         let text = self.input_text.trim().to_string();
-        if text.is_empty() || self.is_busy {
+        let attached = self.attached_media.take();
+        if (text.is_empty() && attached.is_none()) || self.is_busy {
+            self.attached_media = attached;
             return;
         }
 
@@ -776,13 +844,174 @@ impl UsamiApp {
         self.is_busy = true;
         self.sync_mic_gate();
         self.show_bubble = true;
-        self.status_text = "PENSANDO".into();
 
         // Reação imediata de escuta e reflexão enquanto o LLM processa
         self.vrm_controller.play_vrma("thinking", false);
         // Limpa as expressões do turno anterior: sem isso elas se acumulam na cabeça.
         self.vrm_controller.clear_expressions();
         self.vrm_controller.set_expression("19-prefab_doubt", 0.45);
+
+        if let Some(media) = attached {
+            self.status_text = "ANALISANDO MÍDIA".into();
+            let user_msg = if text.is_empty() {
+                format!("[Mídia: {}]", media.filename)
+            } else {
+                format!("[Mídia: {}] {}", media.filename, text)
+            };
+            self.chat_history.push(ChatMessage {
+                sender: Sender::User,
+                text: user_msg,
+                emotion: None,
+            });
+            cx.notify();
+
+            let api = Arc::clone(&self.api_client);
+            let audio = self.audio_player.clone();
+            let prompt = if text.is_empty() { None } else { Some(text) };
+
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let res = api
+                        .analyze_media(
+                            &media.mime_type,
+                            &media.data_base64,
+                            Some(&media.filename),
+                            prompt.as_deref(),
+                            None,
+                        )
+                        .await;
+
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, cx| {
+                                view.is_busy = false;
+                                view.sync_mic_gate();
+                                view.poke(cx);
+                                match res {
+                                    Ok(response) => {
+                                        let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
+                                        view.last_reply = response.reply.clone().into();
+                                        view.last_emotion = emotion.clone().into();
+                                        view.show_bubble = true;
+                                        view.status_text = if view.is_calling {
+                                            "EM CHAMADA".into()
+                                        } else if view.is_companion_mode {
+                                            "MODO COMPANION".into()
+                                        } else {
+                                            "COM VOCÊ".into()
+                                        };
+
+                                        view.vrm_controller.set_emotion_with_options(&emotion, 5.0, false);
+                                        view.vrm_controller.clear_expressions();
+                                        for action in &response.actions {
+                                            if matches!(
+                                                action.action_type.as_str(),
+                                                "set_expression" | "expression" | "emote"
+                                            ) && let Some(name) = &action.name
+                                            {
+                                                let weight = action.weight.or(action.value).unwrap_or(0.8);
+                                                view.vrm_controller.set_expression(name, weight);
+                                            }
+                                        }
+
+                                        let gesture = response
+                                            .actions
+                                            .iter()
+                                            .find_map(|action| match action.action_type.as_str() {
+                                                "gesture" | "play_clip" | "play_vrma" => action.name.clone(),
+                                                _ => None,
+                                            })
+                                            .or_else(|| {
+                                                response
+                                                    .gesture
+                                                    .clone()
+                                                    .filter(|gesture| gesture != "neutral" && gesture != "idle")
+                                            });
+                                        if let Some(gesture) = gesture {
+                                            view.vrm_controller.play_vrma(&gesture, false);
+                                        }
+
+                                        view.chat_history.push(ChatMessage {
+                                            sender: Sender::Usami,
+                                            text: response.reply.clone(),
+                                            emotion: Some(emotion.clone()),
+                                        });
+
+                                        cx.notify();
+
+                                        if !view.is_muted
+                                            && let Some(player) = audio
+                                        {
+                                            let api_tts = Arc::clone(&view.api_client);
+                                            let tts_text = response.reply;
+                                            let tts_style = emotion;
+                                            let player = player.clone();
+                                            let vrm_ctrl = view.vrm_controller.clone();
+                                            crate::api::tokio_runtime().spawn(async move {
+                                                match api_tts.stream_tts(&tts_text, &tts_style).await {
+                                                    Ok(crate::api::TtsStream::Pcm {
+                                                        sample_rate,
+                                                        mut response,
+                                                    }) => {
+                                                        let mouth = vrm_ctrl.clone();
+                                                        let mut sink = player.play_pcm_stream(sample_rate, move |level| {
+                                                            mouth.set_speaking(true, level);
+                                                        });
+                                                        let mut started = false;
+                                                        loop {
+                                                            match response.chunk().await {
+                                                                Ok(Some(chunk)) => {
+                                                                    if sink.push_i16_le(&chunk) && !started {
+                                                                        started = true;
+                                                                        vrm_ctrl.begin_speech_stream();
+                                                                    }
+                                                                }
+                                                                Ok(None) => break,
+                                                                Err(error) => {
+                                                                    eprintln!("[TTS] stream interrompido: {error}");
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        let tail = sink.finish();
+                                                        if started {
+                                                            let deadline = Instant::now() + Duration::from_secs(180);
+                                                            while !tail.is_drained() && Instant::now() < deadline {
+                                                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                                            }
+                                                            vrm_ctrl.end_speech_stream();
+                                                        } else {
+                                                            vrm_ctrl.speak(&tts_text, None);
+                                                        }
+                                                    }
+                                                    Ok(crate::api::TtsStream::Audio(bytes)) => {
+                                                        vrm_ctrl.speak(&tts_text, Some(bytes.clone()));
+                                                        if let Err(error) = player.play_wav(bytes) {
+                                                            eprintln!("[TTS] falha ao tocar áudio: {error}");
+                                                        }
+                                                    }
+                                                    Err(error) => {
+                                                        eprintln!("[TTS] streaming indisponível ({error}); fala só na legenda");
+                                                        vrm_ctrl.speak(&tts_text, None);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    Err(err) => {
+                                        view.status_text = format!("ERRO: {}", err).into();
+                                        cx.notify();
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+            return;
+        }
 
         self.chat_history.push(ChatMessage {
             sender: Sender::User,
@@ -1433,7 +1662,9 @@ impl Render for UsamiApp {
         let input_active = self.input_active;
         let caret_on = self.caret_on;
         let caret_visible = input_active && caret_on;
-        let send_enabled = !is_busy && !input_text.trim().is_empty();
+        let has_media = self.attached_media.is_some();
+        let attached_media = self.attached_media.clone();
+        let send_enabled = !is_busy && (!input_text.trim().is_empty() || has_media);
         let turns = self.chat_history.clone();
         let no_turns = turns.is_empty();
 
@@ -1475,12 +1706,94 @@ impl Render for UsamiApp {
                 // Atalhos com Control (ex: Ctrl+V para colar, Ctrl+Backspace / Ctrl+W para apagar palavra)
                 if ks.modifiers.control && !ks.modifiers.alt {
                     if key.eq_ignore_ascii_case("v") {
-                        if let Some(item) = cx.read_from_clipboard()
-                            && let Some(text) = item.text()
-                        {
-                            this.input_active = true;
-                            this.input_text.push_str(&text);
-                            cx.notify();
+                        if let Some(item) = cx.read_from_clipboard() {
+                            let mut attached_image = false;
+                            for entry in item.entries() {
+                                if let gpui::ClipboardEntry::Image(image) = entry {
+                                    let bytes = &image.bytes;
+                                    if !bytes.is_empty() {
+                                        let b64 = api::base64_encode(bytes);
+                                        let mime = if bytes.starts_with(b"\x89PNG") {
+                                            "image/png"
+                                        } else if bytes.starts_with(b"\xFF\xD8\xFF") {
+                                            "image/jpeg"
+                                        } else if bytes.starts_with(b"GIF") {
+                                            "image/gif"
+                                        } else if bytes.starts_with(b"RIFF")
+                                            && bytes.len() > 12
+                                            && &bytes[8..12] == b"WEBP"
+                                        {
+                                            "image/webp"
+                                        } else {
+                                            "image/png"
+                                        };
+                                        this.attached_media = Some(AttachedMedia {
+                                            filename: "screenshot.png".into(),
+                                            mime_type: mime.into(),
+                                            data_base64: b64,
+                                            size_bytes: bytes.len(),
+                                        });
+                                        this.input_active = true;
+                                        attached_image = true;
+                                        cx.notify();
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !attached_image {
+                                if let Some(text) = item.text() {
+                                    let trimmed = text.trim().trim_matches('"');
+                                    let path = std::path::Path::new(trimmed);
+                                    let is_image_ext = path
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .map(|ext| {
+                                            matches!(
+                                                ext.to_ascii_lowercase().as_str(),
+                                                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif"
+                                            )
+                                        })
+                                        .unwrap_or(false);
+
+                                    if is_image_ext && path.is_file() {
+                                        if let Ok(bytes) = std::fs::read(path) {
+                                            let b64 = api::base64_encode(&bytes);
+                                            let filename = path
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("imagem.png")
+                                                .to_string();
+                                            let mime = match path
+                                                .extension()
+                                                .and_then(|e| e.to_str())
+                                                .map(|s| s.to_ascii_lowercase())
+                                                .as_deref()
+                                            {
+                                                Some("jpg") | Some("jpeg") => "image/jpeg",
+                                                Some("png") => "image/png",
+                                                Some("webp") => "image/webp",
+                                                Some("gif") => "image/gif",
+                                                Some("bmp") => "image/bmp",
+                                                _ => "image/png",
+                                            };
+                                            this.attached_media = Some(AttachedMedia {
+                                                filename,
+                                                mime_type: mime.into(),
+                                                data_base64: b64,
+                                                size_bytes: bytes.len(),
+                                            });
+                                            this.input_active = true;
+                                            cx.notify();
+                                            return;
+                                        }
+                                    }
+
+                                    this.input_active = true;
+                                    this.input_text.push_str(&text);
+                                    cx.notify();
+                                }
+                            }
                         }
                     } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
                         this.input_active = true;
@@ -1934,8 +2247,52 @@ impl Render for UsamiApp {
                                             .flex_1()
                                             .min_w(px(0.0))
                                             .items_center()
+                                            .when_some(attached_media.as_ref(), |row, media| {
+                                                row.child(
+                                                    div()
+                                                        .id("composer-attached-chip")
+                                                        .mr(px(sp.s2))
+                                                        .flex()
+                                                        .flex_shrink_0()
+                                                        .items_center()
+                                                        .gap(px(4.0))
+                                                        .px(px(8.0))
+                                                        .py(px(3.0))
+                                                        .rounded_full()
+                                                        .bg(c.accent_tint)
+                                                        .border_1()
+                                                        .border_color(c.primary)
+                                                        .text_size(px(11.0))
+                                                        .text_color(c.pearl)
+                                                        .child(icon("image", 12.0))
+                                                        .child(
+                                                            div()
+                                                                .max_w(px(120.0))
+                                                                .line_clamp(1)
+                                                                .text_ellipsis()
+                                                                .child(format!(
+                                                                    "{} ({}KB)",
+                                                                    media.filename,
+                                                                    (media.size_bytes / 1024).max(1)
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("composer-media-remove-btn")
+                                                                .cursor_pointer()
+                                                                .p(px(2.0))
+                                                                .rounded_full()
+                                                                .hover(|s| s.bg(c.surface_soft))
+                                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                    this.attached_media = None;
+                                                                    cx.notify();
+                                                                }))
+                                                                .child(icon("close", 10.0)),
+                                                        ),
+                                                )
+                                            })
                                             .when(
-                                                input_text.is_empty(),
+                                                input_text.is_empty() && !has_media,
                                                 |row| {
                                                     row.child(
                                                         div()
@@ -1947,6 +2304,18 @@ impl Render for UsamiApp {
                                                             } else {
                                                                 "Diga alguma coisa..."
                                                             }),
+                                                    )
+                                                },
+                                            )
+                                            .when(
+                                                input_text.is_empty() && has_media,
+                                                |row| {
+                                                    row.child(
+                                                        div()
+                                                            .text_size(px(ty.input))
+                                                            .text_color(c.faint)
+                                                            .truncate()
+                                                            .child("Comentário opcional..."),
                                                     )
                                                 },
                                             )
@@ -1982,6 +2351,32 @@ impl Render for UsamiApp {
                                         .flex()
                                         .items_center()
                                         .gap(px(sp.s1_5))
+                                        // Anexar imagem / mídia
+                                        .child(
+                                            div()
+                                                .id("composer-attach-btn")
+                                                .cursor_pointer()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size(px(38.0))
+                                                .rounded_full()
+                                                .bg(if has_media { c.accent_tint } else { c.call_bg })
+                                                .border_1()
+                                                .border_color(if has_media { c.accent_border } else { c.line })
+                                                .text_color(if has_media { c.primary } else { c.muted })
+                                                .when(has_media, |el| el.shadow(theme::glow(c.primary, 8.0)))
+                                                .hover(|style| {
+                                                    style
+                                                        .bg(c.call_bg_hover)
+                                                        .border_color(c.line_strong)
+                                                        .text_color(c.pearl)
+                                                })
+                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                    this.attach_file_prompt(cx);
+                                                }))
+                                                .child(icon("image", 18.0)),
+                                        )
                                         // Chamada
                                         .child(
                                             div()

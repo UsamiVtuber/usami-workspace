@@ -259,6 +259,61 @@ pub struct PersonalityUpdateRequest {
     pub reset: Option<bool>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveEvent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub text: String,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: Option<String>,
+    #[serde(rename = "notBefore", default)]
+    pub not_before: Option<String>,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+    #[serde(rename = "dedupeKey", default)]
+    pub dedupe_key: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default = "default_true")]
+    pub speak: bool,
+    #[serde(default)]
+    pub emotion: Option<String>,
+    #[serde(default)]
+    pub gesture: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveEventsResponse {
+    pub events: Vec<ProactiveEvent>,
+    #[serde(rename = "serverTime")]
+    pub server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveAckItem {
+    pub id: String,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveAckRequest {
+    pub acks: Vec<ProactiveAckItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveAckResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub acked: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SttResponse {
     pub text: String,
@@ -542,6 +597,82 @@ impl UsamiApiClient {
                 .map_err(|e| e.to_string())?;
 
             Ok::<PersonalityResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_proactive_events(&self, is_active: bool) -> Result<ProactiveEventsResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/proactive/events", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url)
+                .header("x-usami-client", "usami-desktop")
+                .header("x-usami-activity", if is_active { "active" } else { "idle" });
+
+            if let Some(t) = token {
+                req = req.header("x-usami-token", t);
+            }
+
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if !res.status().is_success() {
+                return Err(format!("HTTP {}", res.status()));
+            }
+
+            let data = res
+                .json::<ProactiveEventsResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<ProactiveEventsResponse, String>(data)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn ack_proactive_events(&self, acks: &[ProactiveAckItem]) -> Result<ProactiveAckResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/proactive/events/ack", self.base_url);
+        let token = self.token.clone();
+        let payload = ProactiveAckRequest {
+            acks: acks.to_vec(),
+        };
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload)
+                .header("x-usami-client", "usami-desktop");
+
+            if let Some(t) = token {
+                req = req.header("x-usami-token", t);
+            }
+
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if !res.status().is_success() {
+                return Err(format!("HTTP {}", res.status()));
+            }
+
+            let data = res
+                .json::<ProactiveAckResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<ProactiveAckResponse, String>(data)
         });
 
         match handle.await {
@@ -912,5 +1043,48 @@ mod tests {
             .expect("requisição capturada");
         assert_eq!(request.method, "GET");
         assert_eq!(request.path, "/api/personality");
+    }
+
+    #[test]
+    fn proactive_event_deserializes_and_defaults_speak_true() {
+        let json = r#"{
+            "events": [
+                {
+                    "id": "evt_abc123",
+                    "type": "reminder",
+                    "text": "Hora do remédio!",
+                    "priority": "high",
+                    "expiresAt": "2026-11-09T18:00:00Z"
+                }
+            ],
+            "serverTime": "2026-11-09T14:00:00Z"
+        }"#;
+
+        let res: ProactiveEventsResponse = serde_json::from_str(json).expect("deserializa proactive json");
+        assert_eq!(res.events.len(), 1);
+        let ev = &res.events[0];
+        assert_eq!(ev.id, "evt_abc123");
+        assert_eq!(ev.event_type, "reminder");
+        assert_eq!(ev.text, "Hora do remédio!");
+        assert_eq!(ev.priority.as_deref(), Some("high"));
+        assert_eq!(ev.speak, true);
+    }
+
+    #[tokio::test]
+    async fn proactive_events_and_ack_round_trip() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"events":[{"id":"evt_1","type":"greeting","text":"Oi capitao!","speak":true}],"serverTime":"2026-11-09T14:00:00Z"}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("token-proactive".into()));
+        let res = client.get_proactive_events(true).await.expect("busca eventos");
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events[0].text, "Oi capitao!");
+
+        let req1 = requests.recv_timeout(Duration::from_secs(5)).expect("recebe get");
+        assert_eq!(req1.method, "GET");
+        assert_eq!(req1.path, "/api/proactive/events");
     }
 }

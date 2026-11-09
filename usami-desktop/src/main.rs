@@ -328,6 +328,37 @@ fn settings_list_item(text: &'static str) -> impl IntoElement {
         .child(div().flex_1().child(text))
 }
 
+fn proactivity_seen_path() -> Option<PathBuf> {
+    std::env::var("APPDATA").ok().map(|appdata| {
+        let dir = PathBuf::from(appdata).join("Usami");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("proactivity_seen.json")
+    })
+}
+
+fn load_proactive_seen_from_disk() -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(path) = proactivity_seen_path() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(list) = serde_json::from_str::<Vec<String>>(&content) {
+                for id in list {
+                    set.insert(id);
+                }
+            }
+        }
+    }
+    set
+}
+
+fn save_proactive_seen_to_disk(seen: &std::collections::HashSet<String>) {
+    if let Some(path) = proactivity_seen_path() {
+        let list: Vec<&String> = seen.iter().take(200).collect();
+        if let Ok(json) = serde_json::to_string(&list) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
@@ -373,6 +404,10 @@ struct UsamiApp {
     personality_loading: bool,
     personality_error: Option<SharedString>,
     personality_status: Option<SharedString>,
+    proactive_enabled: bool,
+    proactive_seen: std::collections::HashSet<String>,
+    proactive_queue: Vec<api::ProactiveEvent>,
+    last_proactive_speech: Instant,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
 }
@@ -457,8 +492,12 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
+                let mut tick_counter: u64 = 0;
                 loop {
                     cx.background_executor().timer(Duration::from_millis(500)).await;
+                    tick_counter = tick_counter.wrapping_add(1);
+                    let should_poll = tick_counter % 30 == 1; // a cada ~15s (e no primeiro tick)
+                    let should_present = tick_counter % 5 == 0; // a cada ~2.5s
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -496,6 +535,13 @@ impl UsamiApp {
                                 }
                                 if changed {
                                     cx.notify();
+                                }
+
+                                if should_poll {
+                                    view.poll_proactive_events(cx);
+                                }
+                                if should_present {
+                                    view.present_next_proactive(cx);
                                 }
                             });
                         }
@@ -550,6 +596,10 @@ impl UsamiApp {
             personality_loading: false,
             personality_error: None,
             personality_status: None,
+            proactive_enabled: true,
+            proactive_seen: load_proactive_seen_from_disk(),
+            proactive_queue: Vec::new(),
+            last_proactive_speech: Instant::now() - Duration::from_secs(300),
             #[cfg(target_os = "windows")]
             presence_subscription: None,
         }
@@ -904,6 +954,155 @@ impl UsamiApp {
             }
         })
         .detach();
+    }
+
+    fn poll_proactive_events(&mut self, cx: &mut Context<Self>) {
+        if !self.proactive_enabled {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        let is_active = self.last_interaction.elapsed() < Duration::from_secs(60);
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(res) = api.get_proactive_events(is_active).await {
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, _cx| {
+                                for event in res.events {
+                                    if let Some(dedupe_key) = &event.dedupe_key {
+                                        if view.proactive_seen.contains(dedupe_key) {
+                                            continue;
+                                        }
+                                    }
+                                    if view.proactive_queue.iter().any(|e| e.id == event.id) {
+                                        continue;
+                                    }
+                                    if view.proactive_queue.len() < 5 {
+                                        view.proactive_queue.push(event);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn present_next_proactive(&mut self, cx: &mut Context<Self>) {
+        if !self.proactive_enabled || self.proactive_queue.is_empty() {
+            return;
+        }
+        if self.is_busy
+            || self.is_calling
+            || self.is_listening
+            || self.sleep_companion_started_at.is_some()
+            || self.vrm_controller.is_speaking()
+        {
+            return;
+        }
+
+        let next_is_social = self.proactive_queue[0].event_type != "reminder";
+        if next_is_social && self.last_proactive_speech.elapsed() < Duration::from_secs(300) {
+            return;
+        }
+
+        let event = self.proactive_queue.remove(0);
+        if let Some(dedupe_key) = &event.dedupe_key {
+            self.proactive_seen.insert(dedupe_key.clone());
+            save_proactive_seen_to_disk(&self.proactive_seen);
+        }
+
+        let emotion = event.emotion.clone().unwrap_or_else(|| "tsundere".into());
+        self.last_reply = event.text.clone().into();
+        self.last_emotion = emotion.clone().into();
+        self.show_bubble = true;
+        self.vrm_controller.set_emotion_with_options(&emotion, 5.0, false);
+        if let Some(gesture) = &event.gesture {
+            self.vrm_controller.play_vrma(gesture, false);
+        }
+        self.chat_history.push(ChatMessage {
+            sender: Sender::Usami,
+            text: event.text.clone(),
+            emotion: Some(emotion.clone()),
+        });
+        self.poke(cx);
+        cx.notify();
+
+        let api = Arc::clone(&self.api_client);
+        let audio = self.audio_player.clone();
+        let event_id = event.id.clone();
+        let text = event.text.clone();
+        let is_muted = self.is_muted;
+        let vrm_ctrl = self.vrm_controller.clone();
+
+        self.last_proactive_speech = Instant::now();
+
+        crate::api::tokio_runtime().spawn(async move {
+            let mut delivered = false;
+            if !is_muted && let Some(player) = audio {
+                match api.stream_tts(&text, &emotion).await {
+                    Ok(crate::api::TtsStream::Pcm {
+                        sample_rate,
+                        mut response,
+                    }) => {
+                        let mouth = vrm_ctrl.clone();
+                        let mut sink = player.play_pcm_stream(sample_rate, move |level| {
+                            mouth.set_speaking(true, level);
+                        });
+                        let mut started = false;
+                        loop {
+                            match response.chunk().await {
+                                Ok(Some(chunk)) => {
+                                    if sink.push_i16_le(&chunk) && !started {
+                                        started = true;
+                                        vrm_ctrl.begin_speech_stream();
+                                    }
+                                }
+                                Ok(None) => break,
+                                Err(error) => {
+                                    eprintln!("[Proactive TTS] stream interrompido: {error}");
+                                    break;
+                                }
+                            }
+                        }
+                        let tail = sink.finish();
+                        if started {
+                            let deadline = Instant::now() + Duration::from_secs(180);
+                            while !tail.is_drained() && Instant::now() < deadline {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                            vrm_ctrl.end_speech_stream();
+                            delivered = true;
+                        } else {
+                            vrm_ctrl.speak(&text, None);
+                        }
+                    }
+                    Ok(crate::api::TtsStream::Audio(bytes)) => {
+                        vrm_ctrl.speak(&text, Some(bytes.clone()));
+                        if let Err(error) = player.play_wav(bytes) {
+                            eprintln!("[Proactive TTS] falha ao tocar áudio: {error}");
+                        } else {
+                            delivered = true;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[Proactive TTS] falha: {e:?}");
+                    }
+                }
+            }
+
+            let outcome = if delivered { "spoken" } else { "shown" };
+            let _ = api
+                .ack_proactive_events(&[crate::api::ProactiveAckItem {
+                    id: event_id,
+                    outcome: outcome.to_string(),
+                }])
+                .await;
+        });
     }
 
     fn toggle_drawer(&mut self, drawer: ActiveDrawer, cx: &mut Context<Self>) {

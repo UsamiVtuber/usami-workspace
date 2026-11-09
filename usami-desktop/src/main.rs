@@ -364,12 +364,143 @@ struct AttachedMedia {
     filename: String,
     mime_type: String,
     data_base64: String,
-    size_bytes: usize,
+    preview: Arc<gpui::Image>,
+}
+
+impl AttachedMedia {
+    fn from_bytes(filename: String, mime_type: &str, bytes: Vec<u8>) -> Self {
+        let format = match mime_type {
+            "image/jpeg" | "image/jpg" => gpui::ImageFormat::Jpeg,
+            "image/webp" => gpui::ImageFormat::Webp,
+            "image/gif" => gpui::ImageFormat::Gif,
+            "image/bmp" => gpui::ImageFormat::Bmp,
+            _ => gpui::ImageFormat::Png,
+        };
+        let data_base64 = api::base64_encode(&bytes);
+        let preview = Arc::new(gpui::Image::from_bytes(format, bytes));
+        Self {
+            filename,
+            mime_type: mime_type.into(),
+            data_base64,
+            preview,
+        }
+    }
+}
+
+fn is_dead_accent_char(c: char) -> bool {
+    matches!(c, '´' | '`' | '^' | '~' | '¨')
+}
+
+fn compose_dead_accent(accent: char, base: char) -> Option<char> {
+    match (accent, base) {
+        ('´', 'a') => Some('á'),
+        ('´', 'e') => Some('é'),
+        ('´', 'i') => Some('í'),
+        ('´', 'o') => Some('ó'),
+        ('´', 'u') => Some('ú'),
+        ('´', 'y') => Some('ý'),
+        ('´', 'c') => Some('ç'),
+        ('´', 'A') => Some('Á'),
+        ('´', 'E') => Some('É'),
+        ('´', 'I') => Some('Í'),
+        ('´', 'O') => Some('Ó'),
+        ('´', 'U') => Some('Ú'),
+        ('´', 'Y') => Some('Ý'),
+        ('´', 'C') => Some('Ç'),
+        ('`', 'a') => Some('à'),
+        ('`', 'e') => Some('è'),
+        ('`', 'i') => Some('ì'),
+        ('`', 'o') => Some('ò'),
+        ('`', 'u') => Some('ù'),
+        ('`', 'A') => Some('À'),
+        ('`', 'E') => Some('È'),
+        ('`', 'I') => Some('Ì'),
+        ('`', 'O') => Some('Ò'),
+        ('`', 'U') => Some('Ù'),
+        ('^', 'a') => Some('â'),
+        ('^', 'e') => Some('ê'),
+        ('^', 'i') => Some('î'),
+        ('^', 'o') => Some('ô'),
+        ('^', 'u') => Some('û'),
+        ('^', 'A') => Some('Â'),
+        ('^', 'E') => Some('Ê'),
+        ('^', 'I') => Some('Î'),
+        ('^', 'O') => Some('Ô'),
+        ('^', 'U') => Some('Û'),
+        ('~', 'a') => Some('ã'),
+        ('~', 'o') => Some('õ'),
+        ('~', 'n') => Some('ñ'),
+        ('~', 'A') => Some('Ã'),
+        ('~', 'O') => Some('Õ'),
+        ('~', 'N') => Some('Ñ'),
+        ('¨', 'a') => Some('ä'),
+        ('¨', 'e') => Some('ë'),
+        ('¨', 'i') => Some('ï'),
+        ('¨', 'o') => Some('ö'),
+        ('¨', 'u') => Some('ü'),
+        ('¨', 'y') => Some('ÿ'),
+        ('¨', 'A') => Some('Ä'),
+        ('¨', 'E') => Some('Ë'),
+        ('¨', 'I') => Some('Ï'),
+        ('¨', 'O') => Some('Ö'),
+        ('¨', 'U') => Some('Ü'),
+        _ => None,
+    }
+}
+
+fn push_key_char_with_dead_key(input_text: &mut String, pending_dead_key: &mut Option<char>, ch: &str) {
+    let mut chars = ch.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Caso 1: é apenas um caractere (caso mais comum ao digitar)
+    if chars.next().is_none() {
+        if let Some(dead) = pending_dead_key.take() {
+            if first == dead {
+                // Pressionou o mesmo acento duas vezes seguidas -> emite o acento literal
+                input_text.push(dead);
+            } else if let Some(composed) = compose_dead_accent(dead, first) {
+                // O Windows enviou a vogal crua após a dead key -> compomos manualmente
+                input_text.push(composed);
+            } else if !first.is_ascii() {
+                // O kernel do Windows (ToUnicode com flag 1<<2) já compôs o caractere
+                // na segunda tecla (ex: enviou '´' na dead key e 'í' na vogal) ->
+                // descartamos o acento pendente duplicado e inserimos apenas 'í'.
+                input_text.push(first);
+            } else if first == ' ' {
+                input_text.push(dead);
+            } else {
+                // Consoante/símbolo que não combina com o acento -> preserva ambos
+                input_text.push(dead);
+                input_text.push(first);
+            }
+            return;
+        }
+
+        if is_dead_accent_char(first) {
+            *pending_dead_key = Some(first);
+            return;
+        }
+
+        input_text.push(first);
+        return;
+    }
+
+    // Caso 2: múltiplos caracteres no mesmo evento (ex: dead key + consoante vindo do OS)
+    if let Some(dead) = pending_dead_key.take() {
+        if !ch.starts_with(dead) {
+            input_text.push(dead);
+        }
+    }
+    input_text.push_str(ch);
 }
 
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
+    pending_dead_key: Option<char>,
     input_active: bool,
     caret_on: bool,
     status_text: SharedString,
@@ -563,6 +694,7 @@ impl UsamiApp {
         Self {
             focus_handle: cx.focus_handle(),
             input_text: String::new(),
+            pending_dead_key: None,
             input_active: false,
             caret_on: true,
             status_text: "COM VOCÊ".into(),
@@ -789,7 +921,6 @@ impl UsamiApp {
                 if let Ok(Ok(Some(paths))) = receiver.await {
                     if let Some(path) = paths.into_iter().next() {
                         if let Ok(bytes) = std::fs::read(&path) {
-                            let b64 = api::base64_encode(&bytes);
                             let filename = path
                                 .file_name()
                                 .and_then(|n| n.to_str())
@@ -808,15 +939,11 @@ impl UsamiApp {
                                 Some("bmp") => "image/bmp",
                                 _ => "image/png",
                             };
+                            let media = AttachedMedia::from_bytes(filename, mime, bytes);
                             let _ = cx.update(|cx: &mut App| {
                                 if let Some(this) = this.upgrade() {
                                     this.update(cx, |view, cx| {
-                                        view.attached_media = Some(AttachedMedia {
-                                            filename,
-                                            mime_type: mime.into(),
-                                            data_base64: b64,
-                                            size_bytes: bytes.len(),
-                                        });
+                                        view.attached_media = Some(media);
                                         view.input_active = true;
                                         cx.notify();
                                     });
@@ -840,6 +967,7 @@ impl UsamiApp {
         }
 
         self.input_text.clear();
+        self.pending_dead_key = None;
         self.input_active = false;
         self.is_busy = true;
         self.sync_mic_gate();
@@ -1712,7 +1840,6 @@ impl Render for UsamiApp {
                                 if let gpui::ClipboardEntry::Image(image) = entry {
                                     let bytes = &image.bytes;
                                     if !bytes.is_empty() {
-                                        let b64 = api::base64_encode(bytes);
                                         let mime = if bytes.starts_with(b"\x89PNG") {
                                             "image/png"
                                         } else if bytes.starts_with(b"\xFF\xD8\xFF") {
@@ -1727,12 +1854,11 @@ impl Render for UsamiApp {
                                         } else {
                                             "image/png"
                                         };
-                                        this.attached_media = Some(AttachedMedia {
-                                            filename: "screenshot.png".into(),
-                                            mime_type: mime.into(),
-                                            data_base64: b64,
-                                            size_bytes: bytes.len(),
-                                        });
+                                        this.attached_media = Some(AttachedMedia::from_bytes(
+                                            "screenshot.png".into(),
+                                            mime,
+                                            bytes.clone(),
+                                        ));
                                         this.input_active = true;
                                         attached_image = true;
                                         cx.notify();
@@ -1758,7 +1884,6 @@ impl Render for UsamiApp {
 
                                     if is_image_ext && path.is_file() {
                                         if let Ok(bytes) = std::fs::read(path) {
-                                            let b64 = api::base64_encode(&bytes);
                                             let filename = path
                                                 .file_name()
                                                 .and_then(|n| n.to_str())
@@ -1777,12 +1902,11 @@ impl Render for UsamiApp {
                                                 Some("bmp") => "image/bmp",
                                                 _ => "image/png",
                                             };
-                                            this.attached_media = Some(AttachedMedia {
+                                            this.attached_media = Some(AttachedMedia::from_bytes(
                                                 filename,
-                                                mime_type: mime.into(),
-                                                data_base64: b64,
-                                                size_bytes: bytes.len(),
-                                            });
+                                                mime,
+                                                bytes,
+                                            ));
                                             this.input_active = true;
                                             cx.notify();
                                             return;
@@ -1790,6 +1914,7 @@ impl Render for UsamiApp {
                                     }
 
                                     this.input_active = true;
+                                    this.pending_dead_key = None;
                                     this.input_text.push_str(&text);
                                     cx.notify();
                                 }
@@ -1797,6 +1922,7 @@ impl Render for UsamiApp {
                         }
                     } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
                         this.input_active = true;
+                        this.pending_dead_key = None;
                         if let Some(idx) = this.input_text.rfind(' ') {
                             this.input_text.truncate(idx);
                         } else {
@@ -1804,6 +1930,7 @@ impl Render for UsamiApp {
                         }
                         cx.notify();
                     } else if key.eq_ignore_ascii_case("u") {
+                        this.pending_dead_key = None;
                         this.input_text.clear();
                         cx.notify();
                     }
@@ -1819,27 +1946,36 @@ impl Render for UsamiApp {
                     this.submit(cx);
                 } else if key == "backspace" {
                     this.input_active = true;
-                    this.input_text.pop();
+                    if this.pending_dead_key.take().is_none() {
+                        this.input_text.pop();
+                    }
                     cx.notify();
                 } else if key == "escape" {
+                    this.pending_dead_key = None;
                     this.input_active = false;
                     this.active_drawer = ActiveDrawer::None;
                     cx.notify();
                 } else if key == "space" || key == " " {
                     this.input_active = true;
-                    this.input_text.push(' ');
+                    if let Some(dead) = this.pending_dead_key.take() {
+                        this.input_text.push(dead);
+                    } else {
+                        this.input_text.push(' ');
+                    }
                     cx.notify();
                 } else if let Some(ref ch) = ks.key_char {
                     if !ch.chars().any(|c| c.is_control()) {
                         this.input_active = true;
-                        this.input_text.push_str(ch);
+                        push_key_char_with_dead_key(&mut this.input_text, &mut this.pending_dead_key, ch);
                         cx.notify();
                     }
                 } else if key.chars().count() == 1 {
                     let c = key.chars().next().unwrap();
                     if !c.is_control() {
                         this.input_active = true;
-                        this.input_text.push(c);
+                        let mut buf = [0u8; 4];
+                        let s = c.encode_utf8(&mut buf);
+                        push_key_char_with_dead_key(&mut this.input_text, &mut this.pending_dead_key, s);
                         cx.notify();
                     }
                 }
@@ -2175,6 +2311,58 @@ impl Render for UsamiApp {
                             .text_color(c.faint)
                             .child("Mensagens usam os provedores configurados para responder."),
                     )
+                    // Prévia de imagem anexada acima da barra de texto (estilo chat moderno)
+                    .when_some(attached_media.as_ref(), |parent, media| {
+                        parent.child(
+                            div()
+                                .id("composer-media-preview-row")
+                                .w(px(640.0))
+                                .max_w(px(640.0))
+                                .pl(px(sp.s2))
+                                .flex()
+                                .items_center()
+                                .justify_start()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .size(px(64.0))
+                                        .rounded(px(10.0))
+                                        .overflow_hidden()
+                                        .bg(c.composer_bg)
+                                        .border_1()
+                                        .border_color(c.primary)
+                                        .shadow(t.shadow.composer.clone())
+                                        .child(
+                                            img(media.preview.clone())
+                                                .size_full()
+                                                .object_fit(ObjectFit::Cover),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("composer-media-remove-btn")
+                                                .cursor_pointer()
+                                                .absolute()
+                                                .top(px(4.0))
+                                                .right(px(4.0))
+                                                .size(px(18.0))
+                                                .rounded_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(gpui::rgba(0x0B0C14D9))
+                                                .border_1()
+                                                .border_color(c.line_strong)
+                                                .text_color(c.pearl)
+                                                .hover(|s| s.bg(c.err).border_color(c.err))
+                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                    this.attached_media = None;
+                                                    cx.notify();
+                                                }))
+                                                .child(icon("close", 10.0)),
+                                        ),
+                                ),
+                        )
+                    })
                     // Compositor
                     .child(
                         div()
@@ -2218,10 +2406,11 @@ impl Render for UsamiApp {
                                     .justify_center()
                                     .size(px(38.0))
                                     .rounded_full()
-                                    .text_color(c.muted)
+                                    .bg(if has_media { c.accent_tint } else { gpui::rgba(0x00000000) })
+                                    .text_color(if has_media { c.primary } else { c.muted })
                                     .hover(|style| style.bg(c.call_bg_hover).text_color(c.pearl))
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.poke(cx);
+                                        this.attach_file_prompt(cx);
                                     }))
                                     .child(icon("image", 18.0)),
                             )
@@ -2244,102 +2433,64 @@ impl Render for UsamiApp {
                                     .child(
                                         div()
                                             .flex()
-                                            .flex_1()
+                                            .w_full()
                                             .min_w(px(0.0))
+                                            .overflow_hidden()
                                             .items_center()
-                                            .when_some(attached_media.as_ref(), |row, media| {
-                                                row.child(
-                                                    div()
-                                                        .id("composer-attached-chip")
-                                                        .mr(px(sp.s2))
-                                                        .flex()
-                                                        .flex_shrink_0()
-                                                        .items_center()
-                                                        .gap(px(4.0))
-                                                        .px(px(8.0))
-                                                        .py(px(3.0))
-                                                        .rounded_full()
-                                                        .bg(c.accent_tint)
-                                                        .border_1()
-                                                        .border_color(c.primary)
-                                                        .text_size(px(11.0))
-                                                        .text_color(c.pearl)
-                                                        .child(icon("image", 12.0))
-                                                        .child(
-                                                            div()
-                                                                .max_w(px(120.0))
-                                                                .line_clamp(1)
-                                                                .text_ellipsis()
-                                                                .child(format!(
-                                                                    "{} ({}KB)",
-                                                                    media.filename,
-                                                                    (media.size_bytes / 1024).max(1)
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .id("composer-media-remove-btn")
-                                                                .cursor_pointer()
-                                                                .p(px(2.0))
-                                                                .rounded_full()
-                                                                .hover(|s| s.bg(c.surface_soft))
-                                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                                    this.attached_media = None;
-                                                                    cx.notify();
-                                                                }))
-                                                                .child(icon("close", 10.0)),
-                                                        ),
-                                                )
-                                            })
-                                            .when(
-                                                input_text.is_empty() && !has_media,
-                                                |row| {
+                                            .when(input_text.is_empty(), |row| {
+                                                row.when(input_active, |row| {
                                                     row.child(
                                                         div()
-                                                            .text_size(px(ty.input))
-                                                            .text_color(c.faint)
-                                                            .truncate()
-                                                            .child(if is_calling {
-                                                                "Escreva enquanto fala..."
+                                                            .flex_shrink_0()
+                                                            .w(px(1.5))
+                                                            .h(px(16.0))
+                                                            .mr(px(1.5))
+                                                            .bg(if caret_visible {
+                                                                c.primary
                                                             } else {
-                                                                "Diga alguma coisa..."
+                                                                gpui::rgba(0x00000000)
                                                             }),
                                                     )
-                                                },
-                                            )
-                                            .when(
-                                                input_text.is_empty() && has_media,
-                                                |row| {
-                                                    row.child(
-                                                        div()
-                                                            .text_size(px(ty.input))
-                                                            .text_color(c.faint)
-                                                            .truncate()
-                                                            .child("Comentário opcional..."),
-                                                    )
-                                                },
-                                            )
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_size(px(ty.input))
+                                                        .text_color(c.faint)
+                                                        .truncate()
+                                                        .child(if is_calling {
+                                                            "Escreva enquanto fala..."
+                                                        } else if has_media {
+                                                            "Comentário opcional..."
+                                                        } else {
+                                                            "Diga alguma coisa..."
+                                                        }),
+                                                )
+                                            })
                                             .when(!input_text.is_empty(), |row| {
                                                 row.child(
                                                     div()
-                                                        .flex_1()
                                                         .min_w(px(0.0))
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
                                                         .text_size(px(ty.input))
                                                         .text_color(c.pearl)
-                                                        .line_clamp(1)
-                                                        .text_ellipsis()
                                                         .child(input_text.clone()),
                                                 )
-                                            })
-                                            .when(caret_visible, |row| {
-                                                row.child(
-                                                    div()
-                                                        .flex_shrink_0()
-                                                        .w(px(1.5))
-                                                        .h(px(16.0))
-                                                        .ml(px(1.0))
-                                                        .bg(c.primary),
-                                                )
+                                                .when(input_active, |row| {
+                                                    row.child(
+                                                        div()
+                                                            .flex_shrink_0()
+                                                            .w(px(1.5))
+                                                            .h(px(16.0))
+                                                            .ml(px(1.0))
+                                                            .bg(if caret_visible {
+                                                                c.primary
+                                                            } else {
+                                                                gpui::rgba(0x00000000)
+                                                            }),
+                                                    )
+                                                })
                                             }),
                                     ),
                             )
@@ -2351,32 +2502,6 @@ impl Render for UsamiApp {
                                         .flex()
                                         .items_center()
                                         .gap(px(sp.s1_5))
-                                        // Anexar imagem / mídia
-                                        .child(
-                                            div()
-                                                .id("composer-attach-btn")
-                                                .cursor_pointer()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(38.0))
-                                                .rounded_full()
-                                                .bg(if has_media { c.accent_tint } else { c.call_bg })
-                                                .border_1()
-                                                .border_color(if has_media { c.accent_border } else { c.line })
-                                                .text_color(if has_media { c.primary } else { c.muted })
-                                                .when(has_media, |el| el.shadow(theme::glow(c.primary, 8.0)))
-                                                .hover(|style| {
-                                                    style
-                                                        .bg(c.call_bg_hover)
-                                                        .border_color(c.line_strong)
-                                                        .text_color(c.pearl)
-                                                })
-                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                    this.attach_file_prompt(cx);
-                                                }))
-                                                .child(icon("image", 18.0)),
-                                        )
                                         // Chamada
                                         .child(
                                             div()
@@ -4150,7 +4275,46 @@ fn main() {
 mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
-    use super::{asset_path, first_existing, manifest_dir};
+    use super::{asset_path, first_existing, manifest_dir, push_key_char_with_dead_key};
+
+    #[test]
+    fn dead_key_accent_does_not_duplicate_when_os_sends_precomposed_vowel() {
+        let mut text = String::from("olha voce a");
+        let mut pending = None;
+
+        // No GPUI Windows, pressionar '´' envia Some("´") e pressionar 'i' em seguida
+        // envia Some("í") já composto pelo kernel (ToUnicode flag 1<<2).
+        push_key_char_with_dead_key(&mut text, &mut pending, "´");
+        assert_eq!(text, "olha voce a");
+        assert_eq!(pending, Some('´'));
+
+        push_key_char_with_dead_key(&mut text, &mut pending, "í");
+        assert_eq!(text, "olha voce aí");
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn dead_key_accent_composes_when_os_sends_raw_ascii_vowel() {
+        let mut text = String::new();
+        let mut pending = None;
+
+        push_key_char_with_dead_key(&mut text, &mut pending, "~");
+        push_key_char_with_dead_key(&mut text, &mut pending, "a");
+        push_key_char_with_dead_key(&mut text, &mut pending, "o");
+        assert_eq!(text, "ão");
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn dead_key_accent_preserves_accent_before_non_composable_consonant() {
+        let mut text = String::new();
+        let mut pending = None;
+
+        push_key_char_with_dead_key(&mut text, &mut pending, "´");
+        push_key_char_with_dead_key(&mut text, &mut pending, "x");
+        assert_eq!(text, "´x");
+        assert_eq!(pending, None);
+    }
 
     #[test]
     fn icon_paths_resolve_from_crate_dir() {

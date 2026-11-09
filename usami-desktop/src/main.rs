@@ -2405,7 +2405,7 @@ impl Render for UsamiApp {
                                                     .flex_col()
                                                     .child(settings_h3("USAMI COMPANION"))
                                                     .child(settings_p(
-                                                        "Versão 0.1.0 — companion com avatar 3D/Live2D e voz própria.",
+                                                        "Versão 0.2.0 — companion com avatar 3D/Live2D e voz própria.",
                                                     ))
                                                     .child(settings_h3("TECNOLOGIAS"))
                                                     .child(settings_list_item("React 19 + Vite"))

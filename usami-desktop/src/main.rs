@@ -536,6 +536,31 @@ fn push_key_char_with_dead_key(input_text: &mut String, pending_dead_key: &mut O
     input_text.push_str(ch);
 }
 
+fn normalize_utterance_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+fn is_duplicate_utterance(
+    last_commit: &mut Option<(String, Instant)>,
+    text: &str,
+    now: Instant,
+) -> bool {
+    let key = normalize_utterance_key(text);
+    if key.is_empty() {
+        return true;
+    }
+    if let Some((prev_key, prev_at)) = last_commit {
+        if *prev_key == key && now.saturating_duration_since(*prev_at) < Duration::from_secs(5) {
+            return true;
+        }
+    }
+    *last_commit = Some((key, now));
+    false
+}
+
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
@@ -586,6 +611,8 @@ struct UsamiApp {
     proactive_seen: std::collections::HashSet<String>,
     proactive_queue: Vec<api::ProactiveEvent>,
     last_proactive_speech: Instant,
+    last_voice_ended: Instant,
+    last_voice_commit: Option<(String, Instant)>,
     attached_media: Option<AttachedMedia>,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
@@ -636,11 +663,24 @@ impl UsamiApp {
         let mic_gate = Arc::new(recorder::MicGate::new());
         let gate = Arc::clone(&mic_gate);
         let speaking_controller = vrm_controller.clone();
-        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
+                let mut was_speaking = false;
                 loop {
-                    gate.set_agent(speaking_controller.is_speaking());
+                    let speaking = speaking_controller.is_speaking();
+                    gate.set_agent(speaking);
+                    if was_speaking && !speaking {
+                        let _ = cx.update(|cx: &mut App| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |view, _cx| {
+                                    // O relógio de silêncio começa quando a VOZ termina (OpenAmika 11c7c4e).
+                                    view.last_voice_ended = Instant::now();
+                                });
+                            }
+                        });
+                    }
+                    was_speaking = speaking;
                     cx.background_executor()
                         .timer(Duration::from_millis(100))
                         .await;
@@ -780,6 +820,8 @@ impl UsamiApp {
             proactive_seen: load_proactive_seen_from_disk(),
             proactive_queue: Vec::new(),
             last_proactive_speech: Instant::now() - Duration::from_secs(300),
+            last_voice_ended: Instant::now() - Duration::from_secs(300),
+            last_voice_commit: None,
             attached_media: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
@@ -855,12 +897,16 @@ impl UsamiApp {
         match recorder::VoiceListener::start(Arc::clone(&self.mic_gate)) {
             Ok(mut listener) => {
                 let Some(segments) = listener.take_segments() else {
+                    listener.stop();
+                    self.is_listening = false;
+                    self.sync_mic_gate();
                     self.status_text = "MIC: canal de áudio indisponível.".into();
                     cx.notify();
                     return;
                 };
                 self.listener = Some(listener);
                 self.is_listening = true;
+                self.last_voice_commit = None;
                 self.sync_mic_gate();
                 self.status_text = "OUVINDO...".into();
 
@@ -882,7 +928,15 @@ impl UsamiApp {
                                             }
                                             match transcript {
                                                 Ok(text) if !text.trim().is_empty() => {
-                                                    view.input_text = text.trim().to_string();
+                                                    let trimmed = text.trim().to_string();
+                                                    if is_duplicate_utterance(
+                                                        &mut view.last_voice_commit,
+                                                        &trimmed,
+                                                        Instant::now(),
+                                                    ) {
+                                                        return true;
+                                                    }
+                                                    view.input_text = trimmed;
                                                     if view.is_busy {
                                                         // Não fala por cima: guarda no campo.
                                                         view.status_text = "TEXTO PRONTO".into();
@@ -1357,7 +1411,11 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
-        let is_active = self.last_interaction.elapsed() < Duration::from_secs(60);
+        // Relógio de silêncio: enquanto a voz da Usami está tocando ou terminou há < 60s,
+        // conta como atividade recente (OpenAmika 11c7c4e).
+        let is_active = self.last_interaction.elapsed() < Duration::from_secs(60)
+            || self.vrm_controller.is_speaking()
+            || self.last_voice_ended.elapsed() < Duration::from_secs(60);
 
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
@@ -4390,7 +4448,11 @@ fn main() {
 mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
-    use super::{asset_path, first_existing, manifest_dir, push_key_char_with_dead_key, ProactivityConfig};
+    use super::{
+        asset_path, first_existing, is_duplicate_utterance, manifest_dir,
+        normalize_utterance_key, push_key_char_with_dead_key, ProactivityConfig,
+    };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn dead_key_accent_does_not_duplicate_when_os_sends_precomposed_vowel() {
@@ -4470,5 +4532,31 @@ mod tests {
 
         let serialized = serde_json::to_string(&cfg).unwrap();
         assert!(serialized.contains(r#""enabled":false"#));
+    }
+
+    #[test]
+    fn duplicate_utterance_within_five_seconds_is_dropped() {
+        let mut last = None;
+        let t0 = Instant::now();
+        assert!(!is_duplicate_utterance(&mut last, "Oi, tudo bem?", t0));
+        assert_eq!(normalize_utterance_key("Oi, tudo bem?"), "oitudobem");
+        // Mesmas palavras sem pontuação 3s depois -> descartado
+        assert!(is_duplicate_utterance(
+            &mut last,
+            "oi tudo bem",
+            t0 + Duration::from_secs(3)
+        ));
+        // Palavras diferentes -> aceito
+        assert!(!is_duplicate_utterance(
+            &mut last,
+            "Oi, tudo bem sim!",
+            t0 + Duration::from_secs(3)
+        ));
+        // Mesmas palavras 6s depois -> aceito novamente
+        assert!(!is_duplicate_utterance(
+            &mut last,
+            "oi tudo bem sim",
+            t0 + Duration::from_secs(9)
+        ));
     }
 }

@@ -30,7 +30,7 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
 | Caminho | O que é | Stack | Versionamento |
 | --- | --- | --- | --- |
 | `usami/` | Runtime principal da companion e API local (`/api/*` na porta 8787). Interface web com avatar 3D/Live2D, chat, TTS, STT, memória, personalidade e vínculo. | React 19 + Vite, Three.js + `@pixiv/three-vrm`, Node (`server.mjs`), Gemini (TTS/STT), OpenRouter/NVIDIA (LLM) | Repo próprio `UsamiVtuber/Usami-Core` (fora deste workspace git) |
-| `usami-desktop/` | App nativo Windows da mesma companion: palco VRM, chat, TTS com lipsync e chamada mãos-livres. | Rust (edition 2024) + GPUI 0.2.2, `gpui-vrm` (WGPU), `cpal`/`rodio`, `reqwest` | Repo de código `usami-workspace`; releases em `UsamiVtuber/usami-desktop` (v0.2.0) |
+| `usami-desktop/` | App nativo Windows da mesma companion: palco VRM, chat, TTS com lipsync e chamada mãos-livres. | Rust (edition 2024) + GPUI 0.2.2, `gpui-vrm` (WGPU), `cpal`/`rodio`, `reqwest` | Repo de código `usami-workspace`; releases em `UsamiVtuber/usami-desktop` (v0.3.0) |
 | `gpui-vrm/` | Motor VRM/glTF/VRMA nativo usado pelo desktop (MToon cel-shading, SpringBone, blendshapes, lipsync, look-at). | Rust + WGPU | Crate local (`path` no `Cargo.toml` do desktop); fora deste git |
 | `usami-monitor/` | Painel operacional do notebook Linux que roda o Docker/n8n. | FastAPI + HTML estático (sem build) | Repo próprio `UsamiVtuber/usami-monitor` |
 | `infra/n8n-local/` | Stack Docker do n8n + Postgres 16, exports de workflows e variante `nyarch/` para o notebook. | docker-compose, n8n, PostgreSQL 16, SearXNG (nyarch) | Dentro deste repo; segredos em `.env` local |
@@ -112,7 +112,7 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
 
 - **Desktop**: publicação **local**, sem PAT em CI, via `usami-desktop/scripts/release.ps1`
   (usa o `gh` autenticado de quem publica). Canal público:
-  `UsamiVtuber/usami-desktop`. Última versão: **v0.2.0** (Windows x64, ~11,9 MiB).
+  `UsamiVtuber/usami-desktop`. Última versão: **v0.3.0** (Windows x64).
 - O zip **não inclui** arquivos `.vrm`/`.glb`/`.fbx`; modelos são distribuídos à parte.
 - **Core** e **monitor** têm repositórios próprios e não são publicados por este
   workspace.
@@ -134,11 +134,11 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
 - Monitor: `usami-monitor/README.md`
 - Plano de produto em andamento: `KYNDRED_INSPIRED_PLAN.md`
 
-## Estado atual (2026-11-08)
+## Estado atual (2026-11-10)
 
-- Desktop **v0.2.0** publicado, com tema escuro, fontes OFL embutidas e painel de
-  configurações com as seis abas do web (controles que dependem do web aparecem
-  desabilitados).
+- Desktop **v0.3.0** publicado, com suporte a presença Win32 (bandeja e atalho global),
+  análise e envio de mídia, integração com eventos proativos e abas de configuração
+  conectadas à API local.
 - Core web segue como referência de comportamento; memória e personalidade são
   editadas por lá.
 - Monitor e variante `nyarch` operam no notebook Linux, atrás de túnel SSH.

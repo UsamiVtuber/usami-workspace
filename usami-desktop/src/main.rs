@@ -4151,7 +4151,7 @@ impl Render for UsamiApp {
                                                     .flex_col()
                                                     .child(settings_h3("USAMI COMPANION"))
                                                     .child(settings_p(
-                                                        "Versão 0.2.0 — desktop companion nativo com avatar 3D/VRM e voz própria.",
+                                                        "Versão 0.3.0 — desktop companion nativo com avatar 3D/VRM e voz própria.",
                                                     ))
                                                     .child(settings_h3("ARQUITETURA NATIVA"))
                                                     .child(settings_list_item("Desktop: Rust + GPUI 0.2.2 + WGPU 60 FPS"))

@@ -5,7 +5,7 @@ Aplicativo nativo da companion Usami para Windows, escrito em **Rust** sobre o
 VRM 3D, chat com o backend local, TTS com lipsync e um modo chamada mãos-livres
 com microfone, sem navegador embutido.
 
-- **Versão atual:** 0.2.0 (`Cargo.toml`, aba SOBRE do painel).
+- **Versão atual:** 0.3.0 (`Cargo.toml`, aba SOBRE do painel).
 - **Canal de releases:** [`UsamiVtuber/usami-desktop`](https://github.com/UsamiVtuber/usami-desktop) (público).
 - **Distribuição:** zip Windows x64 com o executável e a pasta `assets/`. O
   pacote **não** inclui modelos `.vrm` (ver [Modelo e assets](#modelo-e-assets)).

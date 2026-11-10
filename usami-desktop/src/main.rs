@@ -8,6 +8,7 @@ mod theme;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_vrm::{VrmController, VrmView};
@@ -326,6 +327,44 @@ fn settings_list_item(text: &'static str) -> impl IntoElement {
         .text_color(t.color.pearl)
         .child("•")
         .child(div().flex_1().child(text))
+}
+
+fn proactivity_config_path() -> Option<PathBuf> {
+    std::env::var("APPDATA").ok().map(|appdata| {
+        let dir = PathBuf::from(appdata).join("Usami");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("proactivity_config.json")
+    })
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProactivityConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn load_proactive_config_from_disk() -> bool {
+    if let Some(path) = proactivity_config_path() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(cfg) = serde_json::from_str::<ProactivityConfig>(&content) {
+                return cfg.enabled;
+            }
+        }
+    }
+    true
+}
+
+fn save_proactive_config_to_disk(enabled: bool) {
+    if let Some(path) = proactivity_config_path() {
+        let cfg = ProactivityConfig { enabled };
+        if let Ok(json) = serde_json::to_string(&cfg) {
+            let _ = std::fs::write(path, json);
+        }
+    }
 }
 
 fn proactivity_seen_path() -> Option<PathBuf> {
@@ -737,7 +776,7 @@ impl UsamiApp {
             personality_loading: false,
             personality_error: None,
             personality_status: None,
-            proactive_enabled: true,
+            proactive_enabled: load_proactive_config_from_disk(),
             proactive_seen: load_proactive_seen_from_disk(),
             proactive_queue: Vec::new(),
             last_proactive_speech: Instant::now() - Duration::from_secs(300),
@@ -1478,6 +1517,15 @@ impl UsamiApp {
     fn set_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
         self.settings_tab = tab;
         self.load_active_settings_tab(cx);
+        cx.notify();
+    }
+
+    fn set_proactive_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.proactive_enabled = enabled;
+        save_proactive_config_to_disk(enabled);
+        if !enabled {
+            self.proactive_queue.clear();
+        }
         cx.notify();
     }
 
@@ -3206,6 +3254,7 @@ impl Render for UsamiApp {
                                                 SettingsTab::Chat => {
                                                     let base_url = self.api_client.base_url();
                                                     let has_token = self.api_client.has_token();
+                                                    let proactive_enabled = self.proactive_enabled;
                                                     let msg_count = self.chat_history.len();
                                                     let last_source = self.last_source.clone();
                                                     let last_timing = self.last_timing.clone();
@@ -3268,6 +3317,72 @@ impl Render for UsamiApp {
                                                                         } else {
                                                                             "Defina USAMI_API_TOKEN no ambiente para liberar acesso a Memória e Jeito."
                                                                         }),
+                                                                ),
+                                                        )
+                                                        .child(settings_h3("PROATIVIDADE E LEMBRETES"))
+                                                        .child(
+                                                            div()
+                                                                .p(px(sp.s3))
+                                                                .rounded(px(r.md))
+                                                                .bg(c.card_bg)
+                                                                .border_1()
+                                                                .border_color(c.line)
+                                                                .child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .justify_between()
+                                                                        .items_center()
+                                                                        .child(
+                                                                            div()
+                                                                                .text_size(px(ty.xs))
+                                                                                .font_family(theme::FONT_DISPLAY)
+                                                                                .font_weight(FontWeight::BOLD)
+                                                                                .text_color(c.primary)
+                                                                                .child("EVENTOS PROATIVOS"),
+                                                                        )
+                                                                        .child(
+                                                                            div()
+                                                                                .px(px(6.0))
+                                                                                .py(px(2.0))
+                                                                                .rounded(px(4.0))
+                                                                                .bg(if proactive_enabled { rgba(0x5cb85c22) } else { rgba(0x88888822) })
+                                                                                .border_1()
+                                                                                .border_color(if proactive_enabled { rgba(0x5cb85c66) } else { rgba(0x88888866) })
+                                                                                .text_size(px(ty.xs))
+                                                                                .text_color(if proactive_enabled { rgb(0x5cb85c) } else { rgb(0x888888) })
+                                                                                .child(if proactive_enabled { "ATIVADO" } else { "DESATIVADO" }),
+                                                                        ),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s2))
+                                                                        .text_size(px(ty.sm))
+                                                                        .text_color(c.pearl)
+                                                                        .child("Recebe saudações por horário, lembretes do Obsidian e resumos automáticos via API local."),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mt(px(sp.s3))
+                                                                        .flex()
+                                                                        .child(
+                                                                            div()
+                                                                                .id("toggle-proactive-btn")
+                                                                                .cursor_pointer()
+                                                                                .px(px(14.0))
+                                                                                .py(px(8.0))
+                                                                                .rounded(px(r.sm))
+                                                                                .bg(c.surface_soft)
+                                                                                .border_1()
+                                                                                .border_color(c.line)
+                                                                                .text_size(px(ty.sm))
+                                                                                .text_color(c.pearl)
+                                                                                .hover(|s| s.bg(c.line_strong))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                    let next = !this.proactive_enabled;
+                                                                                    this.set_proactive_enabled(next, cx);
+                                                                                }))
+                                                                                .child(if proactive_enabled { "Desativar proatividade" } else { "Ativar proatividade" }),
+                                                                        ),
                                                                 ),
                                                         )
                                                         .child(settings_h3("ÚLTIMO TURNO DE RESPOSTA"))
@@ -4275,7 +4390,7 @@ fn main() {
 mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
-    use super::{asset_path, first_existing, manifest_dir, push_key_char_with_dead_key};
+    use super::{asset_path, first_existing, manifest_dir, push_key_char_with_dead_key, ProactivityConfig};
 
     #[test]
     fn dead_key_accent_does_not_duplicate_when_os_sends_precomposed_vowel() {
@@ -4342,5 +4457,18 @@ mod tests {
         assert_eq!(first_existing([Some(missing), None]), None);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn proactivity_config_serializes_and_defaults_enabled() {
+        let json = r#"{"enabled":false}"#;
+        let cfg: ProactivityConfig = serde_json::from_str(json).unwrap();
+        assert!(!cfg.enabled);
+
+        let default_cfg: ProactivityConfig = serde_json::from_str("{}").unwrap();
+        assert!(default_cfg.enabled);
+
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        assert!(serialized.contains(r#""enabled":false"#));
     }
 }

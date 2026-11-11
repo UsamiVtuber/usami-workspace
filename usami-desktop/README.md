@@ -31,6 +31,10 @@ com microfone, sem navegador embutido.
   foco o status vira `AUSENTE`; ao voltar ela cumprimenta de acordo com o tempo
   fora, e detecta o fechamento abrupto da sessão anterior. Com a janela em
   primeiro plano e sem interação, ela puxa assunto aos ~3,5, 7 e 10 minutos.
+- Segura o fechamento para se despedir: o X, o Alt+F4 e o "Sair" da bandeja
+  pedem a fala de despedida e a janela só fecha quando o balão aparece e o
+  áudio termina (no mudo, ~1,2 s), com teto de 10 s. Fechar de novo durante a
+  despedida sai na hora.
 
 ### Persistência local
 

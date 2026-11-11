@@ -13,6 +13,7 @@ use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -98,6 +99,15 @@ fn window_minimized_or_hidden() -> bool {
     {
         false
     }
+}
+
+const CLOSE_FAREWELL_MIN: Duration = Duration::from_millis(1200);
+const CLOSE_FAREWELL_MAX: Duration = Duration::from_secs(10);
+
+/// A janela só sai depois da despedida: mínimo legível, áudio terminado e avatar
+/// sem falar — ou o teto rígido, para nunca travar o fechamento.
+fn farewell_can_close(elapsed: Duration, audio_done: bool, speaking: bool) -> bool {
+    (elapsed >= CLOSE_FAREWELL_MIN && audio_done && !speaking) || elapsed >= CLOSE_FAREWELL_MAX
 }
 
 // Caminhos relativos à crate: o app roda de qualquer lugar do disco e continua
@@ -672,6 +682,11 @@ struct UsamiApp {
     last_return_greeting: Instant,
     was_maximized: bool,
     last_maximize_line: Instant,
+    /// Despedida ao fechar: a primeira tentativa segura a janela, a segunda
+    /// libera; o tick fecha sozinho quando o áudio acaba (ou estoura o teto).
+    farewell_started_at: Option<Instant>,
+    farewell_audio_done: Arc<AtomicBool>,
+    close_allowed: bool,
     prefs: storage::UiPrefs,
     session: storage::SessionFile,
     last_prefs_save: Instant,
@@ -909,6 +924,7 @@ impl UsamiApp {
                                 // todo caso, então o estado ausente é reavaliado
                                 // no pulso do timer.
                                 view.refresh_away_state(cx);
+                                view.tick_close_request(cx);
                                 view.maybe_run_idle_prods(cx);
                                 if view.session.touch() {
                                     storage::save_session(&view.session);
@@ -959,6 +975,9 @@ impl UsamiApp {
             last_return_greeting: Instant::now() - Duration::from_secs(300),
             was_maximized: false,
             last_maximize_line: Instant::now() - Duration::from_secs(900),
+            farewell_started_at: None,
+            farewell_audio_done: Arc::new(AtomicBool::new(false)),
+            close_allowed: false,
             prefs,
             session,
             last_prefs_save: Instant::now() - Duration::from_secs(10),
@@ -1080,6 +1099,15 @@ impl UsamiApp {
         });
         self.window_subscriptions.push(bounds_subscription);
         self.window_subscriptions.push(activation_subscription);
+
+        // Fechar (X, Alt+F4 ou "Sair" da bandeja) pede a despedida antes de
+        // sair; o próprio app conclui o fechamento quando ela termina.
+        let close_view = cx.weak_entity();
+        window.on_window_should_close(cx, move |_window, cx| {
+            close_view
+                .update(cx, |this, cx| this.request_close(cx))
+                .unwrap_or(true)
+        });
         // Sem um resize inicial o observador não dispara; guardar a geometria
         // atual já garante que o fechamento salve a janela do primeiro uso.
         let bounds = window.bounds();
@@ -1170,6 +1198,99 @@ impl UsamiApp {
         });
         self.poke(cx);
         cx.notify();
+    }
+
+    /// Primeira tentativa de fechar segura a janela para a despedida; a segunda
+    /// (ou depois de liberado) deixa sair na hora — quem insiste consegue.
+    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.close_allowed || self.farewell_started_at.is_some() {
+            self.close_allowed = true;
+            return true;
+        }
+        self.begin_farewell(cx);
+        false
+    }
+
+    fn begin_farewell(&mut self, cx: &mut Context<Self>) {
+        const LINE: &str = "Hmph... já vai embora? T-tá bom, vai... mas não demora pra voltar, tá?! Ainda tenho umas coisas pra te contar.";
+        self.farewell_started_at = Some(Instant::now());
+        self.show_local_line(LINE, "tsundere", cx);
+
+        if self.is_muted {
+            self.farewell_audio_done.store(true, Ordering::SeqCst);
+            return;
+        }
+        let Some(player) = self.audio_player.clone() else {
+            self.farewell_audio_done.store(true, Ordering::SeqCst);
+            return;
+        };
+
+        let api = Arc::clone(&self.api_client);
+        let vrm_ctrl = self.vrm_controller.clone();
+        let done = Arc::clone(&self.farewell_audio_done);
+        crate::api::tokio_runtime().spawn(async move {
+            match api.stream_tts(LINE, "tsundere").await {
+                Ok(crate::api::TtsStream::Pcm {
+                    sample_rate,
+                    mut response,
+                }) => {
+                    let mouth = vrm_ctrl.clone();
+                    let mut sink = player.play_pcm_stream(sample_rate, move |level| {
+                        mouth.set_speaking(true, level);
+                    });
+                    let mut started = false;
+                    loop {
+                        match response.chunk().await {
+                            Ok(Some(chunk)) => {
+                                if sink.push_i16_le(&chunk) && !started {
+                                    started = true;
+                                    vrm_ctrl.begin_speech_stream();
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(error) => {
+                                eprintln!("[Despedida TTS] stream interrompido: {error}");
+                                break;
+                            }
+                        }
+                    }
+                    let tail = sink.finish();
+                    if started {
+                        let deadline = Instant::now() + Duration::from_secs(15);
+                        while !tail.is_drained() && Instant::now() < deadline {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        vrm_ctrl.end_speech_stream();
+                    }
+                }
+                Ok(crate::api::TtsStream::Audio(bytes)) => {
+                    vrm_ctrl.speak(LINE, Some(bytes.clone()));
+                    if let Err(error) = player.play_wav(bytes) {
+                        eprintln!("[Despedida TTS] falha ao tocar áudio: {error}");
+                    }
+                }
+                Err(error) => eprintln!("[Despedida TTS] falha: {error:?}"),
+            }
+            done.store(true, Ordering::SeqCst);
+        });
+    }
+
+    fn tick_close_request(&mut self, cx: &mut Context<Self>) {
+        let Some(started) = self.farewell_started_at else {
+            return;
+        };
+        let audio_done = self.farewell_audio_done.load(Ordering::SeqCst);
+        if !farewell_can_close(
+            started.elapsed(),
+            audio_done,
+            self.vrm_controller.is_speaking(),
+        ) {
+            return;
+        }
+        self.close_allowed = true;
+        if let Some(handle) = cx.windows().first().copied() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
     }
 
     /// Sem interação e sem fala há alguns minutos, ela chama atenção em vez de
@@ -6060,10 +6181,20 @@ mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
-        ProactivityConfig, asset_path, first_existing, is_duplicate_utterance, manifest_dir,
-        normalize_utterance_key, push_key_char_with_dead_key,
+        ProactivityConfig, asset_path, farewell_can_close, first_existing, is_duplicate_utterance,
+        manifest_dir, normalize_utterance_key, push_key_char_with_dead_key,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn farewell_holds_close_until_audio_ends_or_timeout() {
+        use super::{CLOSE_FAREWELL_MAX, CLOSE_FAREWELL_MIN};
+        assert!(!farewell_can_close(Duration::ZERO, false, false));
+        assert!(!farewell_can_close(CLOSE_FAREWELL_MIN, false, false));
+        assert!(!farewell_can_close(CLOSE_FAREWELL_MIN, true, true));
+        assert!(farewell_can_close(CLOSE_FAREWELL_MIN, true, false));
+        assert!(farewell_can_close(CLOSE_FAREWELL_MAX, false, true));
+    }
 
     #[test]
     fn dead_key_accent_does_not_duplicate_when_os_sends_precomposed_vowel() {

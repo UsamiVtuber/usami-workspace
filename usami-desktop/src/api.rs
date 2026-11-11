@@ -340,6 +340,25 @@ pub struct BondResponse {
     pub bond: BondData,
 }
 
+/// Conquista desbloqueável avaliada pelo core a partir de atividade real.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Achievement {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Chave estável do emblema; o desktop mapeia para um glifo próprio.
+    pub icon: String,
+    pub unlocked: bool,
+    #[serde(rename = "unlockedAt", default)]
+    pub unlocked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AchievementsResponse {
+    pub ok: bool,
+    pub achievements: Vec<Achievement>,
+}
+
 fn default_trait_val() -> u32 {
     50
 }
@@ -752,6 +771,35 @@ impl UsamiApiClient {
                 .map_err(|e| e.to_string())?;
 
             Ok::<BondResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_achievements(&self) -> Result<AchievementsResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/achievements", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<AchievementsResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<AchievementsResponse, String>(res)
         });
 
         match handle.await {

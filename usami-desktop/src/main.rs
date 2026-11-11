@@ -37,11 +37,13 @@ enum SettingsTab {
     About,
 }
 
-/// Abas do hub de romance / diário estilo Visual Novel.
+/// Capítulos do menu estilo Visual Novel ("Midnight Romance").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BondTab {
+    Home,
     Diary,
     Memories,
+    Bonds,
     Achievements,
     Profile,
     Settings,
@@ -696,6 +698,10 @@ struct UsamiApp {
     settings_tab: SettingsTab,
     bond_tab: BondTab,
     chat_history: Vec<ChatMessage>,
+    /// Conquistas avaliadas pelo core (`GET /api/achievements`); lista vazia
+    /// até a primeira resposta.
+    achievements: Vec<api::Achievement>,
+
     /// Estado do vínculo vindo do core (`GET /api/bond`); None até a primeira
     /// resposta. `bond_level`/`bond_exp_pct` acompanham o summary para o pill.
     bond: Option<api::BondData>,
@@ -988,9 +994,10 @@ impl UsamiApp {
             close_subscription,
             active_drawer: ActiveDrawer::None,
             settings_tab: SettingsTab::Chat,
-            bond_tab: BondTab::Diary,
+            bond_tab: BondTab::Home,
             chat_history,
             bond: None,
+            achievements: Vec::new(),
             bond_level: 1,
             bond_exp_pct: 0,
             bg_asset_path,
@@ -2160,8 +2167,38 @@ impl UsamiApp {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
                             match res {
-                                Ok(resp) => view.apply_bond(resp.bond),
+                                Ok(resp) => {
+                                    view.apply_bond(resp.bond);
+                                    // O core reavalia conquistas junto com o
+                                    // vínculo; recarrega para refletir datas.
+                                    view.fetch_achievements(cx);
+                                }
                                 Err(error) => eprintln!("[Vínculo] indisponível: {error}"),
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn fetch_achievements(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_achievements().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            match res {
+                                Ok(resp) => view.achievements = resp.achievements,
+                                Err(error) => eprintln!("[Conquistas] indisponível: {error}"),
                             }
                             cx.notify();
                         });
@@ -2497,6 +2534,7 @@ impl UsamiApp {
 
 fn render_vn_tab_btn(
     id: &'static str,
+    number: &'static str,
     label: &'static str,
     is_active: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -2507,11 +2545,11 @@ fn render_vn_tab_btn(
         .id(id)
         .cursor_pointer()
         .h(px(38.0))
-        .px(px(14.0))
+        .px(px(12.0))
         .rounded(px(12.0))
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(10.0))
         .bg(if is_active {
             t.vn_tab_active_bg()
         } else {
@@ -2528,49 +2566,303 @@ fn render_vn_tab_btn(
         } else {
             vec![]
         })
-        .text_size(px(12.5))
-        .font_weight(if is_active {
-            FontWeight::BOLD
-        } else {
-            FontWeight::NORMAL
-        })
-        .text_color(if is_active { c.pearl } else { c.muted })
         .hover(move |s| {
             if !is_active {
-                s.bg(rgba(0xffa6c926)).text_color(c.pearl)
+                s.bg(rgba(0xf5c3e126))
             } else {
                 s
             }
         })
         .on_click(on_click)
-        .child(label)
+        // Numeração de capítulo em serifa
+        .child(
+            div()
+                .w(px(22.0))
+                .text_size(px(12.0))
+                .font_family(theme::FONT_DISPLAY)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(if is_active {
+                    c.pearl
+                } else {
+                    theme::Palette::vn_pink_soft()
+                })
+                .child(number),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(12.5))
+                .font_family(theme::FONT_BODY)
+                .font_weight(if is_active {
+                    FontWeight::BOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if is_active { c.pearl } else { c.muted })
+                .child(label),
+        )
+        // Ornamento no estado ativo
+        .when(is_active, |el| {
+            el.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(c.pearl)
+                    .child("✦"),
+            )
+        })
 }
 
-fn render_vn_tab_diary(
+/// Formata data civil (dd/mm/aaaa) a partir de epoch ms, sem dependência de
+/// crate de data: converte dias epoch → ano/mês/dia pelo algoritmo civil.
+fn format_date(at_ms: i64) -> String {
+    let days = at_ms.div_euclid(86_400_000);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{:02}/{:02}/{:04}", d, m, year)
+}
+
+/// Data curta de um `unlockedAt` ISO (`2026-11-10T18:30:00.000Z`).
+fn format_unlocked_at(iso: &str) -> String {
+    let date = iso.get(..10).unwrap_or(iso);
+    let mut parts = date.split('-');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(year), Some(month), Some(day)) => format!("{day}/{month}/{}", &year[..year.len().min(4)]),
+        _ => date.to_string(),
+    }
+}
+
+/// Saída da janela principal: capítulo "Início" — cena de convivência com a
+/// personagem (caixa de diálogo VN + indicadores compactos de vínculo).
+fn render_vn_tab_home(
     bond_level: u32,
     bond: Option<&api::BondData>,
     t: &theme::Theme,
 ) -> impl IntoElement {
     let c = t.color;
-    let (carinho, humor, companhia, carinho_pct, humor_pct, companhia_pct, level_name, line) =
-        match bond {
-            Some(b) => (
-                b.intimacy.carinho,
-                b.intimacy.humor,
-                b.intimacy.companhia,
-                b.meters.carinho.progress,
-                b.meters.humor.progress,
-                b.meters.companhia.progress,
-                b.summary.name.clone(),
-                b.summary.line.clone(),
-            ),
-            None => (0, 0, 0, 0.0, 0.0, 0.0, "—".to_string(), "—".to_string()),
-        };
-    let history: Vec<(String, String, String)> = bond
+    let hour = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| ((elapsed.as_secs() / 3600) % 24) as i64)
+        .unwrap_or(0);
+    // A janela roda no fuso local do sistema (GetLocalTime); epoch é UTC, mas
+    // para um cumprimento informal o desvio de horas é irrelevante.
+    let greeting = match hour {
+        5..=11 => "Bom dia",
+        12..=17 => "Boa tarde",
+        _ => "Boa noite",
+    };
+    let (level_name, line, exp_pct) = match bond {
+        Some(b) => (
+            b.summary.name.clone(),
+            b.summary.line.clone(),
+            (b.summary.progress.clamp(0.0, 1.0) * 100.0).round() as u32,
+        ),
+        None => ("—".to_string(), "—".to_string(), 0),
+    };
+    let dialogue = if line.is_empty() || line == "—" {
+        "H-hmph! Você demorou... mas eu esperei aqui do seu lado o tempo todo. ♡".to_string()
+    } else {
+        line
+    };
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(14.0))
+        .overflow_hidden()
+        // Cumprimento editorial
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(28.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c.pearl)
+                        .child(format!("{greeting},")),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(theme::Palette::vn_pink_soft())
+                        .child("o quarto da Usami estava esperando por você."),
+                ),
+        )
+        // Caixa de diálogo estilo Visual Novel
+        .child(
+            div()
+                .p(px(14.0))
+                .rounded(px(16.0))
+                .bg(t.vn_card_bg())
+                .border_1()
+                .border_color(theme::Palette::vn_card_border())
+                .shadow(t.shadow.vn_card.clone())
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(2.0))
+                        .rounded(px(999.0))
+                        .bg(t.vn_tab_active_bg())
+                        .text_size(px(11.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("Usami ♡"),
+                )
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .line_height(px(21.0))
+                        .font(theme::font_character_italic())
+                        .text_color(c.pearl)
+                        .child(format!("“{dialogue}”")),
+                ),
+        )
+        // Indicadores compactos de relacionamento
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(10.0))
+                // Nível
+                .child(
+                    div()
+                        .flex_1()
+                        .p(px(10.0))
+                        .rounded(px(12.0))
+                        .bg(t.vn_card_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_card_border())
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(c.muted)
+                                .child("Vínculo"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme::Palette::vn_pink_soft())
+                                .child(format!("♥ Nv. {bond_level}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(c.faint)
+                                .child(level_name),
+                        ),
+                )
+                // EXP
+                .child(
+                    div()
+                        .flex_1()
+                        .p(px(10.0))
+                        .rounded(px(12.0))
+                        .bg(t.vn_card_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_card_border())
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(c.muted)
+                                .child("Experiência"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .items_end()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(6.0))
+                                        .rounded_full()
+                                        .bg(c.bond_track)
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(relative(exp_pct.clamp(0, 100) as f32 / 100.0))
+                                                .rounded_full()
+                                                .bg(t.vn_exp_fill_bg()),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme::Palette::vn_pink_soft())
+                                .child(format!("{exp_pct}%")),
+                        ),
+                )
+                // Conquistas
+                .child(
+                    div()
+                        .flex_1()
+                        .p(px(10.0))
+                        .rounded(px(12.0))
+                        .bg(t.vn_card_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_card_border())
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(c.muted)
+                                .child("Conquistas"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme::Palette::vn_gold())
+                                .child("✦ Emblemas"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(c.faint)
+                                .child("Capítulo 05"),
+                        ),
+                ),
+        )
+}
+
+/// Capítulo "Diário": páginas cronológicas com os momentos reais do vínculo,
+/// compostas como anotações íntimas (bilhetinho + registros datados).
+fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl IntoElement {
+    let c = t.color;
+    let line = bond
+        .map(|b| b.summary.line.clone())
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| "Cada dia ao seu lado vira uma página nova.".to_string());
+    let entries: Vec<(String, String, String, String)> = bond
         .map(|b| {
             b.log
                 .iter()
-                .take(3)
+                .take(12)
                 .map(|entry| {
                     let title = if entry.count > 1 {
                         format!("{} (×{})", entry.text, entry.count)
@@ -2581,228 +2873,102 @@ fn render_vn_tab_diary(
                         format!("[{}]", vn_history_tag(&entry.kind)),
                         title,
                         relative_when(entry.at),
+                        format_date(entry.at),
                     )
                 })
                 .collect()
         })
         .unwrap_or_default();
+    let today = format_date(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0),
+    );
     div()
         .flex_1()
         .flex()
         .flex_col()
-        .gap(px(10.0))
+        .gap(px(12.0))
         .overflow_hidden()
-        // 1. Card Nossos Vínculos (Caderninho + Post-it)
+        // Cabeçalho editorial
         .child(
             div()
                 .flex()
-                .flex_row()
-                .gap(px(12.0))
-                .p(px(12.0))
-                .rounded(px(18.0))
-                .bg(t.vn_card_bg())
-                .border_1()
-                .border_color(theme::Palette::vn_card_border())
-                .shadow(t.shadow.vn_card.clone())
-                // Lado Esquerdo: Barras de Atributos
+                .items_center()
+                .justify_between()
                 .child(
                     div()
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(
-                            div().flex().items_center().gap(px(6.0)).child(
-                                div()
-                                    .text_size(px(14.0))
-                                    .font_family(theme::FONT_CHARACTER)
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(c.pearl)
-                                    .child("Nossos Vínculos"),
-                            ),
-                        )
-                        // Carinho
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .text_color(c.pearl)
-                                                .child("Carinho"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(10.5))
-                                                .text_color(theme::Palette::vn_pink_soft())
-                                                .child(format!("{carinho} XP")),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(7.0))
-                                        .rounded_full()
-                                        .bg(c.bond_track)
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(relative(carinho_pct.clamp(0.0, 1.0)))
-                                                .rounded_full()
-                                                .bg(t.vn_exp_fill_bg()),
-                                        ),
-                                ),
-                        )
-                        // Humor
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .text_color(c.pearl)
-                                                .child("Humor"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(10.5))
-                                                .text_color(theme::Palette::vn_pink_soft())
-                                                .child(format!("{humor} XP")),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(7.0))
-                                        .rounded_full()
-                                        .bg(c.bond_track)
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(relative(humor_pct.clamp(0.0, 1.0)))
-                                                .rounded_full()
-                                                .bg(t.bond_fill_bg()),
-                                        ),
-                                ),
-                        )
-                        // Companhia
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .text_color(c.pearl)
-                                                .child("Companhia"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(10.5))
-                                                .text_color(theme::Palette::vn_pink_soft())
-                                                .child(format!("{companhia} XP")),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(7.0))
-                                        .rounded_full()
-                                        .bg(c.bond_track)
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(relative(companhia_pct.clamp(0.0, 1.0)))
-                                                .rounded_full()
-                                                .bg(t.vn_exp_fill_bg()),
-                                        ),
-                                ),
-                        ),
+                        .text_size(px(16.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("Diário"),
                 )
-                // Lado Direito: Post-it decorado com bilhetinho
                 .child(
                     div()
-                        .w(px(210.0))
-                        .flex_shrink_0()
-                        .p(px(12.0))
-                        .rounded(px(14.0))
-                        .bg(rgb(0xfff0f7))
-                        .border_1()
-                        .border_color(rgba(0xffa6c999))
+                        .text_size(px(11.0))
+                        .font(theme::font_character_italic())
+                        .text_color(theme::Palette::vn_pink_soft())
+                        .child(today),
+                ),
+        )
+        // Bilhetinho com a frase do vínculo
+        .child(
+            div()
+                .p(px(12.0))
+                .rounded(px(14.0))
+                .bg(rgb(0xfae9f4))
+                .border_1()
+                .border_color(rgba(0xf5c3e199))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
                         .flex()
-                        .flex_col()
+                        .items_center()
                         .justify_between()
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(0x8a2b6e))
-                                        .child("⭐ BILHETINHO"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(0xd1478f))
-                                        .child("♡"),
-                                ),
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x8a2b6e))
+                                .child("✦ BILHETINHO DE HOJE"),
                         )
                         .child(
                             div()
-                                .my(px(6.0))
-                                .text_size(px(13.0))
-                                .font(theme::font_character_italic())
-                                .line_height(px(18.0))
-                                .text_color(rgb(0x4a183b))
-                                .child(format!("“{line}”")),
-                        )
+                                .text_size(px(11.0))
+                                .text_color(rgb(0xd1478f))
+                                .child("♡"),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font(theme::font_character_italic())
+                        .line_height(px(18.0))
+                        .text_color(rgb(0x4a183b))
+                        .child(format!("“{line}”")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
                         .child(
                             div()
-                                .flex()
-                                .justify_end()
-                                .items_center()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(0x8a2b6e))
-                                        .child("— Usami ♡"),
-                                ),
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x8a2b6e))
+                                .child("— Usami ♡"),
                         ),
                 ),
         )
-        // 2. Card Progresso do Relacionamento
+        // Registros cronológicos
         .child(
             div()
-                .p(px(10.0))
+                .flex_1()
+                .p(px(12.0))
                 .rounded(px(16.0))
                 .bg(t.vn_card_bg())
                 .border_1()
@@ -2816,202 +2982,55 @@ fn render_vn_tab_diary(
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(c.pearl)
-                        .child("Progresso do Relacionamento"),
+                        .child("Páginas recentes"),
                 )
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .justify_between()
-                        .px(px(14.0))
-                        .py(px(4.0))
-                        // Marco 1
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .text_color(theme::Palette::vn_pink_soft())
-                                        .child("♥"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c.pearl)
-                                        .child("Nv.1"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.0))
-                                        .text_color(c.muted)
-                                        .child("Conhecidos"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .h(px(2.0))
-                                .mx(px(8.0))
-                                .bg(theme::Palette::vn_pink_neon()),
-                        )
-                        // Marco 2 (Ativo)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .text_color(theme::Palette::vn_pink_neon())
-                                        .child("★"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.5))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme::Palette::vn_pink_soft())
-                                        .child(format!("Nv.{}", bond_level)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.0))
-                                        .text_color(c.pearl)
-                                        .child(level_name),
-                                ),
-                        )
-                        .child(div().flex_1().h(px(2.0)).mx(px(8.0)).bg(c.bond_track))
-                        // Marco 3
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(2.0))
-                                .child(div().text_size(px(10.0)).text_color(c.muted).child("[X]"))
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c.muted)
-                                        .child("Nv.3"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.0))
-                                        .text_color(c.faint)
-                                        .child("Próximo"),
-                                ),
-                        ),
-                ),
-        )
-        // 3. Grid Inferior (Histórico Recente e Memórias Especiais)
-        .child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_row()
-                .gap(px(12.0))
-                .overflow_hidden()
-                // Card Histórico Recente
-                .child(
-                    div()
-                        .flex_1()
-                        .p(px(10.0))
-                        .rounded(px(16.0))
-                        .bg(t.vn_card_bg())
-                        .border_1()
-                        .border_color(theme::Palette::vn_card_border())
-                        .flex()
                         .flex_col()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .items_center()
-                                .child(
+                        .gap(px(4.0))
+                        .when(entries.is_empty(), |col| {
+                            col.child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(c.muted)
+                                    .child("Nenhum momento registrado ainda — converse com a Usami para preencher estas páginas."),
+                            )
+                        })
+                        .children(
+                            entries
+                                .into_iter()
+                                .map(|(tag, title, when, date)| {
                                     div()
-                                        .text_size(px(12.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c.pearl)
-                                        .child("Histórico Recente"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.5))
-                                        .text_color(theme::Palette::vn_pink_soft())
-                                        .child("Ver mais ›"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .when(history.is_empty(), |col| {
-                                    col.child(
-                                        div()
-                                            .text_size(px(10.5))
-                                            .text_color(c.muted)
-                                            .child("Nenhum momento registrado ainda."),
-                                    )
-                                })
-                                .children(
-                                    history
-                                        .into_iter()
-                                        .map(|(tag, title, when)| {
-                                            render_vn_history_item(tag, title, when)
-                                        }),
-                                ),
-                        ),
-                )
-                // Card Memórias Especiais (Mini Polaroids)
-                .child(
-                    div()
-                        .flex_1()
-                        .p(px(10.0))
-                        .rounded(px(16.0))
-                        .bg(t.vn_card_bg())
-                        .border_1()
-                        .border_color(theme::Palette::vn_card_border())
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c.pearl)
-                                        .child("Memórias Especiais"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(9.5))
-                                        .text_color(theme::Palette::vn_pink_soft())
-                                        .child("Ver tudo ›"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .justify_between()
-                                .gap(px(6.0))
-                                .child(render_vn_polaroid("[SORRISO]", "Sorriso", "1º Momento"))
-                                .child(render_vn_polaroid("[TÍMIDA]", "Tímida", "Coradinha"))
-                                .child(render_vn_polaroid("[SONHOS]", "Sonhos", "Tranquila")),
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .p(px(6.0))
+                                        .rounded(px(8.0))
+                                        .bg(rgba(0x22123d66))
+                                        .child(
+                                            div()
+                                                .w(px(76.0))
+                                                .text_size(px(9.5))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(theme::Palette::vn_pink_soft())
+                                                .child(tag),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_size(px(11.5))
+                                                .text_color(c.pearl)
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .font(theme::font_character_italic())
+                                                .text_color(c.faint)
+                                                .child(format!("{when} · {date}")),
+                                        )
+                                }),
                         ),
                 ),
         )
@@ -3079,110 +3098,104 @@ fn render_vn_history_item(icon: String, title: String, time: String) -> impl Int
         )
 }
 
-fn render_vn_polaroid(
-    emoji: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
-) -> impl IntoElement {
-    div()
-        .flex_1()
-        .p(px(6.0))
-        .pb(px(8.0))
-        .rounded(px(10.0))
-        .bg(rgb(0xfff6fb))
-        .border_1()
-        .border_color(rgba(0xffa6c9b3))
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(2.0))
-        .child(
-            div()
-                .w_full()
-                .h(px(44.0))
-                .rounded(px(6.0))
-                .bg(rgb(0x28143d))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(div().text_size(px(22.0)).child(emoji)),
-        )
-        .child(
-            div()
-                .text_size(px(9.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x4a183b))
-                .child(title),
-        )
-        .child(
-            div()
-                .text_size(px(8.5))
-                .text_color(rgb(0x8a306e))
-                .child(subtitle),
-        )
-}
 
-fn render_vn_tab_memories(t: &theme::Theme) -> impl IntoElement {
+/// Capítulo "Álbum de Memórias": lembranças derivadas de marcos reais do
+/// vínculo (primeiro momento, risada, voz, chamada) + próximos capítulos
+/// bloqueados. Nada de memória fictícia.
+fn render_vn_tab_memories(bond: Option<&api::BondData>, t: &theme::Theme) -> impl IntoElement {
     let c = t.color;
+    let mut memories: Vec<(&'static str, String, String, bool, String)> = Vec::new();
+    if let Some(b) = bond {
+        let first_of = |kind: &str| b.log.iter().rev().find(|e| e.kind == kind);
+        let any = b.log.first();
+        if let Some(entry) = any {
+            memories.push((
+                "[CAPÍTULO]",
+                "O Primeiro Momento".to_string(),
+                entry.text.clone(),
+                true,
+                format_date(entry.at),
+            ));
+        }
+        if let Some(entry) = first_of("laugh") {
+            memories.push((
+                "[RISADA]",
+                "Primeira Risada".to_string(),
+                entry.text.clone(),
+                true,
+                format_date(entry.at),
+            ));
+        }
+        if let Some(entry) = first_of("voice") {
+            memories.push((
+                "[VOZ]",
+                "Primeira Vez por Voz".to_string(),
+                entry.text.clone(),
+                true,
+                format_date(entry.at),
+            ));
+        }
+        if let Some(entry) = first_of("call") {
+            memories.push((
+                "[CHAMADA]",
+                "Primeira Chamada".to_string(),
+                entry.text.clone(),
+                true,
+                format_date(entry.at),
+            ));
+        }
+        if !b.summary.max {
+            let next = b.summary.level + 1;
+            memories.push((
+                "[PRÓXIMO]",
+                format!("Nv. {next} — {}", b.summary.name),
+                "Continue dividindo momentos com a Usami para desbloquear este capítulo.".to_string(),
+                false,
+                String::new(),
+            ));
+        }
+    }
     div()
         .flex_1()
         .flex()
         .flex_col()
         .gap(px(12.0))
+        .overflow_hidden()
         .child(
             div()
                 .text_size(px(16.0))
                 .font_family(theme::FONT_CHARACTER)
                 .font_weight(FontWeight::BOLD)
                 .text_color(c.pearl)
-                .child("Álbum de Memórias Especiais"),
+                .child("Álbum de Memórias"),
         )
         .child(
             div()
                 .text_size(px(11.5))
                 .text_color(theme::Palette::vn_pink_soft())
-                .child("Momentos inesquecíveis que você e a Usami colecionaram juntos:"),
+                .child("Capítulos reais da história de vocês — os próximos ainda estão por escrever:"),
         )
         .child(
             div()
                 .flex()
                 .flex_wrap()
                 .gap(px(12.0))
-                .child(render_vn_large_memory(
-                    "[SORRISO]",
-                    "O Primeiro Sorriso",
-                    "Quando você disse uma piada boba e ela não resistiu.",
-                    "Desbloqueado",
-                ))
-                .child(render_vn_large_memory(
-                    "[TÍMIDA]",
-                    "Ficou sem Graça",
-                    "Você chamou a Usami de fofa e as bochechas dela arderam.",
-                    "Desbloqueado",
-                ))
-                .child(render_vn_large_memory(
-                    "[NOITE]",
-                    "Conversa Noturna",
-                    "Vocês ficaram conversando até altas horas no silêncio da noite.",
-                    "Desbloqueado",
-                ))
-                .child(render_vn_large_memory(
-                    "[SEGREDO]",
-                    "Segredo Confiado",
-                    "A Usami contou o motivo de usar a fita de laço.",
-                    "Bloqueado",
+                .children(memories.into_iter().map(
+                    |(tag, title, desc, unlocked, date)| {
+                        render_vn_large_memory(tag, title, desc, unlocked, date)
+                    },
                 )),
         )
 }
 
 fn render_vn_large_memory(
-    emoji: &'static str,
-    title: &'static str,
-    desc: &'static str,
-    status: &'static str,
+    tag: &'static str,
+    title: String,
+    desc: String,
+    is_unlocked: bool,
+    date: String,
 ) -> impl IntoElement {
     let t = theme::theme();
-    let is_unlocked = status == "Desbloqueado";
     div()
         .w(px(320.0))
         .p(px(10.0))
@@ -3213,7 +3226,7 @@ fn render_vn_large_memory(
                         .text_size(px(10.5))
                         .font_weight(FontWeight::BOLD)
                         .text_color(if is_unlocked { theme::Palette::vn_pink_soft() } else { t.color.muted })
-                        .child(if is_unlocked { emoji } else { "[X]" }),
+                        .child(if is_unlocked { tag } else { "[?]" }),
                 ),
         )
         .child(
@@ -3225,6 +3238,7 @@ fn render_vn_large_memory(
                 .child(
                     div()
                         .text_size(px(12.5))
+                        .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(t.color.pearl)
                         .child(title),
@@ -3239,82 +3253,278 @@ fn render_vn_large_memory(
                 .child(
                     div()
                         .text_size(px(9.5))
+                        .font(theme::font_character_italic())
                         .text_color(if is_unlocked {
                             theme::Palette::vn_pink_soft()
                         } else {
                             t.color.faint
                         })
-                        .child(status),
+                        .child(if is_unlocked {
+                            format!("✦ {date}")
+                        } else {
+                            "Bloqueado".to_string()
+                        }),
                 ),
         )
 }
 
-fn render_vn_tab_achievements(t: &theme::Theme) -> impl IntoElement {
+/// Capítulo "Laços": o relacionamento em si — medidores, progresso de nível e
+/// os momentos que vocês construíram juntos.
+fn render_vn_tab_bonds(
+    bond_level: u32,
+    bond: Option<&api::BondData>,
+    t: &theme::Theme,
+) -> impl IntoElement {
     let c = t.color;
+    let (carinho, humor, companhia, carinho_pct, humor_pct, companhia_pct, level_name) =
+        match bond {
+            Some(b) => (
+                b.intimacy.carinho,
+                b.intimacy.humor,
+                b.intimacy.companhia,
+                b.meters.carinho.progress,
+                b.meters.humor.progress,
+                b.meters.companhia.progress,
+                b.summary.name.clone(),
+            ),
+            None => (0, 0, 0, 0.0, 0.0, 0.0, "—".to_string()),
+        };
+    let meters: [(String, u32, f32); 3] = [
+        ("Carinho".to_string(), carinho, carinho_pct),
+        ("Humor".to_string(), humor, humor_pct),
+        ("Companhia".to_string(), companhia, companhia_pct),
+    ];
+    let history: Vec<(String, String, String)> = bond
+        .map(|b| {
+            b.log
+                .iter()
+                .take(6)
+                .map(|entry| {
+                    let title = if entry.count > 1 {
+                        format!("{} (×{})", entry.text, entry.count)
+                    } else {
+                        entry.text.clone()
+                    };
+                    (
+                        format!("[{}]", vn_history_tag(&entry.kind)),
+                        title,
+                        relative_when(entry.at),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     div()
         .flex_1()
         .flex()
         .flex_col()
         .gap(px(12.0))
+        .overflow_hidden()
         .child(
             div()
-                .text_size(px(16.0))
-                .font_family(theme::FONT_CHARACTER)
-                .font_weight(FontWeight::BOLD)
-                .text_color(c.pearl)
-                .child("Conquistas & Insígnias"),
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("Laços"),
+                )
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(2.0))
+                        .rounded(px(999.0))
+                        .bg(t.vn_heart_badge_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_border_bright())
+                        .text_size(px(11.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child(format!("♥ Nv. {bond_level} · {level_name}")),
+                ),
+        )
+        // Medidores delicados
+        .child(
+            div()
+                .p(px(12.0))
+                .rounded(px(16.0))
+                .bg(t.vn_card_bg())
+                .border_1()
+                .border_color(theme::Palette::vn_card_border())
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .children(meters.into_iter().map(|(label, xp, pct)| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(c.pearl)
+                                        .child(label),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font(theme::font_character_italic())
+                                        .text_color(theme::Palette::vn_pink_soft())
+                                        .child(format!("{xp} XP")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(7.0))
+                                .rounded_full()
+                                .bg(c.bond_track)
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(pct.clamp(0.0, 1.0)))
+                                        .rounded_full()
+                                        .bg(t.vn_exp_fill_bg()),
+                                ),
+                        )
+                })),
+        )
+        // Momentos recentes
+        .child(
+            div()
+                .flex_1()
+                .p(px(12.0))
+                .rounded(px(16.0))
+                .bg(t.vn_card_bg())
+                .border_1()
+                .border_color(theme::Palette::vn_card_border())
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("Momentos que nos uniram"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .when(history.is_empty(), |col| {
+                            col.child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(c.muted)
+                                    .child("A história de vocês ainda está começando."),
+                            )
+                        })
+                        .children(
+                            history
+                                .into_iter()
+                                .map(|(tag, title, when)| {
+                                    render_vn_history_item(tag, title, when)
+                                }),
+                        ),
+                ),
+        )
+}
+
+/// Glifo do emblema a partir da chave estável do catálogo do core.
+fn achievement_glyph(icon: &str) -> &'static str {
+    match icon {
+        "chat" => "✉",
+        "smile" => "☺",
+        "message" => "✎",
+        "mic" => "♪",
+        "phone" => "☎",
+        "heart" => "♥",
+        "star" => "★",
+        "sparkles" => "✦",
+        "crown" => "♛",
+        _ => "✧",
+    }
+}
+
+/// Capítulo "Conquistas": emblemas avaliados pelo core a partir de atividade
+/// real; bloqueados aparecem apagados até serem conquistados.
+fn render_vn_tab_achievements(
+    achievements: &[api::Achievement],
+    t: &theme::Theme,
+) -> impl IntoElement {
+    let c = t.color;
+    let unlocked = achievements.iter().filter(|a| a.unlocked).count();
+    let total = achievements.len();
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("Conquistas"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font(theme::font_character_italic())
+                        .text_color(theme::Palette::vn_gold())
+                        .child(format!("✦ {unlocked} de {total} emblemas")),
+                ),
         )
         .child(
             div()
                 .flex()
                 .flex_wrap()
                 .gap(px(10.0))
-                .child(render_vn_achievement_badge(
-                    "[01]",
-                    "Primeiro Olá",
-                    "Iniciou o aplicativo e conheceu a Usami.",
-                    true,
-                ))
-                .child(render_vn_achievement_badge(
-                    "[02]",
-                    "Coração Quentinho",
-                    "Atingiu Nível 2 de Vínculo.",
-                    true,
-                ))
-                .child(render_vn_achievement_badge(
-                    "[03]",
-                    "Na Mesma Sintonia",
-                    "Conversou por voz usando o microfone.",
-                    true,
-                ))
-                .child(render_vn_achievement_badge(
-                    "[04]",
-                    "Madrugando Juntos",
-                    "Ficou online após a meia-noite.",
-                    true,
-                ))
-                .child(render_vn_achievement_badge(
-                    "[05]",
-                    "Apreciador de Arte",
-                    "Enviou uma imagem ou desenho para ela.",
-                    false,
-                ))
-                .child(render_vn_achievement_badge(
-                    "[06]",
-                    "Coração Conectado",
-                    "Atingiu o nível máximo de afeição.",
-                    false,
-                )),
+                .when(achievements.is_empty(), |col| {
+                    col.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(c.muted)
+                            .child("As conquistas aparecem quando o servidor local estiver disponível."),
+                    )
+                })
+                .children(
+                    achievements
+                        .iter()
+                        .map(|a| render_vn_achievement_badge(a)),
+                ),
         )
 }
 
-fn render_vn_achievement_badge(
-    icon: &'static str,
-    name: &'static str,
-    desc: &'static str,
-    unlocked: bool,
-) -> impl IntoElement {
+fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElement {
     let t = theme::theme();
+    let unlocked = a.unlocked;
+    let date = a
+        .unlocked_at
+        .as_deref()
+        .map(format_unlocked_at)
+        .unwrap_or_default();
     div()
         .w(px(320.0))
         .p(px(8.0))
@@ -3343,10 +3553,10 @@ fn render_vn_achievement_badge(
                 .justify_center()
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(px(13.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(if unlocked { t.color.pearl } else { t.color.muted })
-                        .child(if unlocked { icon } else { "[X]" }),
+                        .child(if unlocked { achievement_glyph(&a.icon) } else { "✧" }),
                 ),
         )
         .child(
@@ -3354,18 +3564,39 @@ fn render_vn_achievement_badge(
                 .flex_1()
                 .flex()
                 .flex_col()
+                .gap(px(1.0))
                 .child(
                     div()
                         .text_size(px(12.0))
+                        .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
-                        .text_color(t.color.pearl)
-                        .child(name),
+                        .text_color(if unlocked {
+                            t.color.pearl
+                        } else {
+                            t.color.faint
+                        })
+                        .child(a.name.clone()),
                 )
                 .child(
                     div()
                         .text_size(px(10.0))
                         .text_color(t.color.muted)
-                        .child(desc),
+                        .child(a.description.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.0))
+                        .font(theme::font_character_italic())
+                        .text_color(if unlocked {
+                            theme::Palette::vn_gold()
+                        } else {
+                            t.color.faint
+                        })
+                        .child(if unlocked {
+                            format!("✦ {date}")
+                        } else {
+                            "Ainda por conquistar".to_string()
+                        }),
                 ),
         )
 }
@@ -3390,7 +3621,7 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                 .child(
                     div()
                         .text_size(px(16.0))
-                        .font_family(theme::FONT_CHARACTER)
+                        .font(theme::font_with_jp(theme::FONT_CHARACTER))
                         .font_weight(FontWeight::BOLD)
                         .text_color(c.pearl)
                         .child("Ficha da Usami (ウサミ)"),
@@ -3402,9 +3633,9 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                         .text_color(theme::Palette::vn_pink_soft())
                         .p(px(4.0))
                         .rounded(px(999.0))
-                        .bg(rgba(0xff79c622))
+                        .bg(rgba(0xf052b622))
                         .border_1()
-                        .border_color(rgba(0xff79c655))
+                        .border_color(rgba(0xf052b655))
                         .child("Sonho: Collab c/ Neuro-sama"),
                 ),
         )
@@ -3443,9 +3674,9 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                 .mt(px(4.0))
                 .p(px(10.0))
                 .rounded(px(10.0))
-                .bg(rgba(0xff79c61a))
+                .bg(rgba(0xf052b61a))
                 .border_1()
-                .border_color(rgba(0xff79c644))
+                .border_color(rgba(0xf052b644))
                 .text_size(px(12.0))
                 .font_family(theme::FONT_CHARACTER)
                 .text_color(c.pearl)
@@ -3580,6 +3811,7 @@ impl Render for UsamiApp {
         let bond_exp_pct = self.bond_exp_pct;
         let bond = self.bond.clone();
         let bond_tab = self.bond_tab;
+        let achievements = self.achievements.clone();
         let show_bubble = self.show_bubble;
         let bg_asset = self.bg_asset_path.clone();
         let vrm_entity = self.vrm_view.clone();
@@ -5002,7 +5234,7 @@ impl Render for UsamiApp {
                                                             rgba(0x00000000)
                                                         })
                                                         .when(selected, |el| {
-                                                            el.shadow(theme::glow(rgba(0xffa6c94d), 12.0))
+                                                            el.shadow(theme::glow(rgba(0xf5c3e14d), 12.0))
                                                         })
                                                         .text_size(px(ty.tab))
                                                         .font_family(theme::FONT_DISPLAY)
@@ -6082,6 +6314,7 @@ impl Render for UsamiApp {
                                                         .child(
                                                             div()
                                                                 .text_size(px(ty.xs))
+                                                                .font(theme::font_with_jp(theme::FONT_DISPLAY))
                                                                 .text_color(theme::Palette::vn_pink_soft())
                                                                 .child("ウサミ · VN Romance Hub"),
                                                         )
@@ -6099,33 +6332,44 @@ impl Render for UsamiApp {
                                                         .h(px(1.0))
                                                         .bg(theme::Palette::vn_card_border()),
                                                 )
-                                                // Menu de abas verticais
+                                                // Menu de capítulos verticais
                                                 .child(
                                                     div()
                                                         .flex()
                                                         .flex_col()
                                                         .gap(px(6.0))
-                                                        .child(render_vn_tab_btn("vn-tab-diary", "Meu Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-home", "01", "Início", bond_tab == BondTab::Home, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Home;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-diary", "02", "Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Diary;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-memories", "Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-memories", "03", "Álbum de Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Memories;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-achievements", "Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Achievements;
+                                                        .child(render_vn_tab_btn("vn-tab-bonds", "04", "Laços", bond_tab == BondTab::Bonds, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Bonds;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-profile", "Sobre Mim", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-achievements", "05", "Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Achievements;
+                                                            this.fetch_achievements(cx);
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-profile", "06", "Perfil da Usami", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Profile;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-settings", "Configurações", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-settings", "07", "Ajustes", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Settings;
                                                             this.poke(cx);
                                                             cx.notify();
@@ -6299,9 +6543,11 @@ impl Render for UsamiApp {
                                         // Conteúdo dinâmico da Aba
                                         .child(
                                             match bond_tab {
-                                                BondTab::Diary => render_vn_tab_diary(bond_level, bond.as_ref(), &t).into_any_element(),
-                                                BondTab::Memories => render_vn_tab_memories(&t).into_any_element(),
-                                                BondTab::Achievements => render_vn_tab_achievements(&t).into_any_element(),
+                                                BondTab::Home => render_vn_tab_home(bond_level, bond.as_ref(), &t).into_any_element(),
+                                                BondTab::Diary => render_vn_tab_diary(bond.as_ref(), &t).into_any_element(),
+                                                BondTab::Memories => render_vn_tab_memories(bond.as_ref(), &t).into_any_element(),
+                                                BondTab::Bonds => render_vn_tab_bonds(bond_level, bond.as_ref(), &t).into_any_element(),
+                                                BondTab::Achievements => render_vn_tab_achievements(&achievements, &t).into_any_element(),
                                                 BondTab::Profile => render_vn_tab_profile(&t).into_any_element(),
                                                 BondTab::Settings => render_vn_tab_settings(&t, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                     this.active_drawer = ActiveDrawer::Settings;
@@ -6350,6 +6596,7 @@ fn main() {
                 window.focus(&view.read(cx).focus_handle);
                 view.update(cx, |this, cx| this.attach_window_observers(window, cx));
                 view.update(cx, |this, cx| this.fetch_bond(cx));
+                view.update(cx, |this, cx| this.fetch_achievements(cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view

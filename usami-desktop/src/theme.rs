@@ -1,8 +1,9 @@
-//! Tokens visuais do Usami Desktop.
+//! Tokens visuais do Usami Desktop — direção de arte "Midnight Romance".
 //!
-//! Fonte de verdade: `usami/src/usami.css` (paleta oficial pós-migração D1,
-//! 2026-11-08). Nenhum widget deve declarar cor, tamanho de fonte, raio ou
-//! sombra solto — tudo passa por `theme()`.
+//! Paleta oficial do redesign (2026-11-11): fundo `#100819`, superfície
+//! `#20102F`, rosa de destaque `#F052B5`, rosa claro `#F5C3E1`, lavanda
+//! `#A77ABF`, texto `#F6EAF3`. Nenhum widget deve declarar cor, tamanho de
+//! fonte, raio ou sombra solto — tudo passa por `theme()`.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -11,10 +12,11 @@ use std::sync::OnceLock;
 use gpui::*;
 
 pub const FONT_BODY: &str = "DM Sans";
-pub const FONT_DISPLAY: &str = "Rajdhani";
-pub const FONT_CHARACTER: &str = "Fraunces";
+pub const FONT_DISPLAY: &str = "Cormorant Garamond";
+pub const FONT_CHARACTER: &str = "Cormorant Garamond";
+pub const FONT_JP: &str = "Noto Sans JP";
 
-/// Fraunces itálico com fallback explícito para símbolos.
+/// Cormorant itálico com fallback explícito para símbolos.
 ///
 /// O layout itálico da fonte embutida não resolve glifos fora do alfabeto
 /// (♡, ♥, ★) pelo fallback automático e mostra tofu; declarar a família de
@@ -25,17 +27,30 @@ pub fn font_character_italic() -> Font {
     font
 }
 
+/// Japonês com fallback para símbolos vem em `font_with_jp` (texto misto);
+/// o subset embutido cobre só kana/kanji usados na interface e glifos fora
+/// dele caem para a família de símbolos.
+
+/// Texto misto (latim + kana/kanji): mantém a família base e usa o subset
+/// japonês como fallback para os glifos que ela não possui.
+pub fn font_with_jp(family: &'static str) -> Font {
+    let mut font = gpui::font(family);
+    font.fallbacks = Some(FontFallbacks::from_fonts(vec![FONT_JP.into(), "Segoe UI Symbol".into()]));
+    font
+}
+
 /// Arquivos embutidos em `assets/fonts` (SIL Open Font License 1.1).
 pub const FONT_FILES: &[&str] = &[
     "assets/fonts/DMSans-Regular.ttf",
     "assets/fonts/DMSans-Medium.ttf",
     "assets/fonts/DMSans-Bold.ttf",
-    "assets/fonts/Fraunces-Regular.ttf",
-    "assets/fonts/Fraunces-Medium.ttf",
-    "assets/fonts/Fraunces-SemiBold.ttf",
-    "assets/fonts/Fraunces-Italic.ttf",
-    "assets/fonts/Rajdhani-SemiBold.ttf",
-    "assets/fonts/Rajdhani-Bold.ttf",
+    "assets/fonts/CormorantGaramond-Regular.ttf",
+    "assets/fonts/CormorantGaramond-Medium.ttf",
+    "assets/fonts/CormorantGaramond-SemiBold.ttf",
+    "assets/fonts/CormorantGaramond-Bold.ttf",
+    "assets/fonts/CormorantGaramond-Italic.ttf",
+    "assets/fonts/CormorantGaramond-MediumItalic.ttf",
+    "assets/fonts/NotoSansJP-Regular.ttf",
 ];
 
 /// Registra as fontes OFL que acompanham o pacote. Ausência de arquivo não
@@ -58,17 +73,17 @@ pub fn load_fonts(cx: &App, base_dir: &Path) {
 
 #[derive(Clone, Copy)]
 pub struct Palette {
-    /// Fundo profundo do palco (`--deep`).
+    /// Fundo principal Midnight Romance (`#100819`).
     pub deep: Rgba,
-    /// Painéis (`--panel`).
+    /// Superfícies (`#20102F`).
     pub panel: Rgba,
-    /// Rosa de destaque (`--primary`).
+    /// Rosa claro — texto/destaque suave (`#F5C3E1`).
     pub primary: Rgba,
-    /// Rosa claro (`--lavender`).
+    /// Lavanda (`#A77ABF`).
     pub lavender: Rgba,
-    /// Texto principal (`--pearl`).
+    /// Texto claro (`#F6EAF3`).
     pub pearl: Rgba,
-    /// Ação vibrante (`--accent`).
+    /// Rosa principal — ação vibrante (`#F052B5`).
     pub accent: Rgba,
     pub ok: Rgba,
     pub warn: Rgba,
@@ -96,105 +111,107 @@ pub struct Palette {
     pub overlay_top: Rgba,
     pub overlay_bottom: Rgba,
     pub companion_overlay: Rgba,
-    /// `rgba(7,13,31,.6)` — véu atrás de painéis modais.
+    /// `rgba(16,8,25,.6)` — véu atrás de painéis modais.
     pub scrim: Rgba,
-    /// `rgba(249,249,251,.08)` — botão neutro.
+    /// `rgba(246,234,243,.08)` — botão neutro.
     pub surface_soft: Rgba,
-    /// `rgba(249,249,251,.16)` — botão neutro em hover.
+    /// `rgba(246,234,243,.16)` — botão neutro em hover.
     pub surface_hover: Rgba,
-    /// `rgba(255,94,126,.25)`.
+    /// `rgba(240,82,181,.25)`.
     pub accent_tint: Rgba,
     pub danger_muted_bg: Rgba,
     pub danger_muted_border: Rgba,
     pub danger_muted: Rgba,
     pub success_border: Rgba,
-    /// `rgba(249,249,251,.05)` — botão de chamada neutro.
+    /// `rgba(246,234,243,.05)` — botão de chamada neutro.
     pub call_bg: Rgba,
-    /// `rgba(249,249,251,.12)` — botão de chamada em hover.
+    /// `rgba(246,234,243,.12)` — botão de chamada em hover.
     pub call_bg_hover: Rgba,
-    /// `rgba(255,94,126,.5)` — borda de botão ativo.
+    /// `rgba(240,82,181,.5)` — borda de botão ativo.
     pub accent_border: Rgba,
-    /// `rgba(40,45,66,.75)` — cartão dentro de painel.
+    /// `rgba(42,21,64,.75)` — cartão dentro de painel.
     pub card_bg: Rgba,
-    /// `rgba(255,166,201,.45)` — moldura do cartão de vínculo.
+    /// `rgba(245,195,225,.45)` — moldura do cartão de vínculo.
     pub bond_border: Rgba,
     /// `#D1485A` — hangup em hover.
     pub err_dark: Rgba,
-    /// `rgba(249,249,251,.15)`.
+    /// `rgba(246,234,243,.15)`.
     pub bond_track: Rgba,
-    pub bond_fill_from: Rgba,
-    pub bond_fill_to: Rgba,
 }
 
 impl Palette {
     pub fn official() -> Self {
         Self {
-            deep: rgb(0x070d1f),
-            panel: rgb(0x131a33),
-            primary: rgb(0xffa6c9),
-            lavender: rgb(0xffb8d2),
-            pearl: rgb(0xf9f9fb),
-            accent: rgb(0xff5e7e),
+            deep: rgb(0x100819),
+            panel: rgb(0x20102f),
+            primary: rgb(0xf5c3e1),
+            lavender: rgb(0xa77abf),
+            pearl: rgb(0xf6eaf3),
+            accent: rgb(0xf052b5),
             ok: rgb(0x3ecf8e),
             warn: rgb(0xf5c451),
             err: rgb(0xff6b7a),
-            line: rgba(0xf9f9fb1f),
-            line_strong: rgba(0xf9f9fb38),
-            line_glow: rgba(0xffa6c959),
-            muted: rgba(0xf9f9fba8),
-            faint: rgba(0xf9f9fb8c),
+            line: rgba(0xf6eaf31f),
+            line_strong: rgba(0xf6eaf338),
+            line_glow: rgba(0xf052b559),
+            muted: rgba(0xf6eaf3a8),
+            faint: rgba(0xf6eaf38c),
 
-            composer_bg: rgba(0x0b132bb8),
-            icon_bg: rgba(0x131a33c7),
-            icon_bg_hover: rgba(0xffa6c938),
-            icon_bg_active: rgba(0xff5e7e59),
-            status_bg: rgba(0x0b132bd1),
-            bubble_bg: rgba(0x070d1fd9),
-            chat_bg: rgba(0x0b132bd1),
-            chat_turn_bg: rgba(0x282d42d9),
-            chat_user_border: rgba(0xffa6c940),
-            overlay_top: rgba(0x0b132b8c),
-            overlay_bottom: rgba(0x070d1fb8),
-            companion_overlay: rgba(0x070d1f9e),
-            scrim: rgba(0x070d1f99),
-            surface_soft: rgba(0xf9f9fb14),
-            surface_hover: rgba(0xf9f9fb29),
-            accent_tint: rgba(0xff5e7e40),
+            composer_bg: rgba(0x100819b8),
+            icon_bg: rgba(0x20102fc7),
+            icon_bg_hover: rgba(0xf052b538),
+            icon_bg_active: rgba(0xf052b559),
+            status_bg: rgba(0x100819d1),
+            bubble_bg: rgba(0x100819d9),
+            chat_bg: rgba(0x100819d1),
+            chat_turn_bg: rgba(0x2a1540d9),
+            chat_user_border: rgba(0xf5c3e140),
+            overlay_top: rgba(0x1008198c),
+            overlay_bottom: rgba(0x100819b8),
+            companion_overlay: rgba(0x1008199e),
+            scrim: rgba(0x10081999),
+            surface_soft: rgba(0xf6eaf314),
+            surface_hover: rgba(0xf6eaf329),
+            accent_tint: rgba(0xf052b540),
             danger_muted_bg: rgba(0xff8a961f),
             danger_muted_border: rgba(0xff8a9640),
             danger_muted: rgb(0xff8a96),
             success_border: rgba(0x3ecf8e80),
-            call_bg: rgba(0xf9f9fb0d),
-            call_bg_hover: rgba(0xf9f9fb1f),
-            accent_border: rgba(0xff5e7e80),
-            card_bg: rgba(0x282d42bf),
-            bond_border: rgba(0xffa6c973),
+            call_bg: rgba(0xf6eaf30d),
+            call_bg_hover: rgba(0xf6eaf31f),
+            accent_border: rgba(0xf052b580),
+            card_bg: rgba(0x2a1540bf),
+            bond_border: rgba(0xf5c3e173),
             err_dark: rgb(0xd1485a),
-            bond_track: rgba(0xf9f9fb26),
-            bond_fill_from: rgb(0xffdce6),
-            bond_fill_to: rgb(0xffb8d2),
+            bond_track: rgba(0xf6eaf326),
         }
     }
 
     /// Cores exclusivas para o estilo Visual Novel de Romance
     pub fn vn_pink_neon() -> Rgba {
-        rgb(0xff5e9e)
+        rgb(0xf052b5)
     }
 
     pub fn vn_pink_soft() -> Rgba {
-        rgb(0xffa6c9)
+        rgb(0xf5c3e1)
     }
 
+    /// Lavanda clareada para gradientes e brilhos.
     pub fn vn_purple_glow() -> Rgba {
-        rgb(0xb86bff)
+        rgb(0xc49dd4)
+    }
+
+    /// Lavanda intermediária (par de gradiente do rosa principal).
+    pub fn vn_lavender_bright() -> Rgba {
+        rgb(0xb78cd1)
     }
 
     pub fn vn_card_border() -> Rgba {
-        rgba(0xffa6c94d)
+        rgba(0xf5c3e14d)
     }
 
     pub fn vn_border_bright() -> Rgba {
-        rgba(0xff79c680)
+        rgba(0xf052b680)
     }
 
     pub fn vn_gold() -> Rgba {
@@ -374,13 +391,13 @@ impl Theme {
         )
     }
 
-    /// `linear-gradient(135deg, rgba(255,94,126,.45), rgba(255,166,201,.3))`
+    /// `linear-gradient(135deg, rgba(240,82,181,.45), rgba(245,195,225,.3))`
     pub fn bond_pill_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0xff5e7e73), rgba(0xffa6c94d))
+        Self::gradient(135.0, rgba(0xf052b573), rgba(0xf5c3e14d))
     }
 
     pub fn bond_pill_hover(&self) -> Background {
-        Self::gradient(135.0, rgba(0xff5e7ea6), rgba(0xffa6c973))
+        Self::gradient(135.0, rgba(0xf052b5a6), rgba(0xf5c3e173))
     }
 
     pub fn send_bg(&self) -> Background {
@@ -388,49 +405,45 @@ impl Theme {
     }
 
     pub fn bond_sheet_bg(&self) -> Background {
-        Self::gradient(160.0, rgba(0x282d42f0), rgba(0x0b132bf5))
-    }
-
-    pub fn bond_fill_bg(&self) -> Background {
-        Self::gradient(90.0, self.color.bond_fill_from, self.color.bond_fill_to)
+        Self::gradient(160.0, rgba(0x2a1540f0), rgba(0x100819f5))
     }
 
     pub fn stage_overlay(&self) -> Background {
         Self::gradient(180.0, self.color.overlay_top, self.color.overlay_bottom)
     }
 
-    /// `linear-gradient(90deg, transparent 30%, rgba(7,13,31,.55) 70%)`
+    /// `linear-gradient(90deg, transparent 30%, rgba(16,8,25,.55) 70%)`
     pub fn bond_scrim_bg(&self) -> Background {
-        Self::gradient(90.0, rgba(0x070d1f00), rgba(0x070d1f8c))
+        Self::gradient(90.0, rgba(0x10081900), rgba(0x1008198c))
     }
 
     /// Fundo com gradiente ametista profundo característico de Visual Novel de Romance
     pub fn vn_modal_bg(&self) -> Background {
-        Self::gradient(145.0, rgba(0x1a0c2ef8), rgba(0x0b0517fa))
+        Self::gradient(145.0, rgba(0x2a1540f8), rgba(0x100819fa))
     }
 
     pub fn vn_sidebar_bg(&self) -> Background {
-        Self::gradient(180.0, rgba(0x140a26e6), rgba(0x0e061cee))
+        Self::gradient(180.0, rgba(0x1d0e2ee6), rgba(0x12071cee))
     }
 
     pub fn vn_card_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0x23113de0), rgba(0x180c2cdc))
+        Self::gradient(135.0, rgba(0x2a1540e0), rgba(0x1c0d2cdc))
     }
 
     pub fn vn_tab_active_bg(&self) -> Background {
-        Self::gradient(90.0, Palette::vn_pink_neon(), rgb(0xdb5ed9))
+        Self::gradient(90.0, Palette::vn_pink_neon(), Palette::vn_lavender_bright())
     }
 
     pub fn vn_heart_badge_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0xff5e9ef0), rgba(0x9d4eddf0))
+        Self::gradient(135.0, rgba(0xf052b5f0), rgba(0xa77abff0))
     }
 
     pub fn vn_exp_fill_bg(&self) -> Background {
-        Self::gradient(90.0, Palette::vn_pink_neon(), rgb(0xdb68fa))
+        Self::gradient(90.0, Palette::vn_pink_neon(), Palette::vn_lavender_bright())
     }
 
     pub fn vn_bubble_tag_bg(&self) -> Background {
-        Self::gradient(90.0, rgba(0xff5e9e73), rgba(0xb86bff4d))
+        Self::gradient(90.0, rgba(0xf052b573), rgba(0xa77abf4d))
     }
 }
 

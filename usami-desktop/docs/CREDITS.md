@@ -14,20 +14,21 @@ aparência do app desktop com a interface web.
 ## Fontes embutidas
 
 Todas as fontes são distribuídas sob a **SIL Open Font License 1.1** e ficam em
-`assets/fonts/`, junto com o texto integral de cada licença. As instâncias
-estáticas da Fraunces (upright e itálico) foram geradas a partir da variable font
-oficial do projeto, também sob OFL 1.1.
+`assets/fonts/`, junto com o texto integral de cada licença. O Noto Sans JP embutido
+é um subset gerado a partir da variable font oficial (OFL 1.1), contendo apenas os
+glifos usados na interface.
 
 | Fonte | Uso no app | Arquivos | Licença |
 | --- | --- | --- | --- |
-| **DM Sans** | Texto de interface | `DMSans-Regular.ttf`, `DMSans-Medium.ttf`, `DMSans-Bold.ttf` | `OFL-dmsans.txt` |
-| **Fraunces** | Títulos editoriais, fala da personagem e badge de vínculo | `Fraunces-Regular.ttf`, `Fraunces-Medium.ttf`, `Fraunces-SemiBold.ttf`, `Fraunces-Italic.ttf` | `OFL-fraunces.txt` |
-| **Rajdhani** | Rótulos de display (status, níveis, cabeçalhos) | `Rajdhani-SemiBold.ttf`, `Rajdhani-Bold.ttf` | `OFL-rajdhani.txt` |
+| **DM Sans** | Texto de interface e navegação | `DMSans-Regular.ttf`, `DMSans-Medium.ttf`, `DMSans-Bold.ttf` | `OFL-dmsans.txt` |
+| **Cormorant Garamond** | Títulos editoriais e voz da personagem | `CormorantGaramond-Regular.ttf`, `CormorantGaramond-Medium.ttf`, `CormorantGaramond-SemiBold.ttf`, `CormorantGaramond-Bold.ttf`, `CormorantGaramond-Italic.ttf`, `CormorantGaramond-MediumItalic.ttf` | `OFL-cormorantgaramond.txt` |
+| **Noto Sans JP** | Elementos japoneses | `NotoSansJP-Regular.ttf` (subset) | `OFL-notosansjp.txt` |
 
 Titulares dos direitos:
 
 - DM Sans — Copyright 2014 The DM Sans Project Authors
   (<https://github.com/googlefonts/dm-fonts>)
-- Fraunces — Copyright 2018 The Fraunces Project Authors
-  (<https://github.com/undercasetype/Fraunces>)
-- Rajdhani — Copyright (c) 2014, Indian Type Foundry (info@indiantypefoundry.com)
+- Cormorant Garamond — Copyright 2015 The Cormorant Project Authors
+  (<https://github.com/CatharsisFonts/Cormorant>)
+- Noto Sans JP — Copyright 2014-2021 Adobe (http://www.adobe.com/)
+  (<https://github.com/notofonts/noto-cjk>)

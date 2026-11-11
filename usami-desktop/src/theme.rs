@@ -30,7 +30,6 @@ pub fn font_character_italic() -> Font {
 /// Japonês com fallback para símbolos vem em `font_with_jp` (texto misto);
 /// o subset embutido cobre só kana/kanji usados na interface e glifos fora
 /// dele caem para a família de símbolos.
-
 /// Texto misto (latim + kana/kanji): mantém a família base e usa o subset
 /// japonês como fallback para os glifos que ela não possui.
 pub fn font_with_jp(family: &'static str) -> Font {
@@ -111,12 +110,8 @@ pub struct Palette {
     pub overlay_top: Rgba,
     pub overlay_bottom: Rgba,
     pub companion_overlay: Rgba,
-    /// `rgba(16,8,25,.6)` — véu atrás de painéis modais.
-    pub scrim: Rgba,
     /// `rgba(246,234,243,.08)` — botão neutro.
     pub surface_soft: Rgba,
-    /// `rgba(246,234,243,.16)` — botão neutro em hover.
-    pub surface_hover: Rgba,
     /// `rgba(240,82,181,.25)`.
     pub accent_tint: Rgba,
     pub danger_muted_bg: Rgba,
@@ -169,9 +164,7 @@ impl Palette {
             overlay_top: rgba(0x1008198c),
             overlay_bottom: rgba(0x100819b8),
             companion_overlay: rgba(0x1008199e),
-            scrim: rgba(0x10081999),
             surface_soft: rgba(0xf6eaf314),
-            surface_hover: rgba(0xf6eaf329),
             accent_tint: rgba(0xf052b540),
             danger_muted_bg: rgba(0xff8a961f),
             danger_muted_border: rgba(0xff8a9640),
@@ -225,11 +218,9 @@ pub struct Typography {
     pub sm: f32,
     pub md: f32,
     pub h3: f32,
-    pub tab: f32,
     pub input: f32,
     pub bubble: f32,
     pub empty_title: f32,
-    pub h2: f32,
 }
 
 impl Typography {
@@ -239,11 +230,9 @@ impl Typography {
             sm: 12.0,
             md: 13.0,
             h3: 13.5,
-            tab: 11.5,
             input: 14.5,
             bubble: 16.0,
             empty_title: 20.0,
-            h2: 32.0,
         }
     }
 }

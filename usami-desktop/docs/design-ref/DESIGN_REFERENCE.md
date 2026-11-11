@@ -5,6 +5,12 @@ Documento de referência para portar a aparência do runtime web (`usami/`) para
 Este arquivo descreve intenção visual e medidas; a implementação em GPUI deve reproduzir o
 resultado, não traduzir CSS linha a linha (não há DOM, `backdrop-filter` nem `:has()`).
 
+> **Nota (2026-11-11)**: o desktop divergiu deste retrato na direção de arte
+> **"Midnight Romance"** — paleta `#100819` / `#20102F` / `#F052B5` / `#F5C3E1` /
+> `#A77ABF` / `#F6EAF3` e tipografia Cormorant Garamond + DM Sans + Noto Sans JP.
+> Este documento permanece como registro histórico da captura do web; a fonte de
+> verdade do app desktop é `src/theme.rs`.
+
 ## Metadados
 
 | Item | Valor |

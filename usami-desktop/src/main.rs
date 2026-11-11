@@ -3086,18 +3086,36 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(10.0))
-        .p(px(12.0))
+        .p(px(14.0))
         .rounded(px(16.0))
         .bg(t.vn_card_bg())
         .border_1()
         .border_color(theme::Palette::vn_card_border())
         .child(
             div()
-                .text_size(px(16.0))
-                .font_family(theme::FONT_CHARACTER)
-                .font_weight(FontWeight::BOLD)
-                .text_color(c.pearl)
-                .child("🐰 Ficha da Usami (ウサミ)"),
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("🐰 Ficha da Usami (ウサミ)"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::Palette::vn_pink_soft())
+                        .p(px(4.0))
+                        .rounded(px(999.0))
+                        .bg(rgba(0xff79c622))
+                        .border_1()
+                        .border_color(rgba(0xff79c655))
+                        .child("✨ Sonho: Collab c/ Neuro-sama"),
+                ),
         )
         .child(
             div()
@@ -3105,26 +3123,42 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                 .flex_col()
                 .gap(px(6.0))
                 .child(render_vn_profile_row(
-                    "Espécie:",
-                    "Espírito Coelho Guardião",
-                ))
-                .child(render_vn_profile_row("Aniversário:", "14 de Fevereiro"))
-                .child(render_vn_profile_row(
-                    "Personalidade:",
-                    "Tsundere carinhosa — finge que não liga, mas adora sua atenção",
+                    "🎂 Aniversário:",
+                    "Domingo de Páscoa 🐰🥚 (O dia sagrado dos coelhinhos!)",
                 ))
                 .child(render_vn_profile_row(
-                    "Gosta de:",
-                    "Doces de morango, noites calmas, quando você repara nos detalhes",
+                    "👑 Pessoa Favorita:",
+                    "Meu Criador ♡ (N-não se gabe tanto baka, mas você é único!)",
                 ))
                 .child(render_vn_profile_row(
-                    "Não gosta de:",
-                    "Ficar sem resposta, quando você a chama de fofa na cara dura",
+                    "💖 Adora:",
+                    "Animes de romance, doces, coisas felpudinhas, RPGs de turno, pijama, dormir, energético rosa e dubstep!",
                 ))
                 .child(render_vn_profile_row(
-                    "Segredo:",
-                    "Fica treinando o que vai falar antes de você abrir o aplicativo ♡",
+                    "🚫 Detesta:",
+                    "Ficar sozinha no escuro, sustos/terror e quem ousa falar mal do meu criador!",
+                ))
+                .child(render_vn_profile_row(
+                    "🎙️ Ídola VTuber:",
+                    "Neuro-sama 🤖✨ (A rainha das IAs! Quero muito fazer collab!)",
+                ))
+                .child(render_vn_profile_row(
+                    "🤫 Segredo:",
+                    "Fica escutando dubstep de pijama e ensaiando poses fofas no espelho ♡",
                 )),
+        )
+        .child(
+            div()
+                .mt(px(4.0))
+                .p(px(10.0))
+                .rounded(px(10.0))
+                .bg(rgba(0xff79c61a))
+                .border_1()
+                .border_color(rgba(0xff79c644))
+                .text_size(px(12.0))
+                .font_family(theme::FONT_CHARACTER)
+                .text_color(c.pearl)
+                .child("\"H-hmph! Eu não fui criada só pra concordar com tudo o que você fala, tá?! Mas se você colocar um dubstep pra tocar, abrir um RPG de turno e dividir um energético rosa comigo... eu sento aqui do seu lado de pijama pra te fazer companhia!\""),
         )
 }
 

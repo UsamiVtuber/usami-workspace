@@ -696,6 +696,9 @@ struct UsamiApp {
     settings_tab: SettingsTab,
     bond_tab: BondTab,
     chat_history: Vec<ChatMessage>,
+    /// Estado do vínculo vindo do core (`GET /api/bond`); None até a primeira
+    /// resposta. `bond_level`/`bond_exp_pct` acompanham o summary para o pill.
+    bond: Option<api::BondData>,
     bond_level: u32,
     bond_exp_pct: u32,
     bg_asset_path: Option<PathBuf>,
@@ -987,8 +990,9 @@ impl UsamiApp {
             settings_tab: SettingsTab::Chat,
             bond_tab: BondTab::Diary,
             chat_history,
-            bond_level: 2,
-            bond_exp_pct: 74,
+            bond: None,
+            bond_level: 1,
+            bond_exp_pct: 0,
             bg_asset_path,
             api_client: Arc::new(UsamiApiClient::from_env()),
             audio_player: player,
@@ -1336,11 +1340,18 @@ impl UsamiApp {
         self.start_listening(cx);
     }
 
-    fn end_call(&mut self) {
+    fn end_call(&mut self, cx: &mut Context<Self>) {
+        let minutes = self
+            .call_started_at
+            .map(|started| (started.elapsed().as_secs() / 60) as u32)
+            .unwrap_or(0);
         self.stop_listening();
         self.is_calling = false;
         self.call_started_at = None;
         self.call_seconds = 0;
+        if minutes > 0 {
+            self.award_bond_call(minutes, cx);
+        }
         self.status_text = if self.is_companion_mode {
             "MODO COMPANION"
         } else {
@@ -1737,6 +1748,9 @@ impl UsamiApp {
 
         cx.notify();
 
+        // Em chamada a mensagem veio pela voz; fora dela é texto digitado.
+        self.award_bond_chat(text.clone(), self.is_calling, cx);
+
         let api = Arc::clone(&self.api_client);
         let audio = self.audio_player.clone();
         let sleep_companion_active = self.sleep_companion_started_at.is_some();
@@ -1809,15 +1823,10 @@ impl UsamiApp {
 
                                     view.last_source = response.source.clone().map(Into::into);
                                     view.last_timing = response.timing.clone();
+                                    // Nível/EXP do VN não saem mais da afinidade do
+                                    // chat: quem manda é o /api/bond (abaixo, award).
                                     if let Some(aff) = response.affinity {
                                         view.server_affinity = Some(aff);
-                                        view.bond_level = ((aff as u32) / 10).max(1);
-                                        view.bond_exp_pct = ((aff as u32) % 10) * 10;
-                                    } else if view.bond_exp_pct < 100 {
-                                        view.bond_exp_pct += 2;
-                                    } else {
-                                        view.bond_level += 1;
-                                        view.bond_exp_pct = 5;
                                     }
                                     if let Some(stage) = response.stage.clone() {
                                         view.server_stage = Some(stage.into());
@@ -2092,6 +2101,10 @@ impl UsamiApp {
             if drawer == ActiveDrawer::Settings {
                 self.load_active_settings_tab(cx);
             }
+            if drawer == ActiveDrawer::Bond {
+                // Abrir o painel relê o core: o web (ou outra janela) pode ter mudado.
+                self.fetch_bond(cx);
+            }
         }
         cx.notify();
     }
@@ -2127,6 +2140,94 @@ impl UsamiApp {
         }
     }
 
+    /// O core é a única fonte do vínculo: nível, EXP e medidores vêm dele.
+    fn apply_bond(&mut self, bond: api::BondData) {
+        self.bond_level = bond.summary.level.max(1);
+        self.bond_exp_pct = (bond.summary.progress.clamp(0.0, 1.0) * 100.0).round() as u32;
+        self.bond = Some(bond);
+    }
+
+    fn fetch_bond(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_bond().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            match res {
+                                Ok(resp) => view.apply_bond(resp.bond),
+                                Err(error) => eprintln!("[Vínculo] indisponível: {error}"),
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Mesma regra do web: cada mensagem rende XP, mas quem soma é o core.
+    fn award_bond_chat(&mut self, content: String, spoken: bool, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.award_bond_chat(&content, spoken).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            match res {
+                                Ok(resp) => {
+                                    view.apply_bond(resp.bond);
+                                    cx.notify();
+                                }
+                                Err(error) => eprintln!("[Vínculo] evento de chat falhou: {error}"),
+                            }
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Chamada de voz rende companhia por minuto inteiro, como no web.
+    fn award_bond_call(&mut self, minutes: u32, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() || minutes == 0 {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.award_bond_call(minutes).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            match res {
+                                Ok(resp) => {
+                                    view.apply_bond(resp.bond);
+                                    cx.notify();
+                                }
+                                Err(error) => eprintln!("[Vínculo] evento de chamada falhou: {error}"),
+                            }
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     fn fetch_memory(&mut self, cx: &mut Context<Self>) {
         if !self.api_client.has_token() {
             self.memory_error = Some("USAMI_API_TOKEN não configurado no ambiente".into());
@@ -2149,8 +2250,6 @@ impl UsamiApp {
                                 Ok(resp) => {
                                     if let Some(ref aff) = resp.memory.affinity {
                                         view.server_affinity = Some(aff.score);
-                                        view.bond_level = ((aff.score as u32) / 10).max(1);
-                                        view.bond_exp_pct = ((aff.score as u32) % 10) * 10;
                                     }
                                     view.memory_data = Some(resp.memory);
                                     view.memory_error = None;
@@ -2447,8 +2546,46 @@ fn render_vn_tab_btn(
         .child(label)
 }
 
-fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) -> impl IntoElement {
+fn render_vn_tab_diary(
+    bond_level: u32,
+    bond: Option<&api::BondData>,
+    t: &theme::Theme,
+) -> impl IntoElement {
     let c = t.color;
+    let (carinho, humor, companhia, carinho_pct, humor_pct, companhia_pct, level_name, line) =
+        match bond {
+            Some(b) => (
+                b.intimacy.carinho,
+                b.intimacy.humor,
+                b.intimacy.companhia,
+                b.meters.carinho.progress,
+                b.meters.humor.progress,
+                b.meters.companhia.progress,
+                b.summary.name.clone(),
+                b.summary.line.clone(),
+            ),
+            None => (0, 0, 0, 0.0, 0.0, 0.0, "—".to_string(), "—".to_string()),
+        };
+    let history: Vec<(String, String, String)> = bond
+        .map(|b| {
+            b.log
+                .iter()
+                .take(3)
+                .map(|entry| {
+                    let title = if entry.count > 1 {
+                        format!("{} (×{})", entry.text, entry.count)
+                    } else {
+                        entry.text.clone()
+                    };
+                    (
+                        format!("[{}]", vn_history_tag(&entry.kind)),
+                        title,
+                        relative_when(entry.at),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     div()
         .flex_1()
         .flex()
@@ -2505,7 +2642,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                             div()
                                                 .text_size(px(10.5))
                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                .child("♥♥♥♥♡"),
+                                                .child(format!("{carinho} XP")),
                                         ),
                                 )
                                 .child(
@@ -2514,10 +2651,11 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                         .h(px(7.0))
                                         .rounded_full()
                                         .bg(c.bond_track)
+                                        .overflow_hidden()
                                         .child(
                                             div()
                                                 .h_full()
-                                                .w(px(220.0))
+                                                .w(relative(carinho_pct.clamp(0.0, 1.0)))
                                                 .rounded_full()
                                                 .bg(t.vn_exp_fill_bg()),
                                         ),
@@ -2544,7 +2682,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                             div()
                                                 .text_size(px(10.5))
                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                .child("(◕‿◕)"),
+                                                .child(format!("{humor} XP")),
                                         ),
                                 )
                                 .child(
@@ -2553,10 +2691,11 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                         .h(px(7.0))
                                         .rounded_full()
                                         .bg(c.bond_track)
+                                        .overflow_hidden()
                                         .child(
                                             div()
                                                 .h_full()
-                                                .w(px(240.0))
+                                                .w(relative(humor_pct.clamp(0.0, 1.0)))
                                                 .rounded_full()
                                                 .bg(t.bond_fill_bg()),
                                         ),
@@ -2583,7 +2722,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                             div()
                                                 .text_size(px(10.5))
                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                .child("✦ Nv. 2"),
+                                                .child(format!("{companhia} XP")),
                                         ),
                                 )
                                 .child(
@@ -2592,10 +2731,11 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                         .h(px(7.0))
                                         .rounded_full()
                                         .bg(c.bond_track)
+                                        .overflow_hidden()
                                         .child(
                                             div()
                                                 .h_full()
-                                                .w(px(195.0))
+                                                .w(relative(companhia_pct.clamp(0.0, 1.0)))
                                                 .rounded_full()
                                                 .bg(t.vn_exp_fill_bg()),
                                         ),
@@ -2638,11 +2778,10 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                             div()
                                 .my(px(6.0))
                                 .text_size(px(13.0))
-                                .font_family(theme::FONT_CHARACTER)
-                                .italic()
+                                .font(theme::font_character_italic())
                                 .line_height(px(18.0))
                                 .text_color(rgb(0x4a183b))
-                                .child("“Você me deixa muito feliz! ♡ Não se esqueça disso...”"),
+                                .child(format!("“{line}”")),
                         )
                         .child(
                             div()
@@ -2744,7 +2883,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                     div()
                                         .text_size(px(9.0))
                                         .text_color(c.pearl)
-                                        .child("Amigos Próximos"),
+                                        .child(level_name),
                                 ),
                         )
                         .child(div().flex_1().h(px(2.0)).mx(px(8.0)).bg(c.bond_track))
@@ -2767,7 +2906,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                     div()
                                         .text_size(px(9.0))
                                         .text_color(c.faint)
-                                        .child("Parceiros?"),
+                                        .child("Próximo"),
                                 ),
                         ),
                 ),
@@ -2816,21 +2955,21 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.0))
-                                .child(render_vn_history_item(
-                                    "[CHAT]",
-                                    "Você conversou com a Usami.",
-                                    "Hoje",
-                                ))
-                                .child(render_vn_history_item(
-                                    "[VÍNCULO]",
-                                    "Ela sorriu com sua mensagem!",
-                                    "Ontem",
-                                ))
-                                .child(render_vn_history_item(
-                                    "[CARINHO]",
-                                    "Você lhe fez um elogio carinhoso.",
-                                    "Ontem",
-                                )),
+                                .when(history.is_empty(), |col| {
+                                    col.child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .text_color(c.muted)
+                                            .child("Nenhum momento registrado ainda."),
+                                    )
+                                })
+                                .children(
+                                    history
+                                        .into_iter()
+                                        .map(|(tag, title, when)| {
+                                            render_vn_history_item(tag, title, when)
+                                        }),
+                                ),
                         ),
                 )
                 // Card Memórias Especiais (Mini Polaroids)
@@ -2878,11 +3017,39 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
         )
 }
 
-fn render_vn_history_item(
-    icon: &'static str,
-    title: &'static str,
-    time: &'static str,
-) -> impl IntoElement {
+/// Etiqueta curta do tipo de momento para o histórico (nunca o texto cru).
+fn vn_history_tag(kind: &str) -> &'static str {
+    match kind {
+        "laugh" => "RISADA",
+        "voice" => "VOZ",
+        "long" => "CONVERSA",
+        "call" => "CHAMADA",
+        "level" => "NÍVEL",
+        _ => "CHAT",
+    }
+}
+
+/// Quando foi o momento, relativo ao agora (sem precisar de fuso local).
+fn relative_when(at_ms: i64) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0);
+    relative_when_at(at_ms, now_ms)
+}
+
+fn relative_when_at(at_ms: i64, now_ms: i64) -> String {
+    let seconds = ((now_ms - at_ms).max(0)) / 1000;
+    match seconds {
+        0..=59 => "agora".to_string(),
+        60..=3599 => format!("há {} min", seconds / 60),
+        3600..=86399 => format!("há {} h", seconds / 3600),
+        86400..=172799 => "ontem".to_string(),
+        _ => format!("há {} dias", seconds / 86400),
+    }
+}
+
+fn render_vn_history_item(icon: String, title: String, time: String) -> impl IntoElement {
     let t = theme::theme();
     div()
         .flex()
@@ -3411,6 +3578,7 @@ impl Render for UsamiApp {
             matches!(active_drawer, ActiveDrawer::Settings | ActiveDrawer::Vrma) && !chat_open;
         let bond_level = self.bond_level;
         let bond_exp_pct = self.bond_exp_pct;
+        let bond = self.bond.clone();
         let bond_tab = self.bond_tab;
         let show_bubble = self.show_bubble;
         let bg_asset = self.bg_asset_path.clone();
@@ -3722,8 +3890,7 @@ impl Render for UsamiApp {
                         .child(
                             div()
                                 .text_size(px(ty.bubble))
-                                .font_family(theme::FONT_CHARACTER)
-                                .italic()
+                                .font(theme::font_character_italic())
                                 .line_height(px(24.0))
                                 .text_color(c.pearl)
                                 .child(last_reply),
@@ -4344,7 +4511,7 @@ impl Render for UsamiApp {
                                         .hover(|style| style.bg(c.err_dark).shadow(theme::glow(c.err, 14.0)))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.poke(cx);
-                                            this.end_call();
+                                            this.end_call(cx);
                                             cx.notify();
                                         }))
                                         .child(icon("phone", 19.0)),
@@ -5826,15 +5993,17 @@ impl Render for UsamiApp {
             })
             // ── LAYER 8: CENTRAL DE RELACIONAMENTO & DIÁRIO ESTILO VISUAL NOVEL ──
             .when(active_drawer == ActiveDrawer::Bond, |parent| {
-                let bond_exp_curr = (bond_exp_pct * 3).min(300);
-                let bond_exp_needed = 300u32.saturating_sub(bond_exp_curr);
-                let bond_level_title = match bond_level {
-                    1 => "Conhecidos",
-                    2 => "Amigos Próximos",
-                    3 => "Companheiros",
-                    4 => "Corações Conectados",
-                    _ => "Almas Gêmeas ♡",
-                };
+                let (bond_exp_curr, bond_exp_target, bond_exp_needed, bond_level_title, bond_is_max) =
+                    match bond.as_ref() {
+                        Some(b) => (
+                            b.summary.xp,
+                            b.summary.next.unwrap_or(b.summary.xp),
+                            b.summary.remaining,
+                            b.summary.name.clone(),
+                            b.summary.max,
+                        ),
+                        None => (0, 0, 0, "—".to_string(), false),
+                    };
 
                 parent.child(
                     div()
@@ -5991,8 +6160,7 @@ impl Render for UsamiApp {
                                                 .child(
                                                     div()
                                                         .text_size(px(10.5))
-                                                        .font_family(theme::FONT_CHARACTER)
-                                                        .italic()
+                                                        .font(theme::font_character_italic())
                                                         .text_color(c.pearl)
                                                         .child("“Você voltou... Que bom! ♡”"),
                                                 ),
@@ -6062,7 +6230,11 @@ impl Render for UsamiApp {
                                                                         .text_size(px(11.0))
                                                                         .font_weight(FontWeight::BOLD)
                                                                         .text_color(c.pearl)
-                                                                        .child(format!("{bond_exp_curr} / 300 EXP")),
+                                                                        .child(if bond_is_max {
+                                                                            format!("{bond_exp_curr} EXP")
+                                                                        } else {
+                                                                            format!("{bond_exp_curr} / {bond_exp_target} EXP")
+                                                                        }),
                                                                 )
                                                                 .child(
                                                                     div()
@@ -6081,7 +6253,7 @@ impl Render for UsamiApp {
                                                                 .child(
                                                                     div()
                                                                         .h_full()
-                                                                        .w(px(3.2 * bond_exp_pct as f32))
+                                                                        .w(relative(bond_exp_pct as f32 / 100.0))
                                                                         .rounded_full()
                                                                         .bg(t.vn_exp_fill_bg()),
                                                                 ),
@@ -6090,7 +6262,11 @@ impl Render for UsamiApp {
                                                             div()
                                                                 .text_size(px(9.5))
                                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                                .child(format!("★ Faltam {} EXP para o próximo nível! ★", bond_exp_needed)),
+                                                                .child(if bond_is_max {
+                                                                    "★ Nível máximo alcançado! ★".to_string()
+                                                                } else {
+                                                                    format!("★ Faltam {} EXP para o próximo nível! ★", bond_exp_needed)
+                                                                }),
                                                         ),
                                                 )
                                                 // Botão Fechar
@@ -6119,7 +6295,7 @@ impl Render for UsamiApp {
                                         // Conteúdo dinâmico da Aba
                                         .child(
                                             match bond_tab {
-                                                BondTab::Diary => render_vn_tab_diary(bond_level, bond_exp_pct, &t).into_any_element(),
+                                                BondTab::Diary => render_vn_tab_diary(bond_level, bond.as_ref(), &t).into_any_element(),
                                                 BondTab::Memories => render_vn_tab_memories(&t).into_any_element(),
                                                 BondTab::Achievements => render_vn_tab_achievements(&t).into_any_element(),
                                                 BondTab::Profile => render_vn_tab_profile(&t).into_any_element(),
@@ -6169,6 +6345,7 @@ fn main() {
                 let view = cx.new(|cx| UsamiApp::new(cx, prefs));
                 window.focus(&view.read(cx).focus_handle);
                 view.update(cx, |this, cx| this.attach_window_observers(window, cx));
+                view.update(cx, |this, cx| this.fetch_bond(cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view
@@ -6184,9 +6361,25 @@ mod tests {
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
         ProactivityConfig, asset_path, farewell_can_close, first_existing, is_duplicate_utterance,
-        manifest_dir, normalize_utterance_key, push_key_char_with_dead_key,
+        manifest_dir, normalize_utterance_key, push_key_char_with_dead_key, relative_when_at,
+        vn_history_tag,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn history_time_and_tags_reflect_the_core_log() {
+        assert_eq!(relative_when_at(1_000, 1_000), "agora");
+        assert_eq!(relative_when_at(0, 90_000), "há 1 min");
+        assert_eq!(relative_when_at(0, 3_600_000), "há 1 h");
+        assert_eq!(relative_when_at(0, 86_400_000), "ontem");
+        assert_eq!(relative_when_at(0, 3 * 86_400_000), "há 3 dias");
+        // timestamp no futuro (relógio ajustado) não vira "há -1 dias".
+        assert_eq!(relative_when_at(5_000, 1_000), "agora");
+
+        assert_eq!(vn_history_tag("laugh"), "RISADA");
+        assert_eq!(vn_history_tag("call"), "CHAMADA");
+        assert_eq!(vn_history_tag("inventado"), "CHAT");
+    }
 
     #[test]
     fn farewell_holds_close_until_audio_ends_or_timeout() {

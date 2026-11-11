@@ -14,6 +14,17 @@ pub const FONT_BODY: &str = "DM Sans";
 pub const FONT_DISPLAY: &str = "Rajdhani";
 pub const FONT_CHARACTER: &str = "Fraunces";
 
+/// Fraunces itálico com fallback explícito para símbolos.
+///
+/// O layout itálico da fonte embutida não resolve glifos fora do alfabeto
+/// (♡, ♥, ★) pelo fallback automático e mostra tofu; declarar a família de
+/// símbolos do Windows no estilo corrige sem trocar a fonte do texto.
+pub fn font_character_italic() -> Font {
+    let mut font = gpui::font(FONT_CHARACTER).italic();
+    font.fallbacks = Some(FontFallbacks::from_fonts(vec!["Segoe UI Symbol".into()]));
+    font
+}
+
 /// Arquivos embutidos em `assets/fonts` (SIL Open Font License 1.1).
 pub const FONT_FILES: &[&str] = &[
     "assets/fonts/DMSans-Regular.ttf",

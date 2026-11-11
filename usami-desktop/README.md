@@ -35,6 +35,11 @@ com microfone, sem navegador embutido.
   pedem a fala de despedida e a janela só fecha quando o balão aparece e o
   áudio termina (no mudo, ~1,2 s), com teto de 10 s. Fechar de novo durante a
   despedida sai na hora.
+- Mostra o vínculo da VN a partir do core local (`GET /api/bond`): nível e EXP
+  no pill do topo, medidores de carinho/humor/companhia, resumo e histórico de
+  momentos no painel. Cada mensagem enviada rende XP pelas mesmas regras do web
+  (`POST /api/bond/event`, com `spoken` em chamada) e encerrar uma chamada rende
+  companhia por minuto inteiro. São cinco níveis, até "Almas Gêmeas".
 
 ### Persistência local
 
@@ -46,7 +51,8 @@ com microfone, sem navegador embutido.
 
 As gravações usam arquivo temporário + rename para não deixar JSON truncado se
 o processo morrer no meio. O vínculo (medidores de afeto) não mora aqui: ele é
-compartilhado por dispositivo e pertence ao core local (frente pendente).
+compartilhado por dispositivo e pertence ao core local (`usami/data/bond.json`),
+lido e atualizado via `/api/bond` e `/api/bond/event`.
 
 ### Por que nativo
 
@@ -190,6 +196,8 @@ O app fala apenas com a API local; nenhuma chave de provedor fica no executável
 | `POST /api/chat` | enviar a mensagem e receber a resposta | JSON com `message`, `capabilities`, `wake_up_jolt` e `sleep_companion_active` |
 | `POST /api/tts` | sintetizar a resposta | JSON `{text, style_id, stream:true}`; resposta PCM crua (com sample rate no header) ou áudio completo |
 | `POST /api/stt` | transcrever a fala da chamada | multipart, campo `audio` (WAV); resposta `{"text": "..."}` |
+| `GET /api/bond` | ler o vínculo do core | JSON `{ok, bond}` com `intimacy`, `meters` (xp, nível e progresso por medidor), `log`, `updatedAt` e `summary` |
+| `POST /api/bond/event` | render XP por resposta ou chamada | JSON `{content, spoken}` ou `{kind:"call", minutes}`; devolve o vínculo atualizado |
 | `GET /api/proactive/events` | buscar eventos proativos | header `x-usami-activity` com `active`, `idle` ou `away`; em `away`, conversa social é confirmada como `skipped` e lembrete fica pendente |
 | `POST /api/proactive/events/ack` | confirmar entrega | JSON `{acks:[{id,outcome}]}` |
 
@@ -220,14 +228,14 @@ chamada desliga escuta, áudio e microfone.
 ```powershell
 cd usami-desktop
 cargo build --release --locked   # build de release para o pacote
-cargo test                       # 38 testes
+cargo test                       # 43 testes
 cargo clippy                     # sem warnings novos
 ```
 
-A suíte cobre os contratos de `/api/chat`, `/api/tts` (streaming e fallback) e
-`/api/stt` contra um servidor HTTP local, erros HTTP, normalização da base,
-codificação WAV, VAD e o cadeado do microfone, além da resolução de caminhos de
-assets e ícones.
+A suíte cobre os contratos de `/api/chat`, `/api/tts` (streaming e fallback),
+`/api/stt` e `/api/bond` (leitura e eventos de chat/chamada) contra um servidor
+HTTP local, erros HTTP, normalização da base, codificação WAV, VAD e o cadeado
+do microfone, além da resolução de caminhos de assets e ícones.
 
 ## Release
 

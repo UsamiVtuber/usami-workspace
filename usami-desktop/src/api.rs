@@ -254,6 +254,92 @@ pub struct MemoryForgetResponse {
     pub memory: Option<MemoryData>,
 }
 
+/// Medidores do vínculo (0–999). O core decide os ganhos; o desktop só lê.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondMeters {
+    #[serde(default)]
+    pub carinho: u32,
+    #[serde(default)]
+    pub humor: u32,
+    #[serde(default)]
+    pub companhia: u32,
+}
+
+/// Progresso de um medidor já calculado pelo core (barra sem repetir thresholds).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondMeterState {
+    #[serde(default)]
+    pub xp: u32,
+    #[serde(default)]
+    pub level: u32,
+    #[serde(default)]
+    pub progress: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondMetersState {
+    #[serde(default)]
+    pub carinho: BondMeterState,
+    #[serde(default)]
+    pub humor: BondMeterState,
+    #[serde(default)]
+    pub companhia: BondMeterState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondLogEntry {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub at: i64,
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub gains: BondMeters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondSummary {
+    #[serde(default)]
+    pub xp: u32,
+    #[serde(default)]
+    pub level: u32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub line: String,
+    #[serde(default)]
+    pub next: Option<u32>,
+    #[serde(default)]
+    pub remaining: u32,
+    #[serde(default)]
+    pub progress: f32,
+    #[serde(default)]
+    pub max: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BondData {
+    #[serde(default)]
+    pub intimacy: BondMeters,
+    #[serde(default)]
+    pub meters: BondMetersState,
+    #[serde(default)]
+    pub log: Vec<BondLogEntry>,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub summary: BondSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BondResponse {
+    pub ok: bool,
+    pub bond: BondData,
+}
+
 fn default_trait_val() -> u32 {
     50
 }
@@ -637,6 +723,79 @@ impl UsamiApiClient {
                 .map_err(|e| e.to_string())?;
 
             Ok::<MemoryForgetResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_bond(&self) -> Result<BondResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/bond", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<BondResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<BondResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    /// Manda o turno para o core calcular o XP (a regra não vive no cliente).
+    pub async fn award_bond_chat(
+        &self,
+        content: &str,
+        spoken: bool,
+    ) -> Result<BondResponse, String> {
+        let payload = serde_json::json!({ "content": content, "spoken": spoken });
+        self.post_bond_event(payload).await
+    }
+
+    pub async fn award_bond_call(&self, minutes: u32) -> Result<BondResponse, String> {
+        let payload = serde_json::json!({ "kind": "call", "minutes": minutes });
+        self.post_bond_event(payload).await
+    }
+
+    async fn post_bond_event(&self, payload: serde_json::Value) -> Result<BondResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/bond/event", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?
+                .json::<BondResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<BondResponse, String>(res)
         });
 
         match handle.await {
@@ -1122,6 +1281,90 @@ mod tests {
         );
         let client = UsamiApiClient::new(base_url);
         assert!(client.send_chat("oi", false).await.is_err());
+    }
+
+    const BOND_JSON: &str = r#"{
+        "ok": true,
+        "bond": {
+            "intimacy": {"carinho": 41, "humor": 5, "companhia": 10},
+            "meters": {
+                "carinho": {"xp": 41, "level": 2, "progress": 0.457},
+                "humor": {"xp": 5, "level": 1, "progress": 0.2},
+                "companhia": {"xp": 10, "level": 1, "progress": 0.4}
+            },
+            "log": [
+                {"kind": "laugh", "text": "Vocês riram juntos", "at": 1794365589048, "count": 2, "gains": {"carinho": 2, "humor": 4}},
+                {"kind": "call", "text": "Chamada de voz · 4 min", "at": 1794279021215, "count": 1, "gains": {"companhia": 4}}
+            ],
+            "updatedAt": "2026-11-11T02:49:55.880Z",
+            "summary": {"xp": 41, "level": 2, "name": "Amigos Próximos", "line": "Você me deixa muito feliz! ♡", "next": 60, "remaining": 19, "progress": 0.457, "max": false}
+        }
+    }"#;
+
+    #[tokio::test]
+    async fn bond_get_parses_meters_log_and_summary() {
+        let (base_url, requests) =
+            spawn_server("200 OK", "application/json", "", BOND_JSON.as_bytes());
+        let client = UsamiApiClient::with_token(base_url, Some("token-bond".into()));
+        let res = client.get_bond().await.expect("busca vínculo");
+
+        assert!(res.ok);
+        let bond = res.bond;
+        assert_eq!(bond.intimacy.carinho, 41);
+        assert_eq!(bond.meters.carinho.level, 2);
+        assert!((bond.meters.carinho.progress - 0.457).abs() < 1e-6);
+        assert_eq!(bond.log.len(), 2);
+        assert_eq!(bond.log[0].kind, "laugh");
+        assert_eq!(bond.log[0].count, 2);
+        assert_eq!(bond.summary.level, 2);
+        assert_eq!(bond.summary.name, "Amigos Próximos");
+        assert_eq!(bond.summary.next, Some(60));
+        assert_eq!(bond.summary.remaining, 19);
+        assert!(!bond.summary.max);
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/bond");
+    }
+
+    #[tokio::test]
+    async fn bond_chat_event_posts_content_and_spoken() {
+        let (base_url, requests) =
+            spawn_server("200 OK", "application/json", "", BOND_JSON.as_bytes());
+        let client = UsamiApiClient::new(base_url);
+        let res = client
+            .award_bond_chat("kkkk amei isso", true)
+            .await
+            .expect("evento de vínculo");
+
+        assert_eq!(res.bond.summary.xp, 41);
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/bond/event");
+        let body: serde_json::Value = serde_json::from_str(&request.body).expect("corpo json");
+        assert_eq!(body["content"], "kkkk amei isso");
+        assert_eq!(body["spoken"], true);
+        assert!(body.get("kind").is_none(), "chat manda content, não kind");
+    }
+
+    #[tokio::test]
+    async fn bond_call_event_posts_minutes() {
+        let (base_url, requests) =
+            spawn_server("200 OK", "application/json", "", BOND_JSON.as_bytes());
+        let client = UsamiApiClient::new(base_url);
+        client.award_bond_call(4).await.expect("evento de chamada");
+
+        let request = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("requisição capturada");
+        assert_eq!(request.path, "/api/bond/event");
+        let body: serde_json::Value = serde_json::from_str(&request.body).expect("corpo json");
+        assert_eq!(body["kind"], "call");
+        assert_eq!(body["minutes"], 4);
     }
 
     #[test]

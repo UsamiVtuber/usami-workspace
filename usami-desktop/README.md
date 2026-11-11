@@ -5,7 +5,7 @@ Aplicativo nativo da companion Usami para Windows, escrito em **Rust** sobre o
 VRM 3D, chat com o backend local, TTS com lipsync e um modo chamada mãos-livres
 com microfone, sem navegador embutido.
 
-- **Versão atual:** 0.5.0 (`Cargo.toml`, aba SOBRE do painel).
+- **Versão atual:** 0.5.1 (`Cargo.toml`, aba SOBRE do painel).
 - **Canal de releases:** [`UsamiVtuber/usami-desktop`](https://github.com/UsamiVtuber/usami-desktop) (público).
 - **Distribuição:** zip Windows x64 com o executável e a pasta `assets/`. O
   pacote **não** inclui modelos `.vrm` (ver [Modelo e assets](#modelo-e-assets)).
@@ -245,12 +245,12 @@ já autenticado na máquina de quem publica.
 ```powershell
 cd usami-desktop
 gh auth login                          # uma vez, se ainda não estiver logado
-./scripts/release.ps1 -Version 0.5.0   # próxima versão: build + zip + release
-./scripts/release.ps1 -Version 0.5.0 -DryRun   # só monta o pacote, não publica
+./scripts/release.ps1 -Version 0.5.1   # próxima versão: build + zip + release
+./scripts/release.ps1 -Version 0.5.1 -DryRun   # só monta o pacote, não publica
 ```
 
 Use uma versão ainda não publicada: o script aborta se a release já existir (a
-v0.5.0 é a atual).
+v0.5.1 é a atual).
 
 O que o script faz:
 

@@ -3,17 +3,18 @@ pub mod audio;
 #[cfg(target_os = "windows")]
 mod presence;
 pub mod recorder;
+mod storage;
 mod theme;
 
+use crate::api::UsamiApiClient;
+use crate::audio::AudioPlayer;
+use gpui::prelude::FluentBuilder;
+use gpui::*;
+use gpui_vrm::{VrmController, VrmView};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use gpui::*;
-use gpui::prelude::FluentBuilder;
-use gpui_vrm::{VrmController, VrmView};
-use crate::api::UsamiApiClient;
-use crate::audio::AudioPlayer;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActiveDrawer {
@@ -35,6 +36,16 @@ enum SettingsTab {
     About,
 }
 
+/// Abas do hub de romance / diário estilo Visual Novel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BondTab {
+    Diary,
+    Memories,
+    Achievements,
+    Profile,
+    Settings,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sender {
     User,
@@ -46,6 +57,47 @@ struct ChatMessage {
     sender: Sender,
     text: String,
     emotion: Option<String>,
+}
+
+fn stored_turns(turns: &[ChatMessage]) -> Vec<storage::StoredTurn> {
+    turns
+        .iter()
+        .map(|message| storage::StoredTurn {
+            sender: match message.sender {
+                Sender::User => "user".into(),
+                Sender::Usami => "usami".into(),
+            },
+            text: message.text.clone(),
+            emotion: message.emotion.clone(),
+        })
+        .collect()
+}
+
+fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<ChatMessage> {
+    let sender = match turn.sender.as_str() {
+        "user" => Sender::User,
+        "usami" => Sender::Usami,
+        _ => return None,
+    };
+    if turn.text.is_empty() {
+        return None;
+    }
+    Some(ChatMessage {
+        sender,
+        text: turn.text,
+        emotion: turn.emotion,
+    })
+}
+
+fn window_minimized_or_hidden() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        presence::app_is_minimized_or_hidden()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
 }
 
 // Caminhos relativos à crate: o app roda de qualquer lugar do disco e continua
@@ -286,12 +338,7 @@ fn settings_trait_row(label: &'static str) -> impl IntoElement {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
-                            div()
-                                .size(px(14.0))
-                                .rounded_full()
-                                .bg(t.color.primary),
-                        ),
+                        .child(div().size(px(14.0)).rounded_full().bg(t.color.primary)),
                 ),
         )
 }
@@ -487,7 +534,11 @@ fn compose_dead_accent(accent: char, base: char) -> Option<char> {
     }
 }
 
-fn push_key_char_with_dead_key(input_text: &mut String, pending_dead_key: &mut Option<char>, ch: &str) {
+fn push_key_char_with_dead_key(
+    input_text: &mut String,
+    pending_dead_key: &mut Option<char>,
+    ch: &str,
+) {
     let mut chars = ch.chars();
     let first = match chars.next() {
         Some(c) => c,
@@ -561,6 +612,35 @@ fn is_duplicate_utterance(
     false
 }
 
+/// Sanitiza o texto de fala da Usami para a interface de diálogo,
+/// garantindo que tags técnicas (`[intimate_shy]`, `[blush]`, etc.)
+/// e sobras de animações não vazem no balão de fala da Visual Novel.
+fn sanitize_speech_text(text: &str) -> String {
+    let mut cleaned = String::new();
+    let mut in_bracket = false;
+    for ch in text.chars() {
+        if ch == '[' {
+            in_bracket = true;
+            continue;
+        }
+        if ch == ']' {
+            in_bracket = false;
+            continue;
+        }
+        if !in_bracket {
+            cleaned.push(ch);
+        }
+    }
+    if let Some(pos) = cleaned.find("-prefab_") {
+        if let Some(start) =
+            cleaned[..pos].rfind(|c: char| c.is_ascii_digit() || c == ' ' || c == ',')
+        {
+            cleaned.truncate(start);
+        }
+    }
+    cleaned.trim().to_string()
+}
+
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
@@ -584,8 +664,22 @@ struct UsamiApp {
     is_muted: bool,
     is_ui_idle: bool,
     last_interaction: Instant,
+    is_away: bool,
+    away_since: Option<Instant>,
+    window_focused: bool,
+    last_user_activity: Instant,
+    idle_prods: u8,
+    last_return_greeting: Instant,
+    was_maximized: bool,
+    last_maximize_line: Instant,
+    prefs: storage::UiPrefs,
+    session: storage::SessionFile,
+    last_prefs_save: Instant,
+    window_subscriptions: Vec<Subscription>,
+    close_subscription: Option<Subscription>,
     active_drawer: ActiveDrawer,
     settings_tab: SettingsTab,
+    bond_tab: BondTab,
     chat_history: Vec<ChatMessage>,
     bond_level: u32,
     bond_exp_pct: u32,
@@ -618,16 +712,23 @@ struct UsamiApp {
     presence_subscription: Option<Subscription>,
 }
 
-#[cfg(target_os = "windows")]
 impl Drop for UsamiApp {
     fn drop(&mut self) {
-        // Mantém a assinatura de `on_window_closed` viva até o app encerrar.
+        // Mantém as assinaturas de janela vivas até o app encerrar.
+        self.close_subscription.take();
+        #[cfg(target_os = "windows")]
         self.presence_subscription.take();
+        // A gravação no fechamento captura a geometria final (o observador de
+        // bounds economiza escrita enquanto a janela é arrastada).
+        if self.prefs.window.is_some() {
+            self.prefs.muted = self.is_muted;
+            storage::save_prefs(&self.prefs);
+        }
     }
 }
 
 impl UsamiApp {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>, prefs: storage::UiPrefs) -> Self {
         let player = match AudioPlayer::try_new() {
             Ok(p) => Some(Arc::new(p)),
             Err(e) => {
@@ -689,23 +790,66 @@ impl UsamiApp {
         })
         .detach();
 
-        let vrm_view = vrm_path.and_then(|path| {
-            match VrmView::new(&path, vrma_dir, vrm_controller.clone()) {
-                Ok(v) => Some(cx.new(|_cx| v)),
-                Err(e) => {
-                    eprintln!("[gpui-vrm] Falha ao inicializar VrmView: {:?}", e);
-                    None
-                }
-            }
+        let vrm_view =
+            vrm_path.and_then(
+                |path| match VrmView::new(&path, vrma_dir, vrm_controller.clone()) {
+                    Ok(v) => Some(cx.new(|_cx| v)),
+                    Err(e) => {
+                        eprintln!("[gpui-vrm] Falha ao inicializar VrmView: {:?}", e);
+                        None
+                    }
+                },
+            );
+
+        // O marcador de sessão precisa ser lido antes de gravar o novo: só assim
+        // a abertura seguinte sabe se o processo anterior morreu sem fechar.
+        let previous_session = storage::load_session();
+        let session = storage::SessionFile::start();
+        storage::save_session(&session);
+        let abrupt_previous = previous_session.as_ref().is_some_and(|previous| {
+            !previous.clean_shutdown
+                && storage::now_ms().saturating_sub(previous.last_seen_ms) < 24 * 60 * 60 * 1000
         });
 
-        let initial_history = vec![
-            ChatMessage {
+        let mut chat_history: Vec<ChatMessage> = storage::load_conversation()
+            .into_iter()
+            .filter_map(chat_message_from_stored)
+            .collect();
+        if chat_history.is_empty() {
+            chat_history.push(ChatMessage {
                 sender: Sender::Usami,
-                text: "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!".into(),
+                text:
+                    "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!"
+                        .into(),
                 emotion: Some("tsundere".into()),
-            },
-        ];
+            });
+        }
+        if abrupt_previous {
+            chat_history.push(ChatMessage {
+                sender: Sender::Usami,
+                text: "Você fechou o app sem se despedir da última vez... eu fiquei aqui esperando, sabia?".into(),
+                emotion: Some("tsundere".into()),
+            });
+            storage::save_conversation(&stored_turns(&chat_history));
+        }
+        let last_assistant = chat_history
+            .iter()
+            .rev()
+            .find(|message| matches!(message.sender, Sender::Usami))
+            .cloned();
+        let last_reply: SharedString = last_assistant
+            .as_ref()
+            .map(|message| message.text.clone())
+            .unwrap_or_else(|| {
+                "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!"
+                    .into()
+            })
+            .into();
+        let last_emotion: SharedString = last_assistant
+            .and_then(|message| message.emotion)
+            .unwrap_or_else(|| "tsundere".into())
+            .into();
+        let close_subscription = Some(cx.on_window_closed(|_| storage::mark_session_clean()));
 
         // Loop em background para detectar inatividade e suavizar a UI (ui-idle)
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -713,7 +857,9 @@ impl UsamiApp {
             async move {
                 let mut tick_counter: u64 = 0;
                 loop {
-                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
                     tick_counter = tick_counter.wrapping_add(1);
                     let should_poll = tick_counter % 30 == 1; // a cada ~15s (e no primeiro tick)
                     let should_present = tick_counter % 5 == 0; // a cada ~2.5s
@@ -730,7 +876,8 @@ impl UsamiApp {
                                 }
                                 if let Some(started) = view.sleep_companion_started_at {
                                     let elapsed = started.elapsed();
-                                    let remaining = 30_u32.saturating_sub((elapsed.as_secs() / 60) as u32);
+                                    let remaining =
+                                        30_u32.saturating_sub((elapsed.as_secs() / 60) as u32);
                                     if view.sleep_companion_minutes_left != remaining {
                                         view.sleep_companion_minutes_left = remaining;
                                         changed = true;
@@ -741,7 +888,9 @@ impl UsamiApp {
                                     }
                                 }
                                 let has_drawer = view.active_drawer != ActiveDrawer::None;
-                                let is_idle = !has_drawer && view.last_interaction.elapsed() > Duration::from_millis(4500);
+                                let is_idle = !has_drawer
+                                    && view.last_interaction.elapsed()
+                                        > Duration::from_millis(4500);
                                 if view.is_ui_idle != is_idle {
                                     view.is_ui_idle = is_idle;
                                     changed = true;
@@ -754,6 +903,15 @@ impl UsamiApp {
                                 }
                                 if changed {
                                     cx.notify();
+                                }
+
+                                // Minimizar/esconder não gera evento de foco em
+                                // todo caso, então o estado ausente é reavaliado
+                                // no pulso do timer.
+                                view.refresh_away_state(cx);
+                                view.maybe_run_idle_prods(cx);
+                                if view.session.touch() {
+                                    storage::save_session(&view.session);
                                 }
 
                                 if should_poll {
@@ -777,8 +935,8 @@ impl UsamiApp {
             input_active: false,
             caret_on: true,
             status_text: "COM VOCÊ".into(),
-            last_reply: "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!".into(),
-            last_emotion: "tsundere".into(),
+            last_reply,
+            last_emotion,
             show_bubble: true,
             is_busy: false,
             is_calling: false,
@@ -790,12 +948,26 @@ impl UsamiApp {
             is_companion_mode: false,
             sleep_companion_started_at: None,
             sleep_companion_minutes_left: 30,
-            is_muted: false,
+            is_muted: prefs.muted,
             is_ui_idle: false,
             last_interaction: Instant::now(),
+            is_away: false,
+            away_since: None,
+            window_focused: true,
+            last_user_activity: Instant::now(),
+            idle_prods: 0,
+            last_return_greeting: Instant::now() - Duration::from_secs(300),
+            was_maximized: false,
+            last_maximize_line: Instant::now() - Duration::from_secs(900),
+            prefs,
+            session,
+            last_prefs_save: Instant::now() - Duration::from_secs(10),
+            window_subscriptions: Vec::new(),
+            close_subscription,
             active_drawer: ActiveDrawer::None,
             settings_tab: SettingsTab::Chat,
-            chat_history: initial_history,
+            bond_tab: BondTab::Diary,
+            chat_history,
             bond_level: 2,
             bond_exp_pct: 74,
             bg_asset_path,
@@ -844,6 +1016,197 @@ impl UsamiApp {
         }
     }
 
+    /// Atividade causada pelo usuário: além do relógio da UI, reinicia a
+    /// contagem de provocações por inatividade.
+    fn touch_ui(&mut self, cx: &mut Context<Self>) {
+        self.last_user_activity = Instant::now();
+        self.idle_prods = 0;
+        self.poke(cx);
+    }
+
+    fn push_history(&mut self, message: ChatMessage) {
+        self.chat_history.push(message);
+        if self.chat_history.len() > storage::MAX_STORED_TURNS {
+            let overflow = self.chat_history.len() - storage::MAX_STORED_TURNS;
+            self.chat_history.drain(0..overflow);
+        }
+        self.persist_history();
+    }
+
+    fn persist_history(&self) {
+        storage::save_conversation(&stored_turns(&self.chat_history));
+    }
+
+    fn persist_prefs(&mut self) {
+        self.prefs.muted = self.is_muted;
+        storage::save_prefs(&self.prefs);
+        self.last_prefs_save = Instant::now();
+    }
+
+    /// Observa foco e geometria da janela: o foco alimenta o estado ausente e a
+    /// geometria é lembrada entre sessões (a gravação é adiada para não escrever
+    /// um JSON a cada pixel arrastado).
+    fn attach_window_observers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let bounds_subscription = cx.observe_window_bounds(window, |view, window, cx| {
+            let bounds = window.bounds();
+            view.prefs.window = Some(storage::WindowPrefs {
+                x: f32::from(bounds.origin.x),
+                y: f32::from(bounds.origin.y),
+                width: f32::from(bounds.size.width),
+                height: f32::from(bounds.size.height),
+            });
+            if view.last_prefs_save.elapsed() >= Duration::from_secs(2) {
+                view.persist_prefs();
+            }
+            let maximized = window.is_maximized();
+            if maximized != view.was_maximized {
+                view.was_maximized = maximized;
+                if maximized
+                    && !view.is_away
+                    && view.last_maximize_line.elapsed() >= Duration::from_secs(900)
+                {
+                    view.last_maximize_line = Instant::now();
+                    view.show_local_line(
+                        "Tela grande, hein? Vou fingir que não percebi que você quis me ver maior.",
+                        "tsundere",
+                        cx,
+                    );
+                }
+            }
+        });
+        let activation_subscription = cx.observe_window_activation(window, |view, window, cx| {
+            view.window_focused = window.is_window_active();
+            view.refresh_away_state(cx);
+        });
+        self.window_subscriptions.push(bounds_subscription);
+        self.window_subscriptions.push(activation_subscription);
+        // Sem um resize inicial o observador não dispara; guardar a geometria
+        // atual já garante que o fechamento salve a janela do primeiro uso.
+        let bounds = window.bounds();
+        self.prefs.window = Some(storage::WindowPrefs {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+        });
+        self.window_focused = window.is_window_active();
+        self.was_maximized = window.is_maximized();
+    }
+
+    fn default_status(&self) -> SharedString {
+        if self.is_calling {
+            "SUA VEZ".into()
+        } else if self.is_companion_mode {
+            "MODO COMPANION".into()
+        } else {
+            "COM VOCÊ".into()
+        }
+    }
+
+    /// Ausência é imediata: minimizar, esconder ou perder o foco já marca
+    /// AUSENTE. Chamada e modo companhia são exceções — nessas horas o app pode
+    /// ficar em segundo plano sem que ela "sinta" a ausência.
+    fn refresh_away_state(&mut self, cx: &mut Context<Self>) {
+        let exempt = self.is_calling || self.sleep_companion_started_at.is_some();
+        let away = !exempt && (window_minimized_or_hidden() || !self.window_focused);
+        if away == self.is_away {
+            return;
+        }
+        self.is_away = away;
+        if away {
+            self.away_since = Some(Instant::now());
+            self.status_text = "AUSENTE".into();
+            // Eventos já buscados não devem falar quando ela voltar: o próximo
+            // poll, com activity=away, consome e marca como pulados.
+            self.proactive_queue.clear();
+        } else {
+            let away_for = self
+                .away_since
+                .take()
+                .map(|since| since.elapsed())
+                .unwrap_or_default();
+            self.status_text = self.default_status();
+            self.show_return_greeting(away_for, cx);
+        }
+        cx.notify();
+    }
+
+    fn show_return_greeting(&mut self, away_for: Duration, cx: &mut Context<Self>) {
+        if away_for < Duration::from_secs(60)
+            || self.last_return_greeting.elapsed() < Duration::from_secs(300)
+            || self.is_busy
+            || self.vrm_controller.is_speaking()
+        {
+            return;
+        }
+        let line = if away_for >= Duration::from_secs(30 * 60) {
+            "Você ficou fora bastante tempo... eu fiquei aqui, sabia? Fico feliz que voltou."
+        } else if away_for >= Duration::from_secs(5 * 60) {
+            "Onde você foi? Não é como se eu estivesse esperando... mas pronto, você voltou."
+        } else {
+            "Você voltou rapidinho. Eu nem tive tempo de sentir sua falta."
+        };
+        self.last_return_greeting = Instant::now();
+        self.show_local_line(line, "tsundere", cx);
+    }
+
+    /// Fala curta da própria Usami (sem backend): entrada no histórico, balão e
+    /// emoção. Usada pelas despedidas/boas-vindas e pelas provocações de inatividade.
+    fn show_local_line(
+        &mut self,
+        text: &'static str,
+        emotion: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.last_reply = text.into();
+        self.last_emotion = emotion.into();
+        self.show_bubble = true;
+        self.vrm_controller
+            .set_emotion_with_options(emotion, 4.0, false);
+        self.push_history(ChatMessage {
+            sender: Sender::Usami,
+            text: text.to_string(),
+            emotion: Some(emotion.to_string()),
+        });
+        self.poke(cx);
+        cx.notify();
+    }
+
+    /// Sem interação e sem fala há alguns minutos, ela chama atenção em vez de
+    /// ficar em silêncio para sempre. Só roda com a janela em primeiro plano:
+    /// com o app ausente quem fala é a despedida/boas-vindas.
+    fn maybe_run_idle_prods(&mut self, cx: &mut Context<Self>) {
+        if self.is_away
+            || self.is_calling
+            || self.sleep_companion_started_at.is_some()
+            || self.is_busy
+            || self.vrm_controller.is_speaking()
+        {
+            return;
+        }
+        const PRODS: [(u64, &str); 3] = [
+            (
+                210,
+                "Ei... você tá aí? Pode ficar quieto, mas eu prefiro quando você fala comigo.",
+            ),
+            (
+                420,
+                "Hmph. Se você não tem nada pra dizer, eu também não vou ficar puxando assunto.",
+            ),
+            (600, "Já faz um tempinho... tá tudo bem aí?"),
+        ];
+        let idle = self.last_user_activity.elapsed().as_secs();
+        let Some((_, line)) = PRODS
+            .get(self.idle_prods as usize)
+            .copied()
+            .filter(|(threshold, _)| idle >= *threshold)
+        else {
+            return;
+        };
+        self.idle_prods += 1;
+        self.show_local_line(line, "tsundere", cx);
+    }
+
     fn start_call(&mut self, cx: &mut Context<Self>) {
         self.is_calling = true;
         self.call_started_at = Some(Instant::now());
@@ -857,7 +1220,12 @@ impl UsamiApp {
         self.is_calling = false;
         self.call_started_at = None;
         self.call_seconds = 0;
-        self.status_text = if self.is_companion_mode { "MODO COMPANION" } else { "COM VOCÊ" }.into();
+        self.status_text = if self.is_companion_mode {
+            "MODO COMPANION"
+        } else {
+            "COM VOCÊ"
+        }
+        .into();
     }
 
     fn toggle_sleep_companion(&mut self) {
@@ -878,8 +1246,14 @@ impl UsamiApp {
         self.sleep_companion_minutes_left = 30;
         self.is_companion_mode = false;
         self.last_emotion = "tsundere".into();
-        self.status_text = if self.is_calling { "SUA VEZ" } else { "COM VOCÊ" }.into();
-        self.vrm_controller.set_emotion_with_options("tsundere", 4.0, false);
+        self.status_text = if self.is_calling {
+            "SUA VEZ"
+        } else {
+            "COM VOCÊ"
+        }
+        .into();
+        self.vrm_controller
+            .set_emotion_with_options("tsundere", 4.0, false);
         self.vrm_controller.play_idle();
     }
 
@@ -1000,7 +1374,7 @@ impl UsamiApp {
     }
 
     fn attach_file_prompt(&mut self, cx: &mut Context<Self>) {
-        self.poke(cx);
+        self.touch_ui(cx);
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -1051,7 +1425,7 @@ impl UsamiApp {
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
-        self.poke(cx);
+        self.touch_ui(cx);
         let text = self.input_text.trim().to_string();
         let attached = self.attached_media.take();
         if (text.is_empty() && attached.is_none()) || self.is_busy {
@@ -1079,7 +1453,7 @@ impl UsamiApp {
             } else {
                 format!("[Mídia: {}] {}", media.filename, text)
             };
-            self.chat_history.push(ChatMessage {
+            self.push_history(ChatMessage {
                 sender: Sender::User,
                 text: user_msg,
                 emotion: None,
@@ -1112,7 +1486,7 @@ impl UsamiApp {
                                 match res {
                                     Ok(response) => {
                                         let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
-                                        view.last_reply = response.reply.clone().into();
+                                        view.last_reply = sanitize_speech_text(&response.reply).into();
                                         view.last_emotion = emotion.clone().into();
                                         view.show_bubble = true;
                                         view.status_text = if view.is_calling {
@@ -1153,7 +1527,7 @@ impl UsamiApp {
                                             view.vrm_controller.play_vrma(&gesture, false);
                                         }
 
-                                        view.chat_history.push(ChatMessage {
+                                        view.push_history(ChatMessage {
                                             sender: Sender::Usami,
                                             text: response.reply.clone(),
                                             emotion: Some(emotion.clone()),
@@ -1234,7 +1608,7 @@ impl UsamiApp {
             return;
         }
 
-        self.chat_history.push(ChatMessage {
+        self.push_history(ChatMessage {
             sender: Sender::User,
             text: text.clone(),
             emotion: None,
@@ -1260,7 +1634,7 @@ impl UsamiApp {
                             match res {
                                 Ok(response) => {
                                     let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
-                                    view.last_reply = response.reply.clone().into();
+                                    view.last_reply = sanitize_speech_text(&response.reply).into();
                                     view.last_emotion = emotion.clone().into();
                                     view.show_bubble = true;
                                     view.status_text = if view.is_calling {
@@ -1306,7 +1680,7 @@ impl UsamiApp {
                                         view.vrm_controller.play_vrma(gesture, false);
                                     }
 
-                                    view.chat_history.push(ChatMessage {
+                                    view.push_history(ChatMessage {
                                         sender: Sender::Usami,
                                         text: response.reply.clone(),
                                         emotion: Some(emotion.clone()),
@@ -1416,14 +1790,42 @@ impl UsamiApp {
         let is_active = self.last_interaction.elapsed() < Duration::from_secs(60)
             || self.vrm_controller.is_speaking()
             || self.last_voice_ended.elapsed() < Duration::from_secs(60);
+        let activity = if self.is_away {
+            "away"
+        } else if is_active {
+            "active"
+        } else {
+            "idle"
+        };
 
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                if let Ok(res) = api.get_proactive_events(is_active).await {
+                if let Ok(res) = api.get_proactive_events(activity).await {
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, _cx| {
+                                // Ausente: conversa social é consumida sem falar
+                                // (não despeja atrasados ao voltar); lembrete fica
+                                // pendente no servidor para não se perder.
+                                if view.is_away {
+                                    let acks: Vec<crate::api::ProactiveAckItem> = res
+                                        .events
+                                        .iter()
+                                        .filter(|event| event.event_type != "reminder")
+                                        .map(|event| crate::api::ProactiveAckItem {
+                                            id: event.id.clone(),
+                                            outcome: "skipped".to_string(),
+                                        })
+                                        .collect();
+                                    if !acks.is_empty() {
+                                        let api = Arc::clone(&view.api_client);
+                                        crate::api::tokio_runtime().spawn(async move {
+                                            let _ = api.ack_proactive_events(&acks).await;
+                                        });
+                                    }
+                                    return;
+                                }
                                 for event in res.events {
                                     if let Some(dedupe_key) = &event.dedupe_key {
                                         if view.proactive_seen.contains(dedupe_key) {
@@ -1447,7 +1849,7 @@ impl UsamiApp {
     }
 
     fn present_next_proactive(&mut self, cx: &mut Context<Self>) {
-        if !self.proactive_enabled || self.proactive_queue.is_empty() {
+        if !self.proactive_enabled || self.proactive_queue.is_empty() || self.is_away {
             return;
         }
         if self.is_busy
@@ -1471,19 +1873,20 @@ impl UsamiApp {
         }
 
         let emotion = event.emotion.clone().unwrap_or_else(|| "tsundere".into());
-        self.last_reply = event.text.clone().into();
+        self.last_reply = sanitize_speech_text(&event.text).into();
         self.last_emotion = emotion.clone().into();
         self.show_bubble = true;
-        self.vrm_controller.set_emotion_with_options(&emotion, 5.0, false);
+        self.vrm_controller
+            .set_emotion_with_options(&emotion, 5.0, false);
         if let Some(gesture) = &event.gesture {
             self.vrm_controller.play_vrma(gesture, false);
         }
-        self.chat_history.push(ChatMessage {
+        self.push_history(ChatMessage {
             sender: Sender::Usami,
             text: event.text.clone(),
             emotion: Some(emotion.clone()),
         });
-        self.poke(cx);
+        self.touch_ui(cx);
         cx.notify();
 
         let api = Arc::clone(&self.api_client);
@@ -1676,7 +2079,8 @@ impl UsamiApp {
                                     view.memory_error = None;
                                 }
                                 Err(err) => {
-                                    view.memory_error = Some(format!("Falha ao excluir: {err}").into());
+                                    view.memory_error =
+                                        Some(format!("Falha ao excluir: {err}").into());
                                 }
                             }
                             cx.notify();
@@ -1719,11 +2123,13 @@ impl UsamiApp {
                                         view.memory_data = Some(api::MemoryData::default());
                                     }
                                     view.memory_confirm_active = false;
-                                    view.memory_status = Some("Toda a memória foi redefinida.".into());
+                                    view.memory_status =
+                                        Some("Toda a memória foi redefinida.".into());
                                     view.memory_error = None;
                                 }
                                 Err(err) => {
-                                    view.memory_error = Some(format!("Falha ao apagar tudo: {err}").into());
+                                    view.memory_error =
+                                        Some(format!("Falha ao apagar tudo: {err}").into());
                                 }
                             }
                             cx.notify();
@@ -1786,7 +2192,9 @@ impl UsamiApp {
     }
 
     fn save_personality(&mut self, cx: &mut Context<Self>) {
-        let Some(data) = self.personality_data.clone() else { return };
+        let Some(data) = self.personality_data.clone() else {
+            return;
+        };
         self.personality_loading = true;
         self.personality_status = None;
         let api = Arc::clone(&self.api_client);
@@ -1807,11 +2215,13 @@ impl UsamiApp {
                             match res {
                                 Ok(resp) => {
                                     view.personality_data = Some(resp.personality);
-                                    view.personality_status = Some("Personalidade salva no servidor!".into());
+                                    view.personality_status =
+                                        Some("Personalidade salva no servidor!".into());
                                     view.personality_error = None;
                                 }
                                 Err(err) => {
-                                    view.personality_error = Some(format!("Falha ao salvar: {err}").into());
+                                    view.personality_error =
+                                        Some(format!("Falha ao salvar: {err}").into());
                                 }
                             }
                             cx.notify();
@@ -1844,11 +2254,13 @@ impl UsamiApp {
                             match res {
                                 Ok(resp) => {
                                     view.personality_data = Some(resp.personality);
-                                    view.personality_status = Some("Personalidade restaurada para o padrão (50).".into());
+                                    view.personality_status =
+                                        Some("Personalidade restaurada para o padrão (50).".into());
                                     view.personality_error = None;
                                 }
                                 Err(err) => {
-                                    view.personality_error = Some(format!("Falha ao restaurar: {err}").into());
+                                    view.personality_error =
+                                        Some(format!("Falha ao restaurar: {err}").into());
                                 }
                             }
                             cx.notify();
@@ -1859,6 +2271,962 @@ impl UsamiApp {
         })
         .detach();
     }
+}
+
+// ── COMPONENTES DO HUB DE VISUAL NOVEL DE ROMANCE ──
+
+fn render_vn_tab_btn(
+    id: &'static str,
+    label: &'static str,
+    is_active: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let t = theme::theme();
+    let c = t.color;
+    div()
+        .id(id)
+        .cursor_pointer()
+        .h(px(38.0))
+        .px(px(14.0))
+        .rounded(px(12.0))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .bg(if is_active {
+            t.vn_tab_active_bg()
+        } else {
+            theme::Theme::gradient(90.0, rgba(0x00000000), rgba(0x00000000))
+        })
+        .border_1()
+        .border_color(if is_active {
+            theme::Palette::vn_border_bright()
+        } else {
+            rgba(0x00000000)
+        })
+        .shadow(if is_active {
+            t.shadow.vn_card.clone()
+        } else {
+            vec![]
+        })
+        .text_size(px(12.5))
+        .font_weight(if is_active {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        })
+        .text_color(if is_active { c.pearl } else { c.muted })
+        .hover(move |s| {
+            if !is_active {
+                s.bg(rgba(0xffa6c926)).text_color(c.pearl)
+            } else {
+                s
+            }
+        })
+        .on_click(on_click)
+        .child(label)
+}
+
+fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) -> impl IntoElement {
+    let c = t.color;
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .overflow_hidden()
+        // 1. Card Nossos Vínculos (Caderninho + Post-it)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(12.0))
+                .p(px(12.0))
+                .rounded(px(18.0))
+                .bg(t.vn_card_bg())
+                .border_1()
+                .border_color(theme::Palette::vn_card_border())
+                .shadow(t.shadow.vn_card.clone())
+                // Lado Esquerdo: Barras de Atributos
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(
+                            div().flex().items_center().gap(px(6.0)).child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .font_family(theme::FONT_CHARACTER)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.pearl)
+                                    .child("💖 Nossos Vínculos"),
+                            ),
+                        )
+                        // Carinho
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(c.pearl)
+                                                .child("Carinho"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(theme::Palette::vn_pink_soft())
+                                                .child("♥♥♥♥♡"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(7.0))
+                                        .rounded_full()
+                                        .bg(c.bond_track)
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(px(220.0))
+                                                .rounded_full()
+                                                .bg(t.vn_exp_fill_bg()),
+                                        ),
+                                ),
+                        )
+                        // Humor
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(c.pearl)
+                                                .child("Humor"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(theme::Palette::vn_pink_soft())
+                                                .child("😊 (◕‿◕)"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(7.0))
+                                        .rounded_full()
+                                        .bg(c.bond_track)
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(px(240.0))
+                                                .rounded_full()
+                                                .bg(t.bond_fill_bg()),
+                                        ),
+                                ),
+                        )
+                        // Companhia
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(c.pearl)
+                                                .child("Companhia"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(theme::Palette::vn_pink_soft())
+                                                .child("👥 ✦ Nv. 2"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(7.0))
+                                        .rounded_full()
+                                        .bg(c.bond_track)
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(px(195.0))
+                                                .rounded_full()
+                                                .bg(t.vn_exp_fill_bg()),
+                                        ),
+                                ),
+                        ),
+                )
+                // Lado Direito: Post-it decorado com bilhetinho
+                .child(
+                    div()
+                        .w(px(210.0))
+                        .flex_shrink_0()
+                        .p(px(12.0))
+                        .rounded(px(14.0))
+                        .bg(rgb(0xfff0f7))
+                        .border_1()
+                        .border_color(rgba(0xffa6c999))
+                        .flex()
+                        .flex_col()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x8a2b6e))
+                                        .child("⭐ BILHETINHO"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(0xd1478f))
+                                        .child("♡"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .my(px(6.0))
+                                .text_size(px(13.0))
+                                .font_family(theme::FONT_CHARACTER)
+                                .italic()
+                                .line_height(px(18.0))
+                                .text_color(rgb(0x4a183b))
+                                .child("“Você me deixa muito feliz! ♡ Não se esqueça disso...”"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(div().text_size(px(12.0)).child("🐰"))
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x8a2b6e))
+                                        .child("— Usami"),
+                                ),
+                        ),
+                ),
+        )
+        // 2. Card Progresso do Relacionamento
+        .child(
+            div()
+                .p(px(10.0))
+                .rounded(px(16.0))
+                .bg(t.vn_card_bg())
+                .border_1()
+                .border_color(theme::Palette::vn_card_border())
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("💖 Progresso do Relacionamento"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(14.0))
+                        .py(px(4.0))
+                        // Marco 1
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(14.0))
+                                        .text_color(theme::Palette::vn_pink_soft())
+                                        .child("♥"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.pearl)
+                                        .child("Nv.1"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.0))
+                                        .text_color(c.muted)
+                                        .child("Conhecidos"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(2.0))
+                                .mx(px(8.0))
+                                .bg(theme::Palette::vn_pink_neon()),
+                        )
+                        // Marco 2 (Ativo)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(16.0))
+                                        .text_color(theme::Palette::vn_pink_neon())
+                                        .child("💖"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme::Palette::vn_pink_soft())
+                                        .child(format!("Nv.{}", bond_level)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.0))
+                                        .text_color(c.pearl)
+                                        .child("Amigos Próximos"),
+                                ),
+                        )
+                        .child(div().flex_1().h(px(2.0)).mx(px(8.0)).bg(c.bond_track))
+                        // Marco 3
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(div().text_size(px(13.0)).text_color(c.muted).child("🔒"))
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.muted)
+                                        .child("Nv.3"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.0))
+                                        .text_color(c.faint)
+                                        .child("Parceiros?"),
+                                ),
+                        ),
+                ),
+        )
+        // 3. Grid Inferior (Histórico Recente e Memórias Especiais)
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_row()
+                .gap(px(12.0))
+                .overflow_hidden()
+                // Card Histórico Recente
+                .child(
+                    div()
+                        .flex_1()
+                        .p(px(10.0))
+                        .rounded(px(16.0))
+                        .bg(t.vn_card_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_card_border())
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.pearl)
+                                        .child("⭐ Histórico Recente"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.5))
+                                        .text_color(theme::Palette::vn_pink_soft())
+                                        .child("Ver mais ›"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(render_vn_history_item(
+                                    "💬",
+                                    "Você conversou com a Usami.",
+                                    "Hoje",
+                                ))
+                                .child(render_vn_history_item(
+                                    "💖",
+                                    "Ela sorriu com sua mensagem!",
+                                    "Ontem",
+                                ))
+                                .child(render_vn_history_item(
+                                    "🎁",
+                                    "Você lhe fez um elogio carinhoso.",
+                                    "Ontem",
+                                )),
+                        ),
+                )
+                // Card Memórias Especiais (Mini Polaroids)
+                .child(
+                    div()
+                        .flex_1()
+                        .p(px(10.0))
+                        .rounded(px(16.0))
+                        .bg(t.vn_card_bg())
+                        .border_1()
+                        .border_color(theme::Palette::vn_card_border())
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.pearl)
+                                        .child("✨ Memórias Especiais"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.5))
+                                        .text_color(theme::Palette::vn_pink_soft())
+                                        .child("Ver tudo ›"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_between()
+                                .gap(px(6.0))
+                                .child(render_vn_polaroid("🌸", "Sorriso", "1º Momento"))
+                                .child(render_vn_polaroid("😳", "Tímida", "Coradinha"))
+                                .child(render_vn_polaroid("💤", "Sonhos", "Tranquila")),
+                        ),
+                ),
+        )
+}
+
+fn render_vn_history_item(
+    icon: &'static str,
+    title: &'static str,
+    time: &'static str,
+) -> impl IntoElement {
+    let t = theme::theme();
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .p(px(4.0))
+        .rounded(px(6.0))
+        .bg(rgba(0x28154566))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(div().text_size(px(11.0)).child(icon))
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(t.color.pearl)
+                        .child(title),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(9.5))
+                .text_color(t.color.muted)
+                .child(time),
+        )
+}
+
+fn render_vn_polaroid(
+    emoji: &'static str,
+    title: &'static str,
+    subtitle: &'static str,
+) -> impl IntoElement {
+    div()
+        .flex_1()
+        .p(px(6.0))
+        .pb(px(8.0))
+        .rounded(px(10.0))
+        .bg(rgb(0xfff6fb))
+        .border_1()
+        .border_color(rgba(0xffa6c9b3))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(2.0))
+        .child(
+            div()
+                .w_full()
+                .h(px(44.0))
+                .rounded(px(6.0))
+                .bg(rgb(0x28143d))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().text_size(px(22.0)).child(emoji)),
+        )
+        .child(
+            div()
+                .text_size(px(9.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x4a183b))
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(8.5))
+                .text_color(rgb(0x8a306e))
+                .child(subtitle),
+        )
+}
+
+fn render_vn_tab_memories(t: &theme::Theme) -> impl IntoElement {
+    let c = t.color;
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .text_size(px(16.0))
+                .font_family(theme::FONT_CHARACTER)
+                .font_weight(FontWeight::BOLD)
+                .text_color(c.pearl)
+                .child("🖼️ Álbum de Memórias Especiais"),
+        )
+        .child(
+            div()
+                .text_size(px(11.5))
+                .text_color(theme::Palette::vn_pink_soft())
+                .child("Momentos inesquecíveis que você e a Usami colecionaram juntos:"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(12.0))
+                .child(render_vn_large_memory(
+                    "🌸",
+                    "O Primeiro Sorriso",
+                    "Quando você disse uma piada boba e ela não resistiu.",
+                    "Desbloqueado",
+                ))
+                .child(render_vn_large_memory(
+                    "😳",
+                    "Ficou sem Graça",
+                    "Você chamou a Usami de fofa e as bochechas dela arderam.",
+                    "Desbloqueado",
+                ))
+                .child(render_vn_large_memory(
+                    "🌙",
+                    "Conversa Noturna",
+                    "Vocês ficaram conversando até altas horas no silêncio da noite.",
+                    "Desbloqueado",
+                ))
+                .child(render_vn_large_memory(
+                    "🎁",
+                    "Segredo Confiado",
+                    "A Usami contou o motivo de usar a fita de laço.",
+                    "Bloqueado",
+                )),
+        )
+}
+
+fn render_vn_large_memory(
+    emoji: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    status: &'static str,
+) -> impl IntoElement {
+    let t = theme::theme();
+    let is_unlocked = status == "Desbloqueado";
+    div()
+        .w(px(320.0))
+        .p(px(10.0))
+        .rounded(px(14.0))
+        .bg(t.vn_card_bg())
+        .border_1()
+        .border_color(if is_unlocked {
+            theme::Palette::vn_border_bright()
+        } else {
+            t.color.line_strong
+        })
+        .flex()
+        .gap(px(10.0))
+        .child(
+            div()
+                .size(px(56.0))
+                .rounded(px(10.0))
+                .bg(if is_unlocked {
+                    rgb(0x2c1447)
+                } else {
+                    rgb(0x181424)
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(26.0))
+                        .child(if is_unlocked { emoji } else { "🔒" }),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(t.color.pearl)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .line_height(px(14.0))
+                        .text_color(t.color.muted)
+                        .child(desc),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .text_color(if is_unlocked {
+                            theme::Palette::vn_pink_soft()
+                        } else {
+                            t.color.faint
+                        })
+                        .child(status),
+                ),
+        )
+}
+
+fn render_vn_tab_achievements(t: &theme::Theme) -> impl IntoElement {
+    let c = t.color;
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .text_size(px(16.0))
+                .font_family(theme::FONT_CHARACTER)
+                .font_weight(FontWeight::BOLD)
+                .text_color(c.pearl)
+                .child("🏆 Conquistas & Insígnias"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(10.0))
+                .child(render_vn_achievement_badge(
+                    "✨",
+                    "Primeiro Olá",
+                    "Iniciou o aplicativo e conheceu a Usami.",
+                    true,
+                ))
+                .child(render_vn_achievement_badge(
+                    "💖",
+                    "Coração Quentinho",
+                    "Atingiu Nível 2 de Vínculo.",
+                    true,
+                ))
+                .child(render_vn_achievement_badge(
+                    "🎙️",
+                    "Na Mesma Sintonia",
+                    "Conversou por voz usando o microfone.",
+                    true,
+                ))
+                .child(render_vn_achievement_badge(
+                    "🌙",
+                    "Madrugando Juntos",
+                    "Ficou online após a meia-noite.",
+                    true,
+                ))
+                .child(render_vn_achievement_badge(
+                    "🎨",
+                    "Apreciador de Arte",
+                    "Enviou uma imagem ou desenho para ela.",
+                    false,
+                ))
+                .child(render_vn_achievement_badge(
+                    "💍",
+                    "Coração Conectado",
+                    "Atingiu o nível máximo de afeição.",
+                    false,
+                )),
+        )
+}
+
+fn render_vn_achievement_badge(
+    icon: &'static str,
+    name: &'static str,
+    desc: &'static str,
+    unlocked: bool,
+) -> impl IntoElement {
+    let t = theme::theme();
+    div()
+        .w(px(320.0))
+        .p(px(8.0))
+        .rounded(px(12.0))
+        .bg(t.vn_card_bg())
+        .border_1()
+        .border_color(if unlocked {
+            theme::Palette::vn_border_bright()
+        } else {
+            t.color.line
+        })
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .child(
+            div()
+                .size(px(38.0))
+                .rounded_full()
+                .bg(if unlocked {
+                    t.vn_tab_active_bg()
+                } else {
+                    theme::Theme::gradient(90.0, rgba(0x181024aa), rgba(0x181024aa))
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(18.0))
+                        .child(if unlocked { icon } else { "🔒" }),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(t.color.pearl)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(t.color.muted)
+                        .child(desc),
+                ),
+        )
+}
+
+fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
+    let c = t.color;
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .p(px(12.0))
+        .rounded(px(16.0))
+        .bg(t.vn_card_bg())
+        .border_1()
+        .border_color(theme::Palette::vn_card_border())
+        .child(
+            div()
+                .text_size(px(16.0))
+                .font_family(theme::FONT_CHARACTER)
+                .font_weight(FontWeight::BOLD)
+                .text_color(c.pearl)
+                .child("🐰 Ficha da Usami (ウサミ)"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(render_vn_profile_row(
+                    "Espécie:",
+                    "Espírito Coelho Guardião",
+                ))
+                .child(render_vn_profile_row("Aniversário:", "14 de Fevereiro"))
+                .child(render_vn_profile_row(
+                    "Personalidade:",
+                    "Tsundere carinhosa — finge que não liga, mas adora sua atenção",
+                ))
+                .child(render_vn_profile_row(
+                    "Gosta de:",
+                    "Doces de morango, noites calmas, quando você repara nos detalhes",
+                ))
+                .child(render_vn_profile_row(
+                    "Não gosta de:",
+                    "Ficar sem resposta, quando você a chama de fofa na cara dura",
+                ))
+                .child(render_vn_profile_row(
+                    "Segredo:",
+                    "Fica treinando o que vai falar antes de você abrir o aplicativo ♡",
+                )),
+        )
+}
+
+fn render_vn_profile_row(label: &'static str, val: &'static str) -> impl IntoElement {
+    let t = theme::theme();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .p(px(6.0))
+        .rounded(px(8.0))
+        .bg(rgba(0x22123d66))
+        .child(
+            div()
+                .w(px(100.0))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme::Palette::vn_pink_soft())
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(11.5))
+                .text_color(t.color.pearl)
+                .child(val),
+        )
+}
+
+fn render_vn_tab_settings(
+    t: &theme::Theme,
+    on_open_advanced: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let c = t.color;
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .justify_between()
+        .p(px(12.0))
+        .rounded(px(16.0))
+        .bg(t.vn_card_bg())
+        .border_1()
+        .border_color(theme::Palette::vn_card_border())
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .font_family(theme::FONT_CHARACTER)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child("⚙️ Preferências & Configurações"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(c.muted)
+                        .child("Personalize a voz, memória e respostas da sua Usami:"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .mt(px(4.0))
+                        .child(render_vn_profile_row(
+                            "Modo Voz:",
+                            "Gemini Multimodal Live / TTS",
+                        ))
+                        .child(render_vn_profile_row(
+                            "Servidor:",
+                            "127.0.0.1:8787 (Local Seguro)",
+                        ))
+                        .child(render_vn_profile_row(
+                            "Avatar 3D:",
+                            "Sweet_nya555 VRM Engine",
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .id("vn-open-advanced-settings-btn")
+                .cursor_pointer()
+                .p(px(12.0))
+                .rounded(px(12.0))
+                .bg(t.vn_tab_active_bg())
+                .shadow(t.shadow.vn_card.clone())
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(8.0))
+                .text_size(px(13.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(c.pearl)
+                .hover(|s| s.bg(theme::Palette::vn_border_bright()))
+                .on_click(on_open_advanced)
+                .child("Abrir Painel de Ajustes Detalhados ›"),
+        )
 }
 
 impl Render for UsamiApp {
@@ -1881,12 +3249,11 @@ impl Render for UsamiApp {
         let active_drawer = self.active_drawer;
         let settings_tab = self.settings_tab;
         let chat_open = active_drawer == ActiveDrawer::Chat;
-        let side_drawer_open = matches!(
-            active_drawer,
-            ActiveDrawer::Settings | ActiveDrawer::Vrma
-        ) && !chat_open;
+        let side_drawer_open =
+            matches!(active_drawer, ActiveDrawer::Settings | ActiveDrawer::Vrma) && !chat_open;
         let bond_level = self.bond_level;
         let bond_exp_pct = self.bond_exp_pct;
+        let bond_tab = self.bond_tab;
         let show_bubble = self.show_bubble;
         let bg_asset = self.bg_asset_path.clone();
         let vrm_entity = self.vrm_view.clone();
@@ -1904,11 +3271,18 @@ impl Render for UsamiApp {
 
         let status_label: SharedString = if is_calling {
             let state = if is_listening { "OUVINDO" } else { "MIC OFF" };
-            format!("{state} · {:02}:{:02}", self.call_seconds / 60, self.call_seconds % 60).into()
+            format!(
+                "{state} · {:02}:{:02}",
+                self.call_seconds / 60,
+                self.call_seconds % 60
+            )
+            .into()
         } else if is_busy {
             "PENSANDO".into()
         } else if is_companion {
             "MODO COMPANION".into()
+        } else if self.is_away {
+            "AUSENTE".into()
         } else {
             "COM VOCÊ".into()
         };
@@ -1916,6 +3290,8 @@ impl Render for UsamiApp {
             c.err
         } else if is_busy {
             c.warn
+        } else if self.is_away {
+            c.muted
         } else {
             c.ok
         };
@@ -1930,10 +3306,10 @@ impl Render for UsamiApp {
             .font_family(theme::FONT_BODY)
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|this, _event: &MouseMoveEvent, _window, cx| {
-                this.poke(cx);
+                this.touch_ui(cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                this.poke(cx);
+                this.touch_ui(cx);
                 let ks = &event.keystroke;
                 let key = ks.key.as_str();
 
@@ -2116,29 +3492,29 @@ impl Render for UsamiApp {
                         div().into_any_element()
                     }),
             )
-            // ── LAYER 3: FLOATING SPEECH BUBBLE (.bubble.her) ──
+            // ── LAYER 3: FLOATING SPEECH BUBBLE (.bubble.her) ESTILO VISUAL NOVEL ──
             .when(show_bubble, |parent| {
                 parent.child(
                     div()
                         .absolute()
                         .top(px(135.0))
                         .left(px(140.0))
-                        .max_w(px(440.0))
+                        .max_w(px(460.0))
                         .relative()
-                        .pt(px(14.0))
+                        .pt(px(12.0))
                         .pb(px(16.0))
                         .px(px(sp.s5))
                         .rounded_tl(px(r.xl))
                         .rounded_tr(px(r.xl))
                         .rounded_br(px(r.xl))
                         .rounded_bl(px(sp.s1))
-                        .bg(c.bubble_bg)
-                        .border_1()
-                        .border_color(c.line_strong)
-                        .shadow(t.shadow.bubble.clone())
+                        .bg(rgba(0x130a24ee))
+                        .border_2()
+                        .border_color(theme::Palette::vn_card_border())
+                        .shadow(t.shadow.vn_card.clone())
                         .id("floating-bubble")
                         .cursor_pointer()
-                        .hover(|style| style.border_color(c.line_glow))
+                        .hover(|style| style.border_color(theme::Palette::vn_border_bright()))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.show_bubble = false;
                             this.poke(cx);
@@ -2149,25 +3525,31 @@ impl Render for UsamiApp {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .mb(px(sp.s1_5))
+                                .mb(px(sp.s2))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap(px(7.0))
+                                        .gap(px(8.0))
                                         .child(
                                             div()
+                                                .px(px(8.0))
+                                                .py(px(2.0))
+                                                .rounded(px(10.0))
+                                                .bg(t.vn_bubble_tag_bg())
+                                                .border_1()
+                                                .border_color(theme::Palette::vn_card_border())
                                                 .text_size(px(ty.xs))
                                                 .font_family(theme::FONT_DISPLAY)
                                                 .font_weight(FontWeight::BOLD)
-                                                .text_color(c.primary)
-                                                .child("USAMI"),
+                                                .text_color(c.pearl)
+                                                .child("★ Usami ♡"),
                                         )
                                         .child(
                                             div()
                                                 .text_size(px(ty.xs))
                                                 .font_family(theme::FONT_DISPLAY)
-                                                .text_color(c.lavender)
+                                                .text_color(theme::Palette::vn_pink_soft())
                                                 .child(format!("· {last_emotion}")),
                                         ),
                                 )
@@ -2175,6 +3557,7 @@ impl Render for UsamiApp {
                                     div()
                                         .text_size(px(ty.xs))
                                         .text_color(c.faint)
+                                        .hover(|s| s.text_color(c.pearl))
                                         .child("✕"),
                                 ),
                         )
@@ -2186,6 +3569,19 @@ impl Render for UsamiApp {
                                 .line_height(px(24.0))
                                 .text_color(c.pearl)
                                 .child(last_reply),
+                        )
+                        // Cursor de diálogo de Visual Novel no canto inferior direito
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .mt(px(4.0))
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(theme::Palette::vn_pink_neon())
+                                        .child("▼"),
+                                ),
                         )
                         // Rabicho embaixo à esquerda (.bubble.her::after), na cor do corpo.
                         .child(
@@ -2469,12 +3865,13 @@ impl Render for UsamiApp {
                                 ),
                         )
                     })
-                    // Compositor
+                    // Compositor estilo VN
                     .child(
                         div()
                             .id("composer-bar")
-                            .w(px(640.0))
-                            .max_w(px(640.0))
+                            .w(px(720.0))
+                            .max_w(px(760.0))
+                            .min_h(px(46.0))
                             .flex()
                             .items_center()
                             .gap(px(sp.s1_5))
@@ -2485,7 +3882,7 @@ impl Render for UsamiApp {
                             .rounded(px(r.composer))
                             .bg(c.composer_bg)
                             .border_1()
-                            .border_color(if input_active { c.primary } else { c.line_strong })
+                            .border_color(if input_active { theme::Palette::vn_border_bright() } else { c.line_strong })
                             .shadow(if input_active {
                                 t.shadow.composer_focus.clone()
                             } else {
@@ -2520,14 +3917,14 @@ impl Render for UsamiApp {
                                     }))
                                     .child(icon("image", 18.0)),
                             )
-                            // Campo de texto
+                            // Campo de texto expansível
                             .child(
                                 div()
                                     .id("input-box")
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .px(px(sp.s1_5))
-                                    .py(px(sp.s2))
+                                    .py(px(sp.s1_5))
                                     .cursor_text()
                                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                         this.poke(cx);
@@ -2575,11 +3972,12 @@ impl Render for UsamiApp {
                                             .when(!input_text.is_empty(), |row| {
                                                 row.child(
                                                     div()
+                                                        .flex_1()
                                                         .min_w(px(0.0))
+                                                        .max_h(px(90.0))
                                                         .overflow_hidden()
-                                                        .whitespace_nowrap()
-                                                        .text_ellipsis()
                                                         .text_size(px(ty.input))
+                                                        .line_height(px(20.0))
                                                         .text_color(c.pearl)
                                                         .child(input_text.clone()),
                                                 )
@@ -2589,9 +3987,9 @@ impl Render for UsamiApp {
                                                             .flex_shrink_0()
                                                             .w(px(1.5))
                                                             .h(px(16.0))
-                                                            .ml(px(1.0))
+                                                            .ml(px(2.0))
                                                             .bg(if caret_visible {
-                                                                c.primary
+                                                                theme::Palette::vn_pink_neon()
                                                             } else {
                                                                 gpui::rgba(0x00000000)
                                                             }),
@@ -2660,9 +4058,10 @@ impl Render for UsamiApp {
                                                         .text_color(c.pearl)
                                                 })
                                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                    this.poke(cx);
+                                                    this.touch_ui(cx);
                                                     this.is_muted = !this.is_muted;
                                                     this.sync_mic_gate();
+                                                    this.persist_prefs();
                                                     cx.notify();
                                                 }))
                                                 .child(icon("volume", 18.0)),
@@ -2806,9 +4205,10 @@ impl Render for UsamiApp {
                                         .border_color(if is_muted { c.primary } else { c.line })
                                         .hover(|style| style.bg(c.icon_bg_hover).border_color(c.line_strong))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.poke(cx);
+                                            this.touch_ui(cx);
                                             this.is_muted = !this.is_muted;
                                             this.sync_mic_gate();
+                                            this.persist_prefs();
                                             cx.notify();
                                         }))
                                         .child(icon("volume", 19.0)),
@@ -3511,9 +4911,9 @@ impl Render for UsamiApp {
                                                                         ))),
                                                                 ),
                                                         )
-                                                        .child(settings_h3("HISTÓRICO LOCAL DA SESSÃO"))
+                                                        .child(settings_h3("HISTÓRICO LOCAL"))
                                                         .child(settings_p(SharedString::from(format!(
-                                                            "Total de {} mensagem(ns) nesta janela.",
+                                                            "Total de {} mensagem(ns) salva(s) neste computador.",
                                                             msg_count
                                                         ))))
                                                         .child(
@@ -3534,10 +4934,11 @@ impl Render for UsamiApp {
                                                                         .hover(|s| s.bg(c.line_strong))
                                                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                                             this.chat_history.clear();
+                                                                            this.persist_history();
                                                                             this.show_bubble = false;
                                                                             cx.notify();
                                                                         }))
-                                                                        .child("Limpar histórico da sessão"),
+                                                                        .child("Limpar histórico da conversa"),
                                                                 ),
                                                         )
                                                 }
@@ -4265,10 +5666,21 @@ impl Render for UsamiApp {
                         }),
                 )
             })
-            // ── LAYER 8: PAINEL DE VÍNCULO (SHEET FLUTUANTE DA WEB) ──
+            // ── LAYER 8: CENTRAL DE RELACIONAMENTO & DIÁRIO ESTILO VISUAL NOVEL ──
             .when(active_drawer == ActiveDrawer::Bond, |parent| {
+                let bond_exp_curr = (bond_exp_pct * 3).min(300);
+                let bond_exp_needed = 300u32.saturating_sub(bond_exp_curr);
+                let bond_level_title = match bond_level {
+                    1 => "Conhecidos",
+                    2 => "Amigos Próximos",
+                    3 => "Companheiros",
+                    4 => "Corações Conectados",
+                    _ => "Almas Gêmeas ♡",
+                };
+
                 parent.child(
                     div()
+                        .id("vn-scrim-overlay")
                         .absolute()
                         .top_0()
                         .left_0()
@@ -4276,137 +5688,291 @@ impl Render for UsamiApp {
                         .bottom_0()
                         .flex()
                         .items_center()
-                        .justify_end()
-                        .pt(px(72.0))
-                        .pr(px(sp.s6))
-                        .pb(px(sp.s6))
-                        .bg(t.bond_scrim_bg())
+                        .justify_center()
+                        .bg(rgba(0x06030edd))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.active_drawer = ActiveDrawer::None;
+                            this.poke(cx);
+                            cx.notify();
+                        }))
                         .child(
+                            // Container Principal da Central de Visual Novel (960x610)
                             div()
-                                .w(px(520.0))
-                                .max_h(px(804.0))
+                                .id("vn-modal-container")
+                                .w(px(960.0))
+                                .h(px(610.0))
+                                .max_h(px(610.0))
                                 .flex()
-                                .flex_col()
-                                .gap(px(sp.s3))
-                                .p(px(18.0))
-                                .rounded(px(r.sheet))
-                                .bg(t.bond_sheet_bg())
-                                .border_1()
-                                .border_color(c.bond_border)
-                                .shadow(t.shadow.sheet.clone())
-                                .child(
-                                    div().flex().justify_end().child(
-                                        div()
-                                            .id("bond-close-btn")
-                                            .cursor_pointer()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size(px(34.0))
-                                            .rounded_full()
-                                            .bg(c.surface_soft)
-                                            .border_1()
-                                            .border_color(c.line_strong)
-                                            .text_color(c.pearl)
-                                            .hover(|style| {
-                                                style.bg(c.accent_tint).border_color(c.primary)
-                                            })
-                                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                this.active_drawer = ActiveDrawer::None;
-                                                this.poke(cx);
-                                                cx.notify();
-                                            }))
-                                            .child(icon("close", 16.0)),
-                                    ),
-                                )
+                                .flex_row()
+                                .overflow_hidden()
+                                .rounded(px(26.0))
+                                .bg(t.vn_modal_bg())
+                                .border_2()
+                                .border_color(theme::Palette::vn_border_bright())
+                                .shadow(t.shadow.vn_modal.clone())
+                                .on_click(|_, _, _| {}) // Evita fechar ao clicar no corpo do modal
+                                // ── COLUNA ESQUERDA: SIDEBAR VISUAL NOVEL ──
                                 .child(
                                     div()
+                                        .w(px(230.0))
+                                        .flex_shrink_0()
                                         .flex()
-                                        .items_center()
-                                        .gap(px(18.0))
-                                        .pb(px(sp.s1))
-                                        .pl(px(sp.s1))
-                                        // Badge "Nv.N" do vínculo (`.bond-badge-level`):
-                                        // Fraunces upright 600 a 30px sobre o coração.
+                                        .flex_col()
+                                        .justify_between()
+                                        .p(px(16.0))
+                                        .bg(t.vn_sidebar_bg())
+                                        .border_r_1()
+                                        .border_color(theme::Palette::vn_card_border())
                                         .child(
                                             div()
-                                                .size(px(120.0))
-                                                .flex_shrink_0()
-                                                .child(icon("heart_empty", 120.0))
-                                                .child(
-                                                    div()
-                                                        .absolute()
-                                                        .top_0()
-                                                        .left_0()
-                                                        .right_0()
-                                                        .bottom_0()
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .pb(px(sp.s2))
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(30.0))
-                                                                .font_family(theme::FONT_CHARACTER)
-                                                                .font_weight(FontWeight::SEMIBOLD)
-                                                                .text_color(c.pearl)
-                                                                .child(format!("Nv.{bond_level}")),
-                                                        ),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
                                                 .flex()
                                                 .flex_col()
-                                                .gap(px(sp.s2))
+                                                .gap(px(12.0))
+                                                // Header da Usami
                                                 .child(
                                                     div()
-                                                        .text_size(px(20.0))
-                                                        .font_family(theme::FONT_CHARACTER)
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(c.pearl)
-                                                        .child(format!(
-                                                            "Nível {bond_level} — Amiga Próxima"
-                                                        )),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .w(px(320.0))
-                                                        .h(px(12.0))
-                                                        .rounded_full()
-                                                        .bg(c.bond_track)
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(2.0))
                                                         .child(
                                                             div()
-                                                                .h_full()
-                                                                .w(px(3.2 * bond_exp_pct as f32))
-                                                                .rounded_full()
-                                                                .bg(t.bond_fill_bg()),
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap(px(6.0))
+                                                                .child(div().text_size(px(18.0)).child("🐰"))
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(22.0))
+                                                                        .font_family(theme::FONT_CHARACTER)
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(c.pearl)
+                                                                        .child("Usami ♡"),
+                                                                ),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(ty.xs))
+                                                                .text_color(theme::Palette::vn_pink_soft())
+                                                                .child("ウサミ · VN Romance Hub"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(10.5))
+                                                                .text_color(c.muted)
+                                                                .child("Sempre aqui, com você ♡"),
+                                                        ),
+                                                )
+                                                // Divisor delicado
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .h(px(1.0))
+                                                        .bg(theme::Palette::vn_card_border()),
+                                                )
+                                                // Menu de abas verticais
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(6.0))
+                                                        .child(render_vn_tab_btn("vn-tab-diary", "💖 Meu Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Diary;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-memories", "🖼️ Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Memories;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-achievements", "🏆 Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Achievements;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-profile", "🐰 Sobre Mim", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Profile;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-settings", "⚙️ Configurações", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Settings;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        }))),
+                                                ),
+                                        )
+                                        // Rodapé Mascote Chibi
+                                        .child(
+                                            div()
+                                                .p(px(10.0))
+                                                .rounded(px(14.0))
+                                                .bg(rgba(0x23123d88))
+                                                .border_1()
+                                                .border_color(theme::Palette::vn_card_border())
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(4.0))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(14.0))
+                                                                .text_color(theme::Palette::vn_pink_soft())
+                                                                .child("(˶ᵔ ᵕ ᵔ˶) ♡"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(10.0))
+                                                                .text_color(theme::Palette::vn_gold())
+                                                                .child("🌙 ⭐"),
                                                         ),
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_size(px(ty.xs))
-                                                        .text_color(c.muted)
-                                                        .child(format!(
-                                                            "{bond_exp_pct}% para o próximo nível"
-                                                        )),
+                                                        .text_size(px(10.5))
+                                                        .font_family(theme::FONT_CHARACTER)
+                                                        .italic()
+                                                        .text_color(c.pearl)
+                                                        .child("“Você voltou... Que bom! ♡”"),
                                                 ),
                                         ),
                                 )
+                                // ── COLUNA DIREITA: CONTEÚDO PRINCIPAL ──
                                 .child(
                                     div()
-                                        .p(px(sp.s4))
-                                        .rounded(px(r.md))
-                                        .bg(c.card_bg)
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .p(px(18.0))
+                                        .gap(px(10.0))
+                                        .overflow_hidden()
+                                        // Header Superior de Nível e EXP
                                         .child(
                                             div()
-                                                .text_size(px(ty.sm))
-                                                .line_height(px(19.0))
-                                                .text_color(c.pearl)
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .pb(px(6.0))
+                                                .border_b_1()
+                                                .border_color(theme::Palette::vn_card_border())
+                                                // Badge Coração de Nível
                                                 .child(
-                                                    "Converse com a Usami para fortalecer o vínculo de vocês.",
+                                                    div()
+                                                        .px(px(14.0))
+                                                        .py(px(4.0))
+                                                        .rounded(px(16.0))
+                                                        .bg(t.vn_heart_badge_bg())
+                                                        .border_1()
+                                                        .border_color(theme::Palette::vn_border_bright())
+                                                        .flex()
+                                                        .flex_col()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(16.0))
+                                                                .font_family(theme::FONT_CHARACTER)
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(c.pearl)
+                                                                .child(format!("♥ Nv. {bond_level}")),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(9.5))
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(theme::Palette::vn_pink_soft())
+                                                                .child(format!("✦ {} ✦", bond_level_title)),
+                                                        ),
+                                                )
+                                                // Barra de EXP
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .mx(px(14.0))
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(4.0))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .justify_between()
+                                                                .items_center()
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(11.0))
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(c.pearl)
+                                                                        .child(format!("{bond_exp_curr} / 300 EXP")),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(9.5))
+                                                                        .text_color(theme::Palette::vn_gold())
+                                                                        .child("✦ BÔNUS DIÁRIO ✦"),
+                                                                ),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w_full()
+                                                                .h(px(8.0))
+                                                                .rounded_full()
+                                                                .bg(c.bond_track)
+                                                                .overflow_hidden()
+                                                                .child(
+                                                                    div()
+                                                                        .h_full()
+                                                                        .w(px(3.2 * bond_exp_pct as f32))
+                                                                        .rounded_full()
+                                                                        .bg(t.vn_exp_fill_bg()),
+                                                                ),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(9.5))
+                                                                .text_color(theme::Palette::vn_pink_soft())
+                                                                .child(format!("★ Faltam {} EXP para o próximo nível! ★", bond_exp_needed)),
+                                                        ),
+                                                )
+                                                // Botão Fechar
+                                                .child(
+                                                    div()
+                                                        .id("vn-bond-close-btn")
+                                                        .cursor_pointer()
+                                                        .size(px(32.0))
+                                                        .rounded_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .bg(c.surface_soft)
+                                                        .border_1()
+                                                        .border_color(theme::Palette::vn_card_border())
+                                                        .text_color(c.pearl)
+                                                        .hover(|s| s.bg(theme::Palette::vn_pink_neon()).border_color(c.pearl))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.active_drawer = ActiveDrawer::None;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        }))
+                                                        .child(icon("close", 14.0)),
                                                 ),
+                                        )
+                                        // Conteúdo dinâmico da Aba
+                                        .child(
+                                            match bond_tab {
+                                                BondTab::Diary => render_vn_tab_diary(bond_level, bond_exp_pct, &t).into_any_element(),
+                                                BondTab::Memories => render_vn_tab_memories(&t).into_any_element(),
+                                                BondTab::Achievements => render_vn_tab_achievements(&t).into_any_element(),
+                                                BondTab::Profile => render_vn_tab_profile(&t).into_any_element(),
+                                                BondTab::Settings => render_vn_tab_settings(&t, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                    this.active_drawer = ActiveDrawer::Settings;
+                                                    this.load_active_settings_tab(cx);
+                                                    this.poke(cx);
+                                                    cx.notify();
+                                                })).into_any_element(),
+                                            }
                                         ),
                                 ),
                         ),
@@ -4421,7 +5987,17 @@ fn main() {
         // Fontes OFL locais (sem CDN em runtime). Fica antes de abrir a janela
         // para o primeiro frame já medir com as famílias certas.
         theme::load_fonts(cx, asset_base_dir());
-        let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+        let prefs = storage::load_prefs();
+        let bounds = prefs
+            .window
+            .filter(|window| window.is_sane())
+            .map(|window| {
+                Bounds::new(
+                    point(px(window.x), px(window.y)),
+                    size(px(window.width), px(window.height)),
+                )
+            })
+            .unwrap_or_else(|| Bounds::centered(None, size(px(1440.0), px(900.0)), cx));
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -4433,8 +6009,9 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(UsamiApp::new);
+                let view = cx.new(|cx| UsamiApp::new(cx, prefs));
                 window.focus(&view.read(cx).focus_handle);
+                view.update(cx, |this, cx| this.attach_window_observers(window, cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view
@@ -4449,8 +6026,8 @@ mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
-        asset_path, first_existing, is_duplicate_utterance, manifest_dir,
-        normalize_utterance_key, push_key_char_with_dead_key, ProactivityConfig,
+        ProactivityConfig, asset_path, first_existing, is_duplicate_utterance, manifest_dir,
+        normalize_utterance_key, push_key_char_with_dead_key,
     };
     use std::time::{Duration, Instant};
 
@@ -4503,10 +6080,8 @@ mod tests {
 
     #[test]
     fn first_existing_skips_missing_candidates() {
-        let dir = std::env::temp_dir().join(format!(
-            "usami-desktop-path-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("usami-desktop-path-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("cria diretório temporário");
         let missing = dir.join("missing.png");
         let present = dir.join("present.png");

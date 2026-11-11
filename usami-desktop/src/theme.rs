@@ -164,6 +164,31 @@ impl Palette {
             bond_fill_to: rgb(0xffb8d2),
         }
     }
+
+    /// Cores exclusivas para o estilo Visual Novel de Romance
+    pub fn vn_pink_neon() -> Rgba {
+        rgb(0xff5e9e)
+    }
+
+    pub fn vn_pink_soft() -> Rgba {
+        rgb(0xffa6c9)
+    }
+
+    pub fn vn_purple_glow() -> Rgba {
+        rgb(0xb86bff)
+    }
+
+    pub fn vn_card_border() -> Rgba {
+        rgba(0xffa6c94d)
+    }
+
+    pub fn vn_border_bright() -> Rgba {
+        rgba(0xff79c680)
+    }
+
+    pub fn vn_gold() -> Rgba {
+        rgb(0xf5c451)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -259,6 +284,8 @@ pub struct Shadows {
     pub drawer: Vec<BoxShadow>,
     pub sheet: Vec<BoxShadow>,
     pub send: Vec<BoxShadow>,
+    pub vn_modal: Vec<BoxShadow>,
+    pub vn_card: Vec<BoxShadow>,
 }
 
 impl Shadows {
@@ -290,6 +317,15 @@ impl Shadows {
                 shadow_of(accent, 0.22, 0.0, 0.0, 40.0),
             ],
             send: vec![shadow_of(pink, 0.4, 0.0, 0.0, 14.0)],
+            vn_modal: vec![
+                shadow_of(black, 0.75, 0.0, 32.0, 90.0),
+                shadow_of(Palette::vn_pink_neon(), 0.35, 0.0, 0.0, 45.0),
+                shadow_of(Palette::vn_purple_glow(), 0.2, 0.0, 0.0, 80.0),
+            ],
+            vn_card: vec![
+                shadow_of(black, 0.4, 0.0, 10.0, 25.0),
+                shadow_of(Palette::vn_pink_soft(), 0.1, 0.0, 0.0, 12.0),
+            ],
         }
     }
 }
@@ -319,7 +355,7 @@ impl Theme {
         }
     }
 
-    fn gradient(angle: f32, from: Rgba, to: Rgba) -> Background {
+    pub fn gradient(angle: f32, from: Rgba, to: Rgba) -> Background {
         linear_gradient(
             angle,
             linear_color_stop(from, 0.0),
@@ -355,6 +391,35 @@ impl Theme {
     /// `linear-gradient(90deg, transparent 30%, rgba(7,13,31,.55) 70%)`
     pub fn bond_scrim_bg(&self) -> Background {
         Self::gradient(90.0, rgba(0x070d1f00), rgba(0x070d1f8c))
+    }
+
+    /// Fundo com gradiente ametista profundo característico de Visual Novel de Romance
+    pub fn vn_modal_bg(&self) -> Background {
+        Self::gradient(145.0, rgba(0x1a0c2ef8), rgba(0x0b0517fa))
+    }
+
+    pub fn vn_sidebar_bg(&self) -> Background {
+        Self::gradient(180.0, rgba(0x140a26e6), rgba(0x0e061cee))
+    }
+
+    pub fn vn_card_bg(&self) -> Background {
+        Self::gradient(135.0, rgba(0x23113de0), rgba(0x180c2cdc))
+    }
+
+    pub fn vn_tab_active_bg(&self) -> Background {
+        Self::gradient(90.0, Palette::vn_pink_neon(), rgb(0xdb5ed9))
+    }
+
+    pub fn vn_heart_badge_bg(&self) -> Background {
+        Self::gradient(135.0, rgba(0xff5e9ef0), rgba(0x9d4eddf0))
+    }
+
+    pub fn vn_exp_fill_bg(&self) -> Background {
+        Self::gradient(90.0, Palette::vn_pink_neon(), rgb(0xdb68fa))
+    }
+
+    pub fn vn_bubble_tag_bg(&self) -> Background {
+        Self::gradient(90.0, rgba(0xff5e9e73), rgba(0xb86bff4d))
     }
 }
 

@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8787";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -103,7 +103,10 @@ pub struct ChatMessageRequest {
     pub capabilities: Option<serde_json::Value>,
     #[serde(rename = "wakeUpJolt", skip_serializing_if = "Option::is_none")]
     pub wake_up_jolt: Option<bool>,
-    #[serde(rename = "sleepCompanionActive", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "sleepCompanionActive",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sleep_companion_active: Option<bool>,
 }
 
@@ -704,24 +707,26 @@ impl UsamiApiClient {
         }
     }
 
-    pub async fn get_proactive_events(&self, is_active: bool) -> Result<ProactiveEventsResponse, String> {
+    pub async fn get_proactive_events(
+        &self,
+        activity: &str,
+    ) -> Result<ProactiveEventsResponse, String> {
         let client = self.client.clone();
         let url = format!("{}/api/proactive/events", self.base_url);
         let token = self.token.clone();
+        let activity = activity.to_string();
 
         let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url)
+            let mut req = client
+                .get(url)
                 .header("x-usami-client", "usami-desktop")
-                .header("x-usami-activity", if is_active { "active" } else { "idle" });
+                .header("x-usami-activity", activity);
 
             if let Some(t) = token {
                 req = req.header("x-usami-token", t);
             }
 
-            let res = req
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
+            let res = req.send().await.map_err(|e| e.to_string())?;
 
             if !res.status().is_success() {
                 return Err(format!("HTTP {}", res.status()));
@@ -741,7 +746,10 @@ impl UsamiApiClient {
         }
     }
 
-    pub async fn ack_proactive_events(&self, acks: &[ProactiveAckItem]) -> Result<ProactiveAckResponse, String> {
+    pub async fn ack_proactive_events(
+        &self,
+        acks: &[ProactiveAckItem],
+    ) -> Result<ProactiveAckResponse, String> {
         let client = self.client.clone();
         let url = format!("{}/api/proactive/events/ack", self.base_url);
         let token = self.token.clone();
@@ -750,17 +758,16 @@ impl UsamiApiClient {
         };
 
         let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload)
+            let mut req = client
+                .post(url)
+                .json(&payload)
                 .header("x-usami-client", "usami-desktop");
 
             if let Some(t) = token {
                 req = req.header("x-usami-token", t);
             }
 
-            let res = req
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
+            let res = req.send().await.map_err(|e| e.to_string())?;
 
             if !res.status().is_success() {
                 return Err(format!("HTTP {}", res.status()));
@@ -800,7 +807,9 @@ impl UsamiApiClient {
         };
 
         let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload)
+            let mut req = client
+                .post(url)
+                .json(&payload)
                 .header("x-usami-client", "usami-desktop");
 
             if let Some(t) = token {
@@ -815,7 +824,9 @@ impl UsamiApiClient {
             let status = res.status();
             if !status.is_success() {
                 let err_text = res.text().await.unwrap_or_default();
-                return Err(format!("Erro HTTP {status} na análise de mídia: {err_text}"));
+                return Err(format!(
+                    "Erro HTTP {status} na análise de mídia: {err_text}"
+                ));
             }
 
             let data = res
@@ -963,7 +974,10 @@ mod tests {
     #[test]
     fn base_url_is_trimmed_and_defaulted() {
         assert_eq!(normalize_base_url(None), DEFAULT_BASE_URL);
-        assert_eq!(normalize_base_url(Some("   ".to_string())), DEFAULT_BASE_URL);
+        assert_eq!(
+            normalize_base_url(Some("   ".to_string())),
+            DEFAULT_BASE_URL
+        );
         assert_eq!(
             normalize_base_url(Some("http://127.0.0.1:9000/".to_string())),
             "http://127.0.0.1:9000"
@@ -991,10 +1005,12 @@ mod tests {
             .expect("requisição capturada");
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/api/chat");
-        assert!(request
-            .content_type
-            .unwrap_or_default()
-            .starts_with("application/json"));
+        assert!(
+            request
+                .content_type
+                .unwrap_or_default()
+                .starts_with("application/json")
+        );
         let body: serde_json::Value =
             serde_json::from_str(&request.body).expect("corpo JSON do chat");
         assert_eq!(body["message"], "olá");
@@ -1071,12 +1087,8 @@ mod tests {
 
     #[tokio::test]
     async fn stt_posts_multipart_audio_and_returns_text() {
-        let (base_url, requests) = spawn_server(
-            "200 OK",
-            "application/json",
-            "",
-            br#"{"text":"bom dia"}"#,
-        );
+        let (base_url, requests) =
+            spawn_server("200 OK", "application/json", "", br#"{"text":"bom dia"}"#);
         let client = UsamiApiClient::new(base_url);
         let text = client
             .transcribe(b"RIFF----WAVE".to_vec())
@@ -1089,10 +1101,12 @@ mod tests {
             .expect("requisição capturada");
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/api/stt");
-        assert!(request
-            .content_type
-            .unwrap_or_default()
-            .starts_with("multipart/form-data"));
+        assert!(
+            request
+                .content_type
+                .unwrap_or_default()
+                .starts_with("multipart/form-data")
+        );
         assert!(request.body.contains("name=\"audio\""));
         assert!(request.body.contains("filename=\"mic.wav\""));
         assert!(request.body.contains("RIFF"));
@@ -1164,7 +1178,8 @@ mod tests {
             ]
         }"#;
 
-        let res: PersonalityResponse = serde_json::from_str(json).expect("deserializa personality json");
+        let res: PersonalityResponse =
+            serde_json::from_str(json).expect("deserializa personality json");
         assert!(res.ok);
         let p = res.personality;
         assert_eq!(p.traits.warmth, 75);
@@ -1211,7 +1226,8 @@ mod tests {
             "serverTime": "2026-11-09T14:00:00Z"
         }"#;
 
-        let res: ProactiveEventsResponse = serde_json::from_str(json).expect("deserializa proactive json");
+        let res: ProactiveEventsResponse =
+            serde_json::from_str(json).expect("deserializa proactive json");
         assert_eq!(res.events.len(), 1);
         let ev = &res.events[0];
         assert_eq!(ev.id, "evt_abc123");
@@ -1230,11 +1246,16 @@ mod tests {
             br#"{"events":[{"id":"evt_1","type":"greeting","text":"Oi capitao!","speak":true}],"serverTime":"2026-11-09T14:00:00Z"}"#,
         );
         let client = UsamiApiClient::with_token(base_url, Some("token-proactive".into()));
-        let res = client.get_proactive_events(true).await.expect("busca eventos");
+        let res = client
+            .get_proactive_events("active")
+            .await
+            .expect("busca eventos");
         assert_eq!(res.events.len(), 1);
         assert_eq!(res.events[0].text, "Oi capitao!");
 
-        let req1 = requests.recv_timeout(Duration::from_secs(5)).expect("recebe get");
+        let req1 = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("recebe get");
         assert_eq!(req1.method, "GET");
         assert_eq!(req1.path, "/api/proactive/events");
     }
@@ -1275,7 +1296,13 @@ mod tests {
         );
         let client = UsamiApiClient::with_token(base_url, Some("token-media".into()));
         let res = client
-            .analyze_media("image/png", "Zm9v", Some("foto.png"), Some("olha isso"), None)
+            .analyze_media(
+                "image/png",
+                "Zm9v",
+                Some("foto.png"),
+                Some("olha isso"),
+                None,
+            )
             .await
             .expect("analisa midia");
 
@@ -1284,7 +1311,9 @@ mod tests {
         assert_eq!(res.gesture.as_deref(), Some("nod"));
         assert_eq!(res.actions.len(), 1);
 
-        let req = requests.recv_timeout(Duration::from_secs(5)).expect("recebe post");
+        let req = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("recebe post");
         assert_eq!(req.method, "POST");
         assert_eq!(req.path, "/api/media/analyze");
         let body: serde_json::Value = serde_json::from_str(&req.body).expect("corpo json");

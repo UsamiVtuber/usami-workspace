@@ -25,6 +25,24 @@ com microfone, sem navegador embutido.
   apresentados como referência desabilitada.
 - Tem modo companhia (ícone da lua): emoção `sleepy` e status `MODO COMPANION`
   por até 30 minutos.
+- Lembra a conversa entre sessões: as últimas 100 mensagens, o mudo e a
+  geometria da janela ficam em `%APPDATA%\Usami`.
+- Sente a ausência de imediato: ao minimizar, esconder na bandeja ou perder o
+  foco o status vira `AUSENTE`; ao voltar ela cumprimenta de acordo com o tempo
+  fora, e detecta o fechamento abrupto da sessão anterior. Com a janela em
+  primeiro plano e sem interação, ela puxa assunto aos ~3,5, 7 e 10 minutos.
+
+### Persistência local
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| `conversation.json` | últimas 100 mensagens (texto e emoção). |
+| `ui.json` | mudo e posição/tamanho da janela (descartada se a geometria for inválida). |
+| `session.json` | início, batimento a cada 60 s e `clean_shutdown` — é o que permite notar um kill abrupto na próxima abertura. |
+
+As gravações usam arquivo temporário + rename para não deixar JSON truncado se
+o processo morrer no meio. O vínculo (medidores de afeto) não mora aqui: ele é
+compartilhado por dispositivo e pertence ao core local (frente pendente).
 
 ### Por que nativo
 
@@ -70,6 +88,7 @@ animações em `../usami/public/animations/vrma` (ver
 | `src/api.rs` | Cliente HTTP (`reqwest`) para `/api/chat`, `/api/tts` e `/api/stt`; timeouts e parsing do streaming de TTS. |
 | `src/audio.rs` | Saída de áudio com `cpal`/`rodio`; fila de PCM contínua, sem pausas entre trechos. |
 | `src/recorder.rs` | Captura do microfone em thread própria (`cpal`), VAD por frames de 20 ms, `MicGate` e codificação WAV PCM 16-bit mono. |
+| `src/storage.rs` | Persistência local em `%APPDATA%\Usami`: conversa, preferências (mudo e geometria da janela) e marcador de sessão com batimento. |
 | `../gpui-vrm` | Crate local do motor VRM/glTF/VRMA (WGPU, MToon cel-shading, SpringBone, blendshapes, lipsync e look-at IK). |
 | `PACKAGE_README.md` | README que acompanha o zip de release (instalação, requisitos, aviso do SmartScreen). |
 | `scripts/release.ps1` | Build e publicação local da release no repo público. |
@@ -89,7 +108,9 @@ Principais dependências: `gpui` 0.2.2, `cpal` 0.18.2, `rodio` 0.23.0,
 - **Dock durante a chamada:** escuta (pulse), histórico, encerrar, mudo e modo
   companhia (lua).
 - **Barra de status:** estado da conversa e da chamada (`COM VOCÊ`, `OUVINDO`,
-  `SUA VEZ`, `MODO COMPANION`), com LED que pulsa enquanto ela pensa.
+  `SUA VEZ`, `MODO COMPANION`, `AUSENTE`), com LED que pulsa enquanto ela pensa.
+  `AUSENTE` aparece quando a janela está minimizada, escondida na bandeja ou
+  sem foco (chamada e modo companhia são exceções).
 
 ### Painel de configurações
 
@@ -165,6 +186,8 @@ O app fala apenas com a API local; nenhuma chave de provedor fica no executável
 | `POST /api/chat` | enviar a mensagem e receber a resposta | JSON com `message`, `capabilities`, `wake_up_jolt` e `sleep_companion_active` |
 | `POST /api/tts` | sintetizar a resposta | JSON `{text, style_id, stream:true}`; resposta PCM crua (com sample rate no header) ou áudio completo |
 | `POST /api/stt` | transcrever a fala da chamada | multipart, campo `audio` (WAV); resposta `{"text": "..."}` |
+| `GET /api/proactive/events` | buscar eventos proativos | header `x-usami-activity` com `active`, `idle` ou `away`; em `away`, conversa social é confirmada como `skipped` e lembrete fica pendente |
+| `POST /api/proactive/events/ack` | confirmar entrega | JSON `{acks:[{id,outcome}]}` |
 
 O backend precisa expor esses endpoints (ver `usami/` e o README da raiz).
 Erros HTTP aparecem no status; sem microfone, o app mostra o erro e continua
@@ -193,7 +216,7 @@ chamada desliga escuta, áudio e microfone.
 ```powershell
 cd usami-desktop
 cargo build --release --locked   # build de release para o pacote
-cargo test                       # 19 testes
+cargo test                       # 38 testes
 cargo clippy                     # sem warnings novos
 ```
 

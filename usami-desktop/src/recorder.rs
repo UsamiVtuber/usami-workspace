@@ -4,10 +4,10 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 const MAX_UTTERANCE_SECONDS: usize = 30;
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -266,8 +266,13 @@ fn frame_rms(frame: &[i16]) -> f32 {
 }
 
 enum VadState {
-    Idle { loud_frames: usize },
-    Speech { samples: Vec<i16>, silence_frames: usize },
+    Idle {
+        loud_frames: usize,
+    },
+    Speech {
+        samples: Vec<i16>,
+        silence_frames: usize,
+    },
 }
 
 /// Detector de atividade de voz por energia, com piso de ruído adaptativo e
@@ -421,8 +426,8 @@ mod tests {
         assert!(feed(&mut vad, &silence_frame(), 10).is_none());
         assert!(feed(&mut vad, &speech_frame(), 20).is_none());
 
-        let utterance = feed(&mut vad, &silence_frame(), SILENCE_FRAMES + 1)
-            .expect("silêncio encerra o turno");
+        let utterance =
+            feed(&mut vad, &silence_frame(), SILENCE_FRAMES + 1).expect("silêncio encerra o turno");
         assert!(utterance.len() >= vad.min_samples);
         // pré-roll (10 quadros de silêncio) + 20 de fala + 45 de silêncio final
         assert!(utterance.len() <= (10 + 20 + SILENCE_FRAMES + 1) * FRAME);
@@ -464,7 +469,10 @@ mod tests {
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(u16::from_le_bytes([wav[20], wav[21]]), 1); // PCM
         assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1); // mono
-        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 24_000);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            24_000
+        );
         assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16); // bits
         assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 6);
         assert_eq!(&wav[44..], &[1, 0, 0xfe, 0xff, 3, 0]);

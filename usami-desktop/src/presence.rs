@@ -26,8 +26,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteValueW,
-    RegGetValueW, RegOpenKeyExW, RegSetValueExW, RRF_RT_REG_SZ,
+    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyW,
+    RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_U,
@@ -39,12 +39,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
     GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST,
-    IDI_APPLICATION, IsIconic, IsWindowVisible, LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
-    SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos, ShowWindow,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP,
-    WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    IDI_APPLICATION, IsIconic, IsWindowVisible, LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+    MSG, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
+    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos,
+    ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL,
+    WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
@@ -240,6 +240,17 @@ fn app_window() -> HWND {
     APP_WINDOW.load(Ordering::SeqCst) as HWND
 }
 
+/// `true` quando a janela principal está minimizada ou escondida na bandeja.
+/// A UI usa isso para marcar presença ausente mesmo quando o foco já se perdeu
+/// (o `observe_window_activation` sozinho não distingue alt-tab de minimizar).
+pub fn app_is_minimized_or_hidden() -> bool {
+    let hwnd = app_window();
+    if hwnd.is_null() {
+        return false;
+    }
+    unsafe { IsIconic(hwnd) != 0 || IsWindowVisible(hwnd) == 0 }
+}
+
 fn load_tray_icon(app: HWND) -> *mut core::ffi::c_void {
     // A classe do GPUI já carrega o ícone do executável; ler a classe evita
     // SendMessage entre threads. Sem ícone, cai no ícone padrão do Windows.
@@ -352,7 +363,14 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     let autostart_label = wide("Iniciar com o Windows");
     let autostart_flags = MF_STRING | if autostart { MF_CHECKED } else { 0 };
-    unsafe { AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, autostart_label.as_ptr()) };
+    unsafe {
+        AppendMenuW(
+            menu,
+            autostart_flags,
+            MENU_AUTOSTART,
+            autostart_label.as_ptr(),
+        )
+    };
 
     unsafe {
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
@@ -508,7 +526,15 @@ fn reg_delete_value(subkey: &str, value: &str) -> Result<(), String> {
     let subkey = wide(subkey);
     let value = wide(value);
     let mut key: HKEY = std::ptr::null_mut();
-    let rc = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_SET_VALUE, &mut key) };
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut key,
+        )
+    };
     if rc == ERROR_FILE_NOT_FOUND {
         return Ok(());
     }
@@ -536,7 +562,10 @@ mod tests {
     fn command_is_quoted_and_terminated() {
         let command = quote_command(Path::new(r"Usami Desktop\usami-desktop.exe"));
         assert_eq!(command.first().copied(), Some(u16::from(b'"')));
-        assert_eq!(command.get(command.len() - 2).copied(), Some(u16::from(b'"')));
+        assert_eq!(
+            command.get(command.len() - 2).copied(),
+            Some(u16::from(b'"'))
+        );
         assert_eq!(command.last().copied(), Some(0));
     }
 

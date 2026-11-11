@@ -1,11 +1,11 @@
+use rodio::source::Source;
+use rodio::{ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Duration;
-use rodio::source::Source;
-use rodio::{ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate};
 
 /// Amostras por bloco do envelope de fala (~21 ms a 24 kHz). O callback só é
 /// chamado quando um bloco é efetivamente consumido pela saída de áudio.
@@ -29,7 +29,10 @@ impl AudioPlayer {
         })
     }
 
-    pub fn play_wav(&self, wav_bytes: Vec<u8>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn play_wav(
+        &self,
+        wav_bytes: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let cursor = Cursor::new(wav_bytes);
         let source = Decoder::try_from(cursor)
             .map_err(|e| format!("Falha ao decodificar áudio WAV: {e}"))?;
@@ -314,7 +317,10 @@ mod tests {
 
         let reported = levels.lock().unwrap().clone();
         assert_eq!(reported.len(), 1);
-        assert!((reported[0] - 1.0).abs() < 1e-6, "0.5 * ganho satura em 1.0");
+        assert!(
+            (reported[0] - 1.0).abs() < 1e-6,
+            "0.5 * ganho satura em 1.0"
+        );
 
         drop(sender);
         assert_eq!(source.next(), None);

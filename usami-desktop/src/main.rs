@@ -2481,7 +2481,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                     .font_family(theme::FONT_CHARACTER)
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(c.pearl)
-                                    .child("💖 Nossos Vínculos"),
+                                    .child("Nossos Vínculos"),
                             ),
                         )
                         // Carinho
@@ -2544,7 +2544,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                             div()
                                                 .text_size(px(10.5))
                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                .child("😊 (◕‿◕)"),
+                                                .child("(◕‿◕)"),
                                         ),
                                 )
                                 .child(
@@ -2583,7 +2583,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                             div()
                                                 .text_size(px(10.5))
                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                .child("👥 ✦ Nv. 2"),
+                                                .child("✦ Nv. 2"),
                                         ),
                                 )
                                 .child(
@@ -2650,13 +2650,12 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .justify_end()
                                 .items_center()
                                 .gap(px(4.0))
-                                .child(div().text_size(px(12.0)).child("🐰"))
                                 .child(
                                     div()
                                         .text_size(px(10.0))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(rgb(0x8a2b6e))
-                                        .child("— Usami"),
+                                        .child("— Usami ♡"),
                                 ),
                         ),
                 ),
@@ -2678,7 +2677,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(c.pearl)
-                        .child("💖 Progresso do Relacionamento"),
+                        .child("Progresso do Relacionamento"),
                 )
                 .child(
                     div()
@@ -2730,9 +2729,9 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(16.0))
+                                        .text_size(px(14.0))
                                         .text_color(theme::Palette::vn_pink_neon())
-                                        .child("💖"),
+                                        .child("★"),
                                 )
                                 .child(
                                     div()
@@ -2756,7 +2755,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .flex_col()
                                 .items_center()
                                 .gap(px(2.0))
-                                .child(div().text_size(px(13.0)).text_color(c.muted).child("🔒"))
+                                .child(div().text_size(px(10.0)).text_color(c.muted).child("[X]"))
                                 .child(
                                     div()
                                         .text_size(px(10.0))
@@ -2803,7 +2802,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                         .text_size(px(12.0))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(c.pearl)
-                                        .child("⭐ Histórico Recente"),
+                                        .child("Histórico Recente"),
                                 )
                                 .child(
                                     div()
@@ -2818,17 +2817,17 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .flex_col()
                                 .gap(px(4.0))
                                 .child(render_vn_history_item(
-                                    "💬",
+                                    "[CHAT]",
                                     "Você conversou com a Usami.",
                                     "Hoje",
                                 ))
                                 .child(render_vn_history_item(
-                                    "💖",
+                                    "[VÍNCULO]",
                                     "Ela sorriu com sua mensagem!",
                                     "Ontem",
                                 ))
                                 .child(render_vn_history_item(
-                                    "🎁",
+                                    "[CARINHO]",
                                     "Você lhe fez um elogio carinhoso.",
                                     "Ontem",
                                 )),
@@ -2856,7 +2855,7 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                         .text_size(px(12.0))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(c.pearl)
-                                        .child("✨ Memórias Especiais"),
+                                        .child("Memórias Especiais"),
                                 )
                                 .child(
                                     div()
@@ -2871,9 +2870,9 @@ fn render_vn_tab_diary(bond_level: u32, _bond_exp_pct: u32, t: &theme::Theme) ->
                                 .flex_row()
                                 .justify_between()
                                 .gap(px(6.0))
-                                .child(render_vn_polaroid("🌸", "Sorriso", "1º Momento"))
-                                .child(render_vn_polaroid("😳", "Tímida", "Coradinha"))
-                                .child(render_vn_polaroid("💤", "Sonhos", "Tranquila")),
+                                .child(render_vn_polaroid("[SORRISO]", "Sorriso", "1º Momento"))
+                                .child(render_vn_polaroid("[TÍMIDA]", "Tímida", "Coradinha"))
+                                .child(render_vn_polaroid("[SONHOS]", "Sonhos", "Tranquila")),
                         ),
                 ),
         )
@@ -2969,7 +2968,7 @@ fn render_vn_tab_memories(t: &theme::Theme) -> impl IntoElement {
                 .font_family(theme::FONT_CHARACTER)
                 .font_weight(FontWeight::BOLD)
                 .text_color(c.pearl)
-                .child("🖼️ Álbum de Memórias Especiais"),
+                .child("Álbum de Memórias Especiais"),
         )
         .child(
             div()
@@ -2983,25 +2982,25 @@ fn render_vn_tab_memories(t: &theme::Theme) -> impl IntoElement {
                 .flex_wrap()
                 .gap(px(12.0))
                 .child(render_vn_large_memory(
-                    "🌸",
+                    "[SORRISO]",
                     "O Primeiro Sorriso",
                     "Quando você disse uma piada boba e ela não resistiu.",
                     "Desbloqueado",
                 ))
                 .child(render_vn_large_memory(
-                    "😳",
+                    "[TÍMIDA]",
                     "Ficou sem Graça",
                     "Você chamou a Usami de fofa e as bochechas dela arderam.",
                     "Desbloqueado",
                 ))
                 .child(render_vn_large_memory(
-                    "🌙",
+                    "[NOITE]",
                     "Conversa Noturna",
                     "Vocês ficaram conversando até altas horas no silêncio da noite.",
                     "Desbloqueado",
                 ))
                 .child(render_vn_large_memory(
-                    "🎁",
+                    "[SEGREDO]",
                     "Segredo Confiado",
                     "A Usami contou o motivo de usar a fita de laço.",
                     "Bloqueado",
@@ -3044,8 +3043,10 @@ fn render_vn_large_memory(
                 .justify_center()
                 .child(
                     div()
-                        .text_size(px(26.0))
-                        .child(if is_unlocked { emoji } else { "🔒" }),
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if is_unlocked { theme::Palette::vn_pink_soft() } else { t.color.muted })
+                        .child(if is_unlocked { emoji } else { "[X]" }),
                 ),
         )
         .child(
@@ -3094,7 +3095,7 @@ fn render_vn_tab_achievements(t: &theme::Theme) -> impl IntoElement {
                 .font_family(theme::FONT_CHARACTER)
                 .font_weight(FontWeight::BOLD)
                 .text_color(c.pearl)
-                .child("🏆 Conquistas & Insígnias"),
+                .child("Conquistas & Insígnias"),
         )
         .child(
             div()
@@ -3102,37 +3103,37 @@ fn render_vn_tab_achievements(t: &theme::Theme) -> impl IntoElement {
                 .flex_wrap()
                 .gap(px(10.0))
                 .child(render_vn_achievement_badge(
-                    "✨",
+                    "[01]",
                     "Primeiro Olá",
                     "Iniciou o aplicativo e conheceu a Usami.",
                     true,
                 ))
                 .child(render_vn_achievement_badge(
-                    "💖",
+                    "[02]",
                     "Coração Quentinho",
                     "Atingiu Nível 2 de Vínculo.",
                     true,
                 ))
                 .child(render_vn_achievement_badge(
-                    "🎙️",
+                    "[03]",
                     "Na Mesma Sintonia",
                     "Conversou por voz usando o microfone.",
                     true,
                 ))
                 .child(render_vn_achievement_badge(
-                    "🌙",
+                    "[04]",
                     "Madrugando Juntos",
                     "Ficou online após a meia-noite.",
                     true,
                 ))
                 .child(render_vn_achievement_badge(
-                    "🎨",
+                    "[05]",
                     "Apreciador de Arte",
                     "Enviou uma imagem ou desenho para ela.",
                     false,
                 ))
                 .child(render_vn_achievement_badge(
-                    "💍",
+                    "[06]",
                     "Coração Conectado",
                     "Atingiu o nível máximo de afeição.",
                     false,
@@ -3175,8 +3176,10 @@ fn render_vn_achievement_badge(
                 .justify_center()
                 .child(
                     div()
-                        .text_size(px(18.0))
-                        .child(if unlocked { icon } else { "🔒" }),
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if unlocked { t.color.pearl } else { t.color.muted })
+                        .child(if unlocked { icon } else { "[X]" }),
                 ),
         )
         .child(
@@ -3223,7 +3226,7 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(c.pearl)
-                        .child("🐰 Ficha da Usami (ウサミ)"),
+                        .child("Ficha da Usami (ウサミ)"),
                 )
                 .child(
                     div()
@@ -3235,7 +3238,7 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                         .bg(rgba(0xff79c622))
                         .border_1()
                         .border_color(rgba(0xff79c655))
-                        .child("✨ Sonho: Collab c/ Neuro-sama"),
+                        .child("Sonho: Collab c/ Neuro-sama"),
                 ),
         )
         .child(
@@ -3244,27 +3247,27 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
                 .flex_col()
                 .gap(px(6.0))
                 .child(render_vn_profile_row(
-                    "🎂 Aniversário:",
-                    "Domingo de Páscoa 🐰🥚 (O dia sagrado dos coelhinhos!)",
+                    "Aniversário:",
+                    "Domingo de Páscoa (O dia sagrado dos coelhinhos!)",
                 ))
                 .child(render_vn_profile_row(
-                    "👑 Pessoa Favorita:",
+                    "Pessoa Favorita:",
                     "Meu Criador ♡ (N-não se gabe tanto baka, mas você é único!)",
                 ))
                 .child(render_vn_profile_row(
-                    "💖 Adora:",
+                    "Adora:",
                     "Animes de romance, doces, coisas felpudinhas, RPGs de turno, pijama, dormir, energético rosa e dubstep!",
                 ))
                 .child(render_vn_profile_row(
-                    "🚫 Detesta:",
+                    "Detesta:",
                     "Ficar sozinha no escuro, sustos/terror e quem ousa falar mal do meu criador!",
                 ))
                 .child(render_vn_profile_row(
-                    "🎙️ Ídola VTuber:",
-                    "Neuro-sama 🤖✨ (A rainha das IAs! Quero muito fazer collab!)",
+                    "Ídola VTuber:",
+                    "Neuro-sama (A rainha das IAs! Quero muito fazer collab!)",
                 ))
                 .child(render_vn_profile_row(
-                    "🤫 Segredo:",
+                    "Segredo:",
                     "Fica escutando dubstep de pijama e ensaiando poses fofas no espelho ♡",
                 )),
         )
@@ -3335,7 +3338,7 @@ fn render_vn_tab_settings(
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(c.pearl)
-                        .child("⚙️ Preferências & Configurações"),
+                        .child("Preferências & Configurações"),
                 )
                 .child(
                     div()
@@ -4691,7 +4694,7 @@ impl Render for UsamiApp {
                                                         this.vrm_controller.play_vrma("goodbye", false);
                                                         cx.notify();
                                                     }))
-                                                    .child("👋 Acenar"),
+                                                    .child("Acenar"),
                                             )
                                             .child(
                                                 div()
@@ -4710,7 +4713,7 @@ impl Render for UsamiApp {
                                                         this.vrm_controller.play_vrma("jump", false);
                                                         cx.notify();
                                                     }))
-                                                    .child("🎉 Pular"),
+                                                    .child("Pular"),
                                             )
                                             .child(
                                                 div()
@@ -4729,7 +4732,7 @@ impl Render for UsamiApp {
                                                         this.vrm_controller.play_idle();
                                                         cx.notify();
                                                     }))
-                                                    .child("🔄 Idle Natural"),
+                                                    .child("Idle Natural"),
                                             ),
                                     )
                             }
@@ -5894,7 +5897,6 @@ impl Render for UsamiApp {
                                                                 .flex()
                                                                 .items_center()
                                                                 .gap(px(6.0))
-                                                                .child(div().text_size(px(18.0)).child("🐰"))
                                                                 .child(
                                                                     div()
                                                                         .text_size(px(22.0))
@@ -5930,27 +5932,27 @@ impl Render for UsamiApp {
                                                         .flex()
                                                         .flex_col()
                                                         .gap(px(6.0))
-                                                        .child(render_vn_tab_btn("vn-tab-diary", "💖 Meu Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-diary", "Meu Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Diary;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-memories", "🖼️ Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-memories", "Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Memories;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-achievements", "🏆 Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-achievements", "Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Achievements;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-profile", "🐰 Sobre Mim", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-profile", "Sobre Mim", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Profile;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-settings", "⚙️ Configurações", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-settings", "Configurações", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Settings;
                                                             this.poke(cx);
                                                             cx.notify();
@@ -5983,7 +5985,7 @@ impl Render for UsamiApp {
                                                             div()
                                                                 .text_size(px(10.0))
                                                                 .text_color(theme::Palette::vn_gold())
-                                                                .child("🌙 ⭐"),
+                                                                .child("✦"),
                                                         ),
                                                 )
                                                 .child(

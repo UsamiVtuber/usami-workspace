@@ -6037,7 +6037,11 @@ impl Render for UsamiApp {
                                 .border_2()
                                 .border_color(theme::Palette::vn_border_bright())
                                 .shadow(t.shadow.vn_modal.clone())
-                                .on_click(|_, _, _| {}) // Evita fechar ao clicar no corpo do modal
+                                // O modal fica dentro do scrim clicável: sem parar a
+                                // propagação, todo clique interno sobe e fecha o painel.
+                                .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                    cx.stop_propagation();
+                                })
                                 // ── COLUNA ESQUERDA: SIDEBAR VISUAL NOVEL ──
                                 .child(
                                     div()

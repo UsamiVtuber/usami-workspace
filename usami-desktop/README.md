@@ -263,8 +263,8 @@ O que o script faz:
 5. publica com `gh release create` no repo `UsamiVtuber/usami-desktop`, título
    `Usami Desktop <versão>` e notas curtas sobre o backend local e o `.vrm`.
 
-O zip **não inclui** `.vrm`, `.glb` ou `.fbx`. A release **v0.4.0** tem
-12.784.375 bytes (~12,2 MiB) e foi publicada em 2026-11-10.
+O zip **não inclui** `.vrm`, `.glb` ou `.fbx`. A release **v0.5.0** tem
+12.840.042 bytes (~12,2 MiB) e foi publicada em 2026-11-11.
 
 Notas de manutenção do script (PowerShell 5.1):
 

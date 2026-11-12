@@ -156,6 +156,8 @@ pub struct AgentTurnSummary {
     pub route: Option<String>,
     pub status: Option<String>,
     pub tool: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

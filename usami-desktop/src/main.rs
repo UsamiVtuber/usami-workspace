@@ -74,11 +74,19 @@ struct ChatMessage {
 }
 
 fn format_tool_badge(agent_turn: Option<&api::AgentTurnSummary>) -> Option<String> {
-    match agent_turn.and_then(|turn| turn.tool.as_deref().map(|tool| (tool, turn.status.as_deref()))) {
-        Some((tool, Some("executed"))) => Some(format!("{tool} ✓")),
-        Some((tool, Some("awaiting_confirmation"))) => Some(format!("{tool} ⏳")),
-        Some((tool, _)) => Some(format!("{tool} ✗")),
-        None => Some("sem skill".into()),
+    let turn = agent_turn?;
+    let status_suffix = match turn.status.as_deref() {
+        Some("executed") => "✓",
+        Some("awaiting_confirmation") => "⏳",
+        _ => "✗",
+    };
+    if turn.tools.len() > 1 {
+        let joined = turn.tools.join(" + ");
+        Some(format!("{joined} {status_suffix}"))
+    } else if let Some(tool) = turn.tool.as_deref() {
+        Some(format!("{tool} {status_suffix}"))
+    } else {
+        Some("sem skill".into())
     }
 }
 
@@ -8510,8 +8518,14 @@ impl Render for UsamiApp {
             )
             .into()
         } else if is_busy {
-            if let Some(tool) = self.last_agent_turn.as_ref().and_then(|t| t.tool.as_deref()) {
-                format!("EXECUTANDO · {tool}").into()
+            if let Some(turn) = self.last_agent_turn.as_ref() {
+                if turn.tools.len() > 1 {
+                    format!("EXECUTANDO · {}", turn.tools.join(" + ")).into()
+                } else if let Some(tool) = turn.tool.as_deref() {
+                    format!("EXECUTANDO · {tool}").into()
+                } else {
+                    "PENSANDO".into()
+                }
             } else {
                 "PENSANDO".into()
             }

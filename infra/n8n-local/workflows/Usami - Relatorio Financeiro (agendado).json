@@ -1,0 +1,229 @@
+{
+  "name": "Usami - Relatorio Financeiro (agendado)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "b1c2d3e4-0001-4000-8000-000000000001",
+      "name": "Disparo Diario (08:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8787/api/agent/tools/finance.transactions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Origin",
+              "value": "http://127.0.0.1:5173"
+            },
+            {
+              "name": "x-usami-token",
+              "value": "={{ $env.USAMI_API_TOKEN || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "arguments",
+              "value": "={{ { limit: 20 } }}"
+            },
+            {
+              "name": "origin",
+              "value": "agent"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b1c2d3e4-0002-4000-8000-000000000002",
+      "name": "Consultar Transacoes Usami",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst now = new Date();\nconst monthStr = now.toISOString().slice(0, 7);\nconst dateStr = now.toISOString().slice(0, 10);\n\nlet alertTriggered = false;\nlet alertReason = '';\nlet markdown = '';\n\nconst execution = response.execution || {};\nconst result = execution.result || response.result || {};\n\nif (response.error || execution.status === 'failed' || !result.ok) {\n  markdown = `---\\ntitle: Relatório Financeiro - ${monthStr}\\nsource: usami-automation\\nkind: finance-report\\ncreated_at: ${now.toISOString()}\\nstatus: unavailable\\n---\\n\\n# 💳 Relatório Financeiro — ${monthStr}\\n\\n> ℹ️ *Acesso ao Open Finance não configurado ou temporariamente indisponível no momento da execução.*\\n\\nPara ativar, configure as credenciais da Pluggy ou Belvo no seu \`.env\` da Usami.\\n`;\n} else {\n  const transactions = Array.isArray(result.transactions) ? result.transactions : [];\n  const summary = result.summary || {};\n  const totalSpent = summary.totalOutflow ?? 0;\n  const totalInflow = summary.totalInflow ?? 0;\n\n  let rows = '';\n  for (const t of transactions) {\n    const amount = Number(t.amount || 0);\n    if (amount < -500) {\n      alertTriggered = true;\n      alertReason = `gasto de R$ ${Math.abs(amount).toFixed(2)} em ${t.description || 'estabelecimento'}`;\n    }\n    const signal = amount < 0 ? '-' : '+';\n    rows += `| ${t.date || dateStr} | ${t.description || 'Transação'} | ${t.category || 'Geral'} | R$ ${Math.abs(amount).toFixed(2)} (${signal}) |\\n`;\n  }\n\n  if (!rows) rows = '| - | Nenhuma transação recente registrada | - | - |\\n';\n\n  markdown = `---\\ntitle: Relatório Financeiro - ${monthStr}\\nsource: usami-automation\\nkind: finance-report\\ncreated_at: ${now.toISOString()}\\nupdated_at: ${now.toISOString()}\\n---\\n\\n# 💳 Relatório Financeiro — ${monthStr}\\n\\n### 📊 Resumo do Período\\n- **Entradas Recentes:** R$ ${Number(totalInflow).toFixed(2)}\\n- **Saídas Recentes:** R$ ${Math.abs(Number(totalSpent)).toFixed(2)}\\n- **Última Atualização:** ${dateStr}\\n\\n### 🧾 Extrato Recente\\n| Data | Descrição | Categoria | Valor |\\n| :--- | :--- | :--- | :--- |\\n${rows}\\n\\n### 💬 Observação da Usami\\n> *\"De olho nos números pra você não se apertar no fim do mês!\"*\\n`;\n}\n\nconst proactiveSay = alertTriggered\n  ? `Atenção! Identifiquei um ${alertReason}. Já anotei no seu relatório financeiro do Obsidian!`\n  : `Atualizei seu relatório financeiro de ${monthStr} no Obsidian com o extrato recente.`;\n\nconst gesture = alertTriggered ? 'surprised' : 'nod';\n\nreturn [{\n  json: {\n    filename: `financas-${monthStr}.md`,\n    markdown,\n    alertTriggered,\n    proactiveSay,\n    gesture\n  }\n}];"
+      },
+      "id": "b1c2d3e4-0003-4000-8000-000000000003",
+      "name": "Processar Extrato e Alertas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "binaryPropertyName": "data",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "b1c2d3e4-0004-4000-8000-000000000004",
+      "name": "Converter para Arquivo",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $env.USAMI_VAULT_PATH || '/home/node/vault' }}/Inbox/Automations/{{ $('Processar Extrato e Alertas').item.json.filename }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "b1c2d3e4-0005-4000-8000-000000000005",
+      "name": "Salvar no Obsidian (Automations)",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8787/api/n8n/command",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-usami-token",
+              "value": "={{ $env.USAMI_API_TOKEN || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $('Processar Extrato e Alertas').item.json.proactiveSay }}"
+            },
+            {
+              "name": "gesture",
+              "value": "={{ $('Processar Extrato e Alertas').item.json.gesture }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 3000
+        }
+      },
+      "id": "b1c2d3e4-0006-4000-8000-000000000006",
+      "name": "Notificar Usami (Fila de Comandos)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Disparo Diario (08:00)": {
+      "main": [
+        [
+          {
+            "node": "Consultar Transacoes Usami",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Transacoes Usami": {
+      "main": [
+        [
+          {
+            "node": "Processar Extrato e Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar Extrato e Alertas": {
+      "main": [
+        [
+          {
+            "node": "Converter para Arquivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converter para Arquivo": {
+      "main": [
+        [
+          {
+            "node": "Salvar no Obsidian (Automations)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar no Obsidian (Automations)": {
+      "main": [
+        [
+          {
+            "node": "Notificar Usami (Fila de Comandos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  }
+}
+

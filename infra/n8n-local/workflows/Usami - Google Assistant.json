@@ -1,0 +1,225 @@
+{
+  "name": "Usami - Google Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-google",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "7a1b2c3d-0001-4000-8000-000000000001",
+      "name": "Webhook Usami Google",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-google-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst action = String(body.action || '').trim();\nconst params = body.params || {};\n\nif (!['list_emails', 'draft_email', 'list_events', 'create_event'].includes(action)) {\n  throw new Error(`Ação não suportada: ${action}`);\n}\n\nreturn [{\n  json: {\n    action,\n    params,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "7a1b2c3d-0002-4000-8000-000000000002",
+      "name": "Validar Ação",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "list_emails",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "list_events",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "7a1b2c3d-0003-4000-8000-000000000003",
+      "name": "Roteador de Ação",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": "={{ $json.params.maxResults || 10 }}",
+        "filters": {
+          "q": "={{ $json.params.query || 'is:unread' }}"
+        }
+      },
+      "id": "7a1b2c3d-0004-4000-8000-000000000004",
+      "name": "Gmail - Listar Mensagens",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list"
+        },
+        "limit": "={{ $json.params.maxResults || 20 }}",
+        "options": {
+          "timeMin": "={{ $json.params.timeMin || $now.toISO() }}"
+        }
+      },
+      "id": "7a1b2c3d-0005-4000-8000-000000000005",
+      "name": "Google Calendar - Listar Eventos",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst messages = items.map(item => {\n  const j = item.json;\n  return {\n    id: j.id || 'msg',\n    threadId: j.threadId || null,\n    from: j.from || 'Desconhecido',\n    to: j.to || null,\n    subject: j.subject || '(sem assunto)',\n    date: j.date || new Date().toISOString(),\n    snippet: j.snippet || ''\n  };\n});\n\nreturn [{\n  json: {\n    ok: true,\n    action: 'list_emails',\n    count: messages.length,\n    messages\n  }\n}];"
+      },
+      "id": "7a1b2c3d-0006-4000-8000-000000000006",
+      "name": "Formatar Saida Gmail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst events = items.map(item => {\n  const j = item.json;\n  return {\n    id: j.id || 'evt',\n    summary: j.summary || '(Sem título)',\n    start: j.start?.dateTime || j.start?.date || null,\n    end: j.end?.dateTime || j.end?.date || null,\n    description: j.description || '',\n    location: j.location || null\n  };\n});\n\nreturn [{\n  json: {\n    ok: true,\n    action: 'list_events',\n    count: events.length,\n    events\n  }\n}];"
+      },
+      "id": "7a1b2c3d-0007-4000-8000-000000000007",
+      "name": "Formatar Saida Calendar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Usami Google": {
+      "main": [
+        [
+          {
+            "node": "Validar Ação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Ação": {
+      "main": [
+        [
+          {
+            "node": "Roteador de Ação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteador de Ação": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Listar Mensagens",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Calendar - Listar Eventos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Listar Mensagens": {
+      "main": [
+        [
+          {
+            "node": "Formatar Saida Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar - Listar Eventos": {
+      "main": [
+        [
+          {
+            "node": "Formatar Saida Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

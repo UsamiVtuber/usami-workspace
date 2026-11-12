@@ -89,3 +89,36 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 ## Validação registrada
 - Tipos e parâmetros dos nós conferidos com o MCP do n8n em modo leitura (`get_node_types`, versão estática): `scheduleTrigger` (rule.interval `field:days`, `triggerAtHour`), `httpRequest` v4 (`headerParameters`, `options.timeout`, `retryOnFail`/`maxTries`/`continueOnFail` como propriedades do nó), `if` v2, `convertToFile` (`toText`), `readWriteFile` (`write`), `stopAndError`, `noOp`.
 - `validate_workflow` do MCP exige código no formato n8n Workflow SDK, não o export JSON versionado; por isso não foi usado contra este arquivo. A lógica do nó Code foi exercitada localmente (Node) para sucesso, falha de API e idempotência.
+
+## Usami - Google Assistant (desacoplamento Fase 1)
+- **Arquivo:** `Usami - Google Assistant.json`.
+- **Gatilho:** Webhook `POST /webhook/usami-google`.
+- **Papel:** Centraliza as integrações com Google Workspace (Gmail e Google Calendar) gerenciando OAuth2 nativamente no n8n.
+- **Entrada:** `{ action: 'list_emails' | 'list_events', params: { query, maxResults, timeMin } }`.
+- **Saída:** JSON padronizado com `{ ok: true, action: string, count: number, messages: [...] }` ou `{ ok: true, action: string, count: number, events: [...] }`.
+- **Benefício:** Elimina a necessidade de bibliotecas e refresh tokens manuais de OAuth no Node.js da Usami.
+
+## Usami - Daily Briefing (agendado - Fase 2)
+- **Arquivo:** `Usami - Daily Briefing (agendado).json`.
+- **Gatilho:** Schedule Trigger diário às **07:30** (`America/Sao_Paulo`).
+- **Nós:** Schedule → HTTP Request (Open-Meteo Clima) → Code (Formatar Nota de Briefing) → Convert to File → Read/Write File (`Inbox/Automations/briefing-AAAA-MM-DD.md`) → HTTP Request (`POST /api/n8n/command`).
+- **Papel:** Gera o resumo matinal no Obsidian com dados de clima e foco do dia antes do usuário abrir o app, e enfileira uma saudação com gesto de aceno (`wave`) na fila da Usami para entrega quando o avatar carregar.
+- **Segurança:** Apenas usa a API pública e aberta do Open-Meteo (zero chave/custo) e grava estritamente em `Inbox/Automations/`.
+
+## Usami - Consolidacao Noturna (agendado - Fase 4)
+- **Arquivo:** `Usami - Consolidacao Noturna (agendado).json`.
+- **Gatilho:** Schedule Trigger diário às **04:00** (`America/Sao_Paulo`).
+- **Nós:** Schedule → HTTP Request (`POST /api/memory/maintenance`) → If (`ok === true`) → NoOp / Stop and Error.
+- **Papel:** Executa em segundo plano a sumarização dos dias anteriores, consolidação de fatos duráveis na memória, refresh do índice FTS5 e contagem/manutenção do LanceDB local, aliviando o loop do chat de tarefas de I/O pesado.
+- **Segurança:** Protegido por `x-usami-token` e allowlist de Host/Origin.
+
+## Usami - Relatorio Financeiro (agendado - Fase 3)
+- **Arquivo:** `Usami - Relatorio Financeiro (agendado).json`.
+- **Gatilho:** Schedule Trigger diário às **08:00** (`America/Sao_Paulo`).
+- **Nós:** Schedule → HTTP Request (`POST /api/agent/tools/finance.transactions`) → Code (Processar Extrato e Alertas) → Convert to File → Read/Write File (`Inbox/Automations/financas-AAAA-MM.md`) → HTTP Request (`POST /api/n8n/command`).
+- **Papel:** Consulta transações e saldos do Open Finance (Pluggy / Belvo) em modo somente leitura via API de ferramentas da Usami, consolida em relatório mensal no Obsidian e dispara aviso com gesto `surprised` se identificar gastos anormais (> R$ 500) ou atualização normal com gesto `nod`.
+- **Segurança:** Somente leitura, token protegido e escrita exclusiva em `Inbox/Automations/`.
+
+
+
+

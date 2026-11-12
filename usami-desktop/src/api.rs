@@ -636,6 +636,228 @@ pub struct AgentExecutionsResponse {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SelfToolSummary {
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(rename = "permissionLevel", default)]
+    pub permission_level: u8,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub revoked: bool,
+    #[serde(rename = "revokedReason", default)]
+    pub revoked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSelfToolsData {
+    #[serde(default)]
+    pub tools: Vec<SelfToolSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSelfResponse {
+    pub ok: bool,
+    #[serde(rename = "self", default)]
+    pub self_data: AgentSelfToolsData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionRevocation {
+    pub tool: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(rename = "revokedAt", default)]
+    pub revoked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPermissionsResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub revocations: Vec<PermissionRevocation>,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillProposal {
+    pub id: String,
+    #[serde(rename = "skillId")]
+    pub skill_id: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub benefit: String,
+    #[serde(default)]
+    pub risks: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub permissions: Vec<u8>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillProposalsResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub proposals: Vec<SkillProposal>,
+    #[serde(default)]
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssuedConfirmation {
+    pub token: String,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub skill: Option<String>,
+    #[serde(rename = "permissionLevel", default)]
+    pub permission_level: Option<u8>,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateConfirmationResponse {
+    pub ok: bool,
+    pub confirmation: IssuedConfirmation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInstallResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub installed: Option<bool>,
+    #[serde(default)]
+    pub skill: Option<AgentSkill>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPlanStep {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(rename = "permissionLevel", default)]
+    pub permission_level: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPlan {
+    pub id: String,
+    pub goal: String,
+    pub version: u32,
+    pub status: String,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub steps: Vec<AgentPlanStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPlansResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub plans: Vec<AgentPlan>,
+    #[serde(default)]
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentSuggestion {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(rename = "recommendedGoal", default)]
+    pub recommended_goal: String,
+    pub status: String,
+    #[serde(default)]
+    pub relevance: f64,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "planId", default)]
+    pub plan_id: Option<String>,
+    #[serde(rename = "dismissReason", default)]
+    pub dismiss_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSuggestionsResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub suggestions: Vec<AgentSuggestion>,
+    #[serde(default)]
+    pub count: usize,
+    #[serde(rename = "unansweredCount", default)]
+    pub unanswered_count: usize,
+    #[serde(default)]
+    pub pending: Option<AgentSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestionActionResponse {
+    pub ok: bool,
+    pub suggestion: AgentSuggestion,
+    #[serde(default)]
+    pub plan: Option<AgentPlan>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BriefingCounts {
+    #[serde(default)]
+    pub commitments: usize,
+    #[serde(rename = "priorityTasks", default)]
+    pub priority_tasks: usize,
+    #[serde(default)]
+    pub projects: usize,
+    #[serde(default)]
+    pub pending: usize,
+    #[serde(rename = "pendingPlans", default)]
+    pub pending_plans: usize,
+    #[serde(default)]
+    pub executions: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DailyBriefingData {
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub empty: bool,
+    #[serde(default)]
+    pub text: String,
+    #[serde(rename = "narrativeSource", default)]
+    pub narrative_source: Option<String>,
+    #[serde(default)]
+    pub counts: BriefingCounts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyBriefingResponse {
+    pub ok: bool,
+    pub briefing: DailyBriefingData,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SttResponse {
     pub text: String,
@@ -1387,6 +1609,211 @@ impl UsamiApiClient {
             Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
         }
     }
+
+    async fn send_agent_get<T: serde::de::DeserializeOwned + Send + 'static>(
+        &self,
+        path: String,
+        fallback_err: &'static str,
+    ) -> Result<T, String> {
+        let client = self.client.clone();
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("{fallback_err} (HTTP {status})."));
+            }
+            res.json::<T>().await.map_err(map_request_error)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    async fn send_agent_post<T: serde::de::DeserializeOwned + Send + 'static>(
+        &self,
+        path: String,
+        payload: serde_json::Value,
+        fallback_err: &'static str,
+    ) -> Result<T, String> {
+        let client = self.client.clone();
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("{fallback_err} (HTTP {status})."));
+            }
+            res.json::<T>().await.map_err(map_request_error)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_agent_self_tools(&self) -> Result<AgentSelfResponse, String> {
+        self.send_agent_get(
+            "/api/agent/self?focus=tools".into(),
+            "Falha ao consultar ferramentas do core",
+        )
+        .await
+    }
+
+    pub async fn get_agent_permissions(&self) -> Result<AgentPermissionsResponse, String> {
+        self.send_agent_get(
+            "/api/agent/permissions".into(),
+            "Falha ao consultar permissões",
+        )
+        .await
+    }
+
+    pub async fn set_tool_permission(
+        &self,
+        tool: &str,
+        action: &str,
+        reason: Option<&str>,
+    ) -> Result<AgentPermissionsResponse, String> {
+        let mut payload = serde_json::json!({ "tool": tool, "action": action });
+        if let Some(r) = reason.filter(|s| !s.trim().is_empty()) {
+            payload["reason"] = serde_json::json!(r.trim());
+        }
+        self.send_agent_post(
+            "/api/agent/permissions".into(),
+            payload,
+            "Falha ao atualizar permissão",
+        )
+        .await
+    }
+
+    pub async fn get_skill_proposals(&self) -> Result<SkillProposalsResponse, String> {
+        self.send_agent_get(
+            "/api/agent/skills/proposals".into(),
+            "Falha ao consultar propostas de skills",
+        )
+        .await
+    }
+
+    pub async fn create_tool_confirmation(
+        &self,
+        tool: &str,
+    ) -> Result<CreateConfirmationResponse, String> {
+        self.send_agent_post(
+            "/api/agent/confirmations".into(),
+            serde_json::json!({ "tool": tool, "confirm": "CONFIRMAR" }),
+            "Falha ao emitir confirmação de uso único",
+        )
+        .await
+    }
+
+    pub async fn create_skill_confirmation(
+        &self,
+        skill_id: &str,
+    ) -> Result<CreateConfirmationResponse, String> {
+        self.send_agent_post(
+            "/api/agent/confirmations".into(),
+            serde_json::json!({ "skill": skill_id, "confirm": "CONFIRMAR" }),
+            "Falha ao emitir confirmação para instalar skill",
+        )
+        .await
+    }
+
+    pub async fn install_skill_with_confirmation(
+        &self,
+        skill_id: &str,
+        confirmation_token: &str,
+    ) -> Result<SkillInstallResponse, String> {
+        self.send_agent_post(
+            format!("/api/agent/skills/{skill_id}/install"),
+            serde_json::json!({ "confirmation": confirmation_token }),
+            "Falha ao instalar skill confirmada",
+        )
+        .await
+    }
+
+    pub async fn get_agent_plans(&self, limit: usize) -> Result<AgentPlansResponse, String> {
+        self.send_agent_get(
+            format!("/api/agent/plans?limit={limit}"),
+            "Falha ao consultar planos",
+        )
+        .await
+    }
+
+    pub async fn get_agent_suggestions(
+        &self,
+        evaluate: bool,
+        limit: usize,
+    ) -> Result<AgentSuggestionsResponse, String> {
+        let query = if evaluate {
+            format!("/api/agent/suggestions?evaluate=1&limit={limit}")
+        } else {
+            format!("/api/agent/suggestions?limit={limit}")
+        };
+        self.send_agent_get(query, "Falha ao consultar sugestões")
+            .await
+    }
+
+    pub async fn accept_agent_suggestion(
+        &self,
+        suggestion_id: &str,
+    ) -> Result<SuggestionActionResponse, String> {
+        self.send_agent_post(
+            format!("/api/agent/suggestions/{suggestion_id}/accept"),
+            serde_json::json!({}),
+            "Falha ao aceitar sugestão",
+        )
+        .await
+    }
+
+    pub async fn dismiss_agent_suggestion(
+        &self,
+        suggestion_id: &str,
+        reason: Option<&str>,
+    ) -> Result<SuggestionActionResponse, String> {
+        let payload = match reason.filter(|s| !s.trim().is_empty()) {
+            Some(r) => serde_json::json!({ "reason": r.trim() }),
+            None => serde_json::json!({}),
+        };
+        self.send_agent_post(
+            format!("/api/agent/suggestions/{suggestion_id}/dismiss"),
+            payload,
+            "Falha ao descartar sugestão",
+        )
+        .await
+    }
+
+    pub async fn get_daily_briefing(&self) -> Result<DailyBriefingResponse, String> {
+        self.send_agent_get(
+            "/api/agent/briefing".into(),
+            "Falha ao gerar briefing diário",
+        )
+        .await
+    }
 }
 
 /// Resposta do `/api/tts` com `stream:true`: PCM cru quando o provedor entrega
@@ -2108,5 +2535,93 @@ mod tests {
             .await
             .expect_err("retorna mensagem de erro");
         assert_eq!(err, "Skill precisa estar instalada.");
+    }
+
+    #[tokio::test]
+    async fn agent_permissions_tools_and_revoke_round_trip() {
+        let (self_url, self_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"self":{"tools":[{"name":"briefing.build","version":"1.0.0","description":"Monta briefing","origin":"skill","permissionLevel":1,"active":true,"revoked":false}]}}"#,
+        );
+        let client = UsamiApiClient::with_token(self_url, Some("tok".into()));
+        let tools_res = client.get_agent_self_tools().await.expect("self tools");
+        assert_eq!(tools_res.self_data.tools.len(), 1);
+        assert_eq!(tools_res.self_data.tools[0].name, "briefing.build");
+        assert_eq!(tools_res.self_data.tools[0].permission_level, 1);
+        let r = self_reqs.recv_timeout(Duration::from_secs(5)).expect("req");
+        assert_eq!(r.path, "/api/agent/self?focus=tools");
+
+        let (perm_url, perm_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"revocations":[{"tool":"briefing.*","reason":"bloqueada","revokedAt":"2026-11-11T22:00:00.000Z"}]}"#,
+        );
+        let perm_client = UsamiApiClient::with_token(perm_url, Some("tok".into()));
+        let perm_res = perm_client
+            .set_tool_permission("briefing.*", "revoke", Some("bloqueada"))
+            .await
+            .expect("revoke");
+        assert_eq!(perm_res.revocations.len(), 1);
+        assert_eq!(perm_res.revocations[0].tool, "briefing.*");
+        let preq = perm_reqs.recv_timeout(Duration::from_secs(5)).expect("post");
+        assert_eq!(preq.method, "POST");
+        assert_eq!(preq.path, "/api/agent/permissions");
+        let body: serde_json::Value = serde_json::from_str(&preq.body).expect("json");
+        assert_eq!(body["tool"], "briefing.*");
+        assert_eq!(body["action"], "revoke");
+        assert_eq!(body["reason"], "bloqueada");
+    }
+
+    #[tokio::test]
+    async fn agent_confirmations_suggestions_and_briefing_round_trip() {
+        let (conf_url, conf_reqs) = spawn_server(
+            "201 Created",
+            "application/json",
+            "",
+            br#"{"ok":true,"confirmation":{"token":"singleuse123","skill":"extra-skill","expiresAt":"2026-11-11T23:00:00.000Z"}}"#,
+        );
+        let client = UsamiApiClient::with_token(conf_url, Some("tok".into()));
+        let conf = client
+            .create_skill_confirmation("extra-skill")
+            .await
+            .expect("confirmacao");
+        assert_eq!(conf.confirmation.token, "singleuse123");
+        let creq = conf_reqs.recv_timeout(Duration::from_secs(5)).expect("post");
+        assert_eq!(creq.path, "/api/agent/confirmations");
+        let cbody: serde_json::Value = serde_json::from_str(&creq.body).expect("json");
+        assert_eq!(cbody["skill"], "extra-skill");
+        assert_eq!(cbody["confirm"], "CONFIRMAR");
+
+        let (sug_url, sug_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"count":1,"unansweredCount":1,"suggestions":[{"id":"sg-0123456789ab","kind":"overdue_task","title":"Revisar entrega","summary":"Tarefa atrasada","recommendedGoal":"Revisar entrega hoje","status":"suggested","relevance":0.9,"createdAt":"2026-11-11T22:00:00.000Z"}]}"#,
+        );
+        let sclient = UsamiApiClient::with_token(sug_url, Some("tok".into()));
+        let sres = sclient
+            .get_agent_suggestions(true, 50)
+            .await
+            .expect("sugestoes");
+        assert_eq!(sres.unanswered_count, 1);
+        assert_eq!(sres.suggestions[0].kind, "overdue_task");
+        let sreq = sug_reqs.recv_timeout(Duration::from_secs(5)).expect("get");
+        assert_eq!(sreq.path, "/api/agent/suggestions?evaluate=1&limit=50");
+
+        let (br_url, br_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"briefing":{"date":"2026-11-11","empty":true,"text":"Briefing vazio","narrativeSource":"deterministic","counts":{"commitments":0,"priorityTasks":0,"projects":0,"pending":0,"pendingPlans":0,"executions":0}}}"#,
+        );
+        let bclient = UsamiApiClient::with_token(br_url, Some("tok".into()));
+        let bres = bclient.get_daily_briefing().await.expect("briefing");
+        assert!(bres.briefing.empty);
+        assert_eq!(bres.briefing.date, "2026-11-11");
+        let breq = br_reqs.recv_timeout(Duration::from_secs(5)).expect("get");
+        assert_eq!(breq.path, "/api/agent/briefing");
     }
 }

@@ -149,6 +149,15 @@ pub struct ChatTiming {
     pub total_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentTurnSummary {
+    pub id: Option<String>,
+    pub kind: Option<String>,
+    pub route: Option<String>,
+    pub status: Option<String>,
+    pub tool: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub reply: String,
@@ -166,6 +175,8 @@ pub struct ChatResponse {
     pub stage: Option<String>,
     #[serde(default)]
     pub mood: Option<MoodData>,
+    #[serde(rename = "agentTurn", default)]
+    pub agent_turn: Option<AgentTurnSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

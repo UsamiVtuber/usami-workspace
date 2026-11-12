@@ -70,6 +70,16 @@ struct ChatMessage {
     sender: Sender,
     text: String,
     emotion: Option<String>,
+    tool_badge: Option<String>,
+}
+
+fn format_tool_badge(agent_turn: Option<&api::AgentTurnSummary>) -> Option<String> {
+    match agent_turn.and_then(|turn| turn.tool.as_deref().map(|tool| (tool, turn.status.as_deref()))) {
+        Some((tool, Some("executed"))) => Some(format!("{tool} ✓")),
+        Some((tool, Some("awaiting_confirmation"))) => Some(format!("{tool} ⏳")),
+        Some((tool, _)) => Some(format!("{tool} ✗")),
+        None => Some("sem skill".into()),
+    }
 }
 
 fn stored_turns(turns: &[ChatMessage]) -> Vec<storage::StoredTurn> {
@@ -99,6 +109,7 @@ fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<ChatMessage> {
         sender,
         text: turn.text,
         emotion: turn.emotion,
+        tool_badge: None,
     })
 }
 
@@ -730,6 +741,7 @@ struct UsamiApp {
     last_timing: Option<api::ChatTiming>,
     server_affinity: Option<i32>,
     server_stage: Option<SharedString>,
+    last_agent_turn: Option<api::AgentTurnSummary>,
     memory_data: Option<api::MemoryData>,
     memory_loading: bool,
     memory_error: Option<SharedString>,
@@ -901,6 +913,7 @@ impl UsamiApp {
                     "Hmph... não é como se eu estivesse esperando você abrir o app nem nada, baka!"
                         .into(),
                 emotion: Some("tsundere".into()),
+                tool_badge: None,
             });
         }
         if abrupt_previous {
@@ -908,6 +921,7 @@ impl UsamiApp {
                 sender: Sender::Usami,
                 text: "Você fechou o app sem se despedir da última vez... eu fiquei aqui esperando, sabia?".into(),
                 emotion: Some("tsundere".into()),
+                tool_badge: None,
             });
             storage::save_conversation(&stored_turns(&chat_history));
         }
@@ -1070,6 +1084,7 @@ impl UsamiApp {
             last_timing: None,
             server_affinity: None,
             server_stage: None,
+            last_agent_turn: None,
             memory_data: None,
             memory_loading: false,
             memory_error: None,
@@ -1304,6 +1319,7 @@ impl UsamiApp {
             sender: Sender::Usami,
             text: text.to_string(),
             emotion: Some(emotion.to_string()),
+            tool_badge: None,
         });
         self.poke(cx);
         cx.notify();
@@ -1782,6 +1798,7 @@ impl UsamiApp {
                 sender: Sender::User,
                 text: user_msg,
                 emotion: None,
+                tool_badge: None,
             });
             cx.notify();
 
@@ -1856,6 +1873,7 @@ impl UsamiApp {
                                             sender: Sender::Usami,
                                             text: response.reply.clone(),
                                             emotion: Some(emotion.clone()),
+                                            tool_badge: None,
                                         });
 
                                         cx.notify();
@@ -1937,6 +1955,7 @@ impl UsamiApp {
             sender: Sender::User,
             text: text.clone(),
             emotion: None,
+            tool_badge: None,
         });
 
         cx.notify();
@@ -2012,10 +2031,12 @@ impl UsamiApp {
                                         sender: Sender::Usami,
                                         text: response.reply.clone(),
                                         emotion: Some(emotion.clone()),
+                                        tool_badge: format_tool_badge(response.agent_turn.as_ref()),
                                     });
 
                                     view.last_source = response.source.clone().map(Into::into);
                                     view.last_timing = response.timing.clone();
+                                    view.last_agent_turn = response.agent_turn.clone();
                                     // Nível/EXP do VN não saem mais da afinidade do
                                     // chat: quem manda é o /api/bond (abaixo, award).
                                     if let Some(aff) = response.affinity {
@@ -2234,6 +2255,7 @@ impl UsamiApp {
             sender: Sender::Usami,
             text: event.text.clone(),
             emotion: Some(emotion.clone()),
+            tool_badge: None,
         });
         self.fetch_mood(cx);
         self.touch_ui(cx);
@@ -8488,11 +8510,17 @@ impl Render for UsamiApp {
             )
             .into()
         } else if is_busy {
-            "PENSANDO".into()
+            if let Some(tool) = self.last_agent_turn.as_ref().and_then(|t| t.tool.as_deref()) {
+                format!("EXECUTANDO · {tool}").into()
+            } else {
+                "PENSANDO".into()
+            }
         } else if is_companion {
             "MODO COMPANION".into()
         } else if self.is_away {
             "AUSENTE".into()
+        } else if let Some(badge) = format_tool_badge(self.last_agent_turn.as_ref()).filter(|b| b != "sem skill") {
+            format!("COM VOCÊ · {badge}").into()
         } else {
             "COM VOCÊ".into()
         };
@@ -8813,6 +8841,8 @@ impl Render for UsamiApp {
                         .child(
                             div()
                                 .flex()
+                                .flex_1()
+                                .min_w(px(0.0))
                                 .items_center()
                                 .gap(px(sp.s2))
                                 .child(
@@ -8991,6 +9021,9 @@ impl Render for UsamiApp {
                         .child(
                             div()
                                 .flex()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .justify_end()
                                 .items_center()
                                 .gap(px(sp.s3))
                                 .child(
@@ -9662,10 +9695,15 @@ impl Render for UsamiApp {
                                                 .text_color(if is_user { c.primary } else { c.muted })
                                                 .child(if is_user {
                                                     SharedString::from("VOCÊ")
-                                                } else if let Some(emotion) = msg.emotion.as_deref() {
-                                                    SharedString::from(format!("USAMI · {emotion}"))
                                                 } else {
-                                                    SharedString::from("USAMI")
+                                                    let mut header = match msg.emotion.as_deref() {
+                                                        Some(emotion) => format!("USAMI · {emotion}"),
+                                                        None => "USAMI".to_string(),
+                                                    };
+                                                    if let Some(badge) = msg.tool_badge.as_deref() {
+                                                        header.push_str(&format!(" · {badge}"));
+                                                    }
+                                                    SharedString::from(header)
                                                 }),
                                         )
                                         .child(

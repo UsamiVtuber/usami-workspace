@@ -546,6 +546,96 @@ pub struct ProactiveAckResponse {
     pub acked: usize,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillActivation {
+    #[serde(rename = "canActivate", default)]
+    pub can_activate: bool,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillMissing {
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSkill {
+    pub id: String,
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(rename = "maxPermissionLevel", default)]
+    pub max_permission_level: Option<u8>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub activation: SkillActivation,
+    #[serde(default)]
+    pub missing: SkillMissing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSkillsResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub skills: Vec<AgentSkill>,
+    #[serde(default)]
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillToggleResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub skill: Option<AgentSkill>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentExecution {
+    pub id: String,
+    pub tool: String,
+    pub status: String,
+    #[serde(rename = "permissionLevel", default)]
+    pub permission_level: Option<u8>,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(rename = "startedAt", default)]
+    pub started_at: String,
+    #[serde(rename = "durationMs", default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(rename = "inputSummary", default)]
+    pub input_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentExecutionsResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub executions: Vec<AgentExecution>,
+    #[serde(default)]
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SttResponse {
     pub text: String,
@@ -1196,6 +1286,107 @@ impl UsamiApiClient {
             Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
         }
     }
+
+    pub async fn get_agent_skills(&self) -> Result<AgentSkillsResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/agent/skills", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("Falha ao consultar skills (HTTP {status})."));
+            }
+            res.json::<AgentSkillsResponse>()
+                .await
+                .map_err(map_request_error)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_agent_executions(
+        &self,
+        limit: usize,
+    ) -> Result<AgentExecutionsResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/agent/executions?limit={limit}", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("Falha ao consultar execuções (HTTP {status})."));
+            }
+            res.json::<AgentExecutionsResponse>()
+                .await
+                .map_err(map_request_error)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn toggle_skill_enabled(
+        &self,
+        skill_id: &str,
+        enable: bool,
+    ) -> Result<SkillToggleResponse, String> {
+        let client = self.client.clone();
+        let action = if enable { "enable" } else { "disable" };
+        let url = format!("{}/api/agent/skills/{skill_id}/{action}", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&serde_json::json!({}));
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("Falha ao atualizar skill (HTTP {status})."));
+            }
+            res.json::<SkillToggleResponse>()
+                .await
+                .map_err(map_request_error)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
 }
 
 /// Resposta do `/api/tts` com `stream:true`: PCM cru quando o provedor entrega
@@ -1805,5 +1996,117 @@ mod tests {
         let req = requests.recv_timeout(Duration::from_secs(5)).expect("get");
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/mood");
+    }
+
+    #[tokio::test]
+    async fn agent_skills_get_and_toggle_send_token_and_parse_response() {
+        let payload = br#"{
+            "ok": true,
+            "count": 1,
+            "skills": [
+                {
+                    "id": "daily-briefing",
+                    "valid": true,
+                    "name": "Daily Briefing",
+                    "version": "1.0.0",
+                    "description": "Resumo do dia",
+                    "state": "installed",
+                    "origin": "dev",
+                    "maxPermissionLevel": 1,
+                    "activation": { "canActivate": true, "reasons": [] },
+                    "missing": { "tools": [], "dependencies": [] }
+                }
+            ]
+        }"#;
+        let (base_url, requests) = spawn_server("200 OK", "application/json", "", payload);
+        let client = UsamiApiClient::with_token(base_url, Some("token-skills".into()));
+
+        let res = client.get_agent_skills().await.expect("consulta skills");
+        assert!(res.ok);
+        assert_eq!(res.skills.len(), 1);
+        assert_eq!(res.skills[0].id, "daily-briefing");
+        assert_eq!(res.skills[0].state.as_deref(), Some("installed"));
+        assert!(res.skills[0].activation.can_activate);
+
+        let req = requests.recv_timeout(Duration::from_secs(5)).expect("get skills");
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/api/agent/skills");
+
+        let (toggle_url, toggle_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"skill":{"id":"daily-briefing","valid":true,"state":"disabled","activation":{"canActivate":false,"reasons":["skill desativada"]},"missing":{"tools":[],"dependencies":[]}}}"#,
+        );
+        let toggle_client = UsamiApiClient::with_token(toggle_url, Some("token-skills".into()));
+        let toggled = toggle_client
+            .toggle_skill_enabled("daily-briefing", false)
+            .await
+            .expect("desativa skill");
+        assert!(toggled.ok);
+        assert_eq!(
+            toggled.skill.and_then(|s| s.state).as_deref(),
+            Some("disabled")
+        );
+
+        let treq = toggle_reqs
+            .recv_timeout(Duration::from_secs(5))
+            .expect("post disable");
+        assert_eq!(treq.method, "POST");
+        assert_eq!(treq.path, "/api/agent/skills/daily-briefing/disable");
+    }
+
+    #[tokio::test]
+    async fn agent_executions_get_and_api_error_message_round_trip() {
+        let payload = br#"{
+            "ok": true,
+            "count": 1,
+            "executions": [
+                {
+                    "id": "ex-0123456789ab",
+                    "tool": "briefing.build",
+                    "status": "failed",
+                    "permissionLevel": 1,
+                    "origin": "agent",
+                    "startedAt": "2026-11-11T22:10:05.000Z",
+                    "durationMs": 14,
+                    "verified": false,
+                    "reason": "resultado reprovado por verify()",
+                    "inputSummary": "args: date"
+                }
+            ]
+        }"#;
+        let (base_url, requests) = spawn_server("200 OK", "application/json", "", payload);
+        let client = UsamiApiClient::with_token(base_url, Some("token-exec".into()));
+
+        let res = client
+            .get_agent_executions(50)
+            .await
+            .expect("consulta execuções");
+        assert!(res.ok);
+        assert_eq!(res.executions.len(), 1);
+        assert_eq!(res.executions[0].tool, "briefing.build");
+        assert!(!res.executions[0].verified);
+        assert_eq!(
+            res.executions[0].reason.as_deref(),
+            Some("resultado reprovado por verify()")
+        );
+
+        let req = requests.recv_timeout(Duration::from_secs(5)).expect("get execs");
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/api/agent/executions?limit=50");
+
+        let (err_url, _) = spawn_server(
+            "409 Conflict",
+            "application/json",
+            "",
+            br#"{"error":"Skill precisa estar instalada."}"#,
+        );
+        let err_client = UsamiApiClient::with_token(err_url, Some("token-exec".into()));
+        let err = err_client
+            .toggle_skill_enabled("x-skill", true)
+            .await
+            .expect_err("retorna mensagem de erro");
+        assert_eq!(err, "Skill precisa estar instalada.");
     }
 }

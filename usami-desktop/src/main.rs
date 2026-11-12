@@ -1,3 +1,4 @@
+pub mod agent_center;
 pub mod api;
 pub mod audio;
 #[cfg(target_os = "windows")]
@@ -6,6 +7,11 @@ pub mod recorder;
 mod storage;
 mod theme;
 
+use crate::agent_center::{
+    AgentCenterTab, ExecFilter, ExecutionTone, SkillFilter, classify_execution_status,
+    collect_skill_reasons, format_duration_ms, format_execution_time, group_skills_by_state,
+    origin_label, state_label, summarize_executions,
+};
 use crate::api::UsamiApiClient;
 use crate::audio::AudioPlayer;
 use gpui::prelude::FluentBuilder;
@@ -24,6 +30,7 @@ enum ActiveDrawer {
     Bond,
     Settings,
     Vrma,
+    Skills,
 }
 
 /// Abas do painel de configurações (mesma ordem do web).
@@ -745,6 +752,20 @@ struct UsamiApp {
     /// turnos anteriores são descartadas ao chegar atrasadas.
     voice_turn_closed: u64,
     attached_media: Option<AttachedMedia>,
+    agent_tab: AgentCenterTab,
+    agent_skill_filter: SkillFilter,
+    agent_exec_filter: ExecFilter,
+    agent_skills: Vec<api::AgentSkill>,
+    agent_skills_loaded: bool,
+    agent_skills_loading: bool,
+    agent_skills_error: Option<SharedString>,
+    agent_executions: Vec<api::AgentExecution>,
+    agent_executions_loaded: bool,
+    agent_executions_loading: bool,
+    agent_executions_error: Option<SharedString>,
+    agent_skill_busy_id: Option<String>,
+    agent_action_notice: Option<SharedString>,
+    agent_action_error: Option<SharedString>,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
 }
@@ -1047,6 +1068,20 @@ impl UsamiApp {
             listen_session: 0,
             voice_turn_closed: 0,
             attached_media: None,
+            agent_tab: AgentCenterTab::Skills,
+            agent_skill_filter: SkillFilter::All,
+            agent_exec_filter: ExecFilter::All,
+            agent_skills: Vec::new(),
+            agent_skills_loaded: false,
+            agent_skills_loading: false,
+            agent_skills_error: None,
+            agent_executions: Vec::new(),
+            agent_executions_loaded: false,
+            agent_executions_loading: false,
+            agent_executions_error: None,
+            agent_skill_busy_id: None,
+            agent_action_notice: None,
+            agent_action_error: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
         }
@@ -2228,6 +2263,8 @@ impl UsamiApp {
                 if !self.memory_loading {
                     self.fetch_memory(cx);
                 }
+            } else if drawer == ActiveDrawer::Skills {
+                self.fetch_agent_center(cx);
             }
         }
         cx.notify();
@@ -3628,6 +3665,915 @@ fn render_settings_category<E: IntoElement>(
             }
         })
         .detach();
+    }
+
+    /// Consulta `/api/agent/skills` e `/api/agent/executions?limit=50` sem bloquear a UI.
+    fn fetch_agent_center(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() {
+            self.agent_skills_loading = false;
+            self.agent_executions_loading = false;
+            self.agent_skills_loaded = true;
+            self.agent_executions_loaded = true;
+            let msg: SharedString =
+                "Token ausente (USAMI_API_TOKEN) para consultar o core.".into();
+            self.agent_skills_error = Some(msg.clone());
+            self.agent_executions_error = Some(msg);
+            cx.notify();
+            return;
+        }
+        if !self.agent_skills_loading {
+            self.agent_skills_loading = true;
+            let api = Arc::clone(&self.api_client);
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let res = api.get_agent_skills().await;
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, cx| {
+                                view.agent_skills_loading = false;
+                                view.agent_skills_loaded = true;
+                                match res {
+                                    Ok(resp) => {
+                                        view.agent_skills = resp.skills;
+                                        view.agent_skills_error = None;
+                                    }
+                                    Err(err) => {
+                                        view.agent_skills_error = Some(err.into());
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        if !self.agent_executions_loading {
+            self.agent_executions_loading = true;
+            let api = Arc::clone(&self.api_client);
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let res = api.get_agent_executions(50).await;
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, cx| {
+                                view.agent_executions_loading = false;
+                                view.agent_executions_loaded = true;
+                                match res {
+                                    Ok(resp) => {
+                                        view.agent_executions = resp.executions;
+                                        view.agent_executions_error = None;
+                                    }
+                                    Err(err) => {
+                                        view.agent_executions_error = Some(err.into());
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn toggle_agent_skill(&mut self, skill_id: String, enable: bool, cx: &mut Context<Self>) {
+        if self.agent_skill_busy_id.is_some() {
+            return;
+        }
+        if !self.api_client.has_token() {
+            self.agent_action_error =
+                Some("Token ausente (USAMI_API_TOKEN) para alterar skills.".into());
+            cx.notify();
+            return;
+        }
+        self.agent_skill_busy_id = Some(skill_id.clone());
+        self.agent_action_notice = None;
+        self.agent_action_error = None;
+        self.poke(cx);
+        cx.notify();
+
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.toggle_skill_enabled(&skill_id, enable).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.agent_skill_busy_id = None;
+                            match res {
+                                Ok(resp) => {
+                                    let label = resp
+                                        .skill
+                                        .as_ref()
+                                        .and_then(|s| s.name.as_deref())
+                                        .unwrap_or(&skill_id);
+                                    view.agent_action_notice = Some(
+                                        format!(
+                                            "Skill \"{label}\" {}.",
+                                            if enable { "ativada" } else { "desativada" }
+                                        )
+                                        .into(),
+                                    );
+                                    view.fetch_agent_center(cx);
+                                }
+                                Err(err) => {
+                                    view.agent_action_error = Some(err.into());
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn render_agent_center_drawer(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let ty = t.text;
+        let r = t.radius;
+
+        let active_tab = self.agent_tab;
+        let skill_filter = self.agent_skill_filter;
+        let exec_filter = self.agent_exec_filter;
+        let loading = self.agent_skills_loading || self.agent_executions_loading;
+        let busy_id = self.agent_skill_busy_id.clone();
+
+        let skills_count = self.agent_skills.len();
+        let execs_count = self.agent_executions.len();
+        let (buckets, invalid_skills) = group_skills_by_state(&self.agent_skills);
+        let (exec_total, exec_verified, exec_failed) = summarize_executions(&self.agent_executions);
+
+        let pill = |id: &'static str, label: String, active: bool| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .px(px(10.0))
+                .py(px(4.5))
+                .rounded_full()
+                .border_1()
+                .bg(if active { c.accent_tint } else { c.surface_soft })
+                .border_color(if active { c.accent } else { c.line_strong })
+                .text_size(px(ty.xs))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if active { c.pearl } else { c.muted })
+                .hover(|s| s.border_color(c.primary).text_color(c.pearl))
+                .child(label)
+        };
+
+        let body_el: AnyElement = match active_tab {
+            AgentCenterTab::Skills => {
+                let installed_len = buckets[0].skills.len();
+                let available_len = buckets[1].skills.len();
+                let pending_len = buckets[2].skills.len();
+                let disabled_len = buckets[3].skills.len();
+
+                let mut section = div().flex().flex_col().gap(px(sp.s3));
+
+                section = section.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(sp.s1_5))
+                        .child(
+                            pill(
+                                "agent-skill-filter-all",
+                                format!("Todas ({skills_count})"),
+                                skill_filter == SkillFilter::All,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.agent_skill_filter = SkillFilter::All;
+                                this.poke(cx);
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            pill(
+                                "agent-skill-filter-installed",
+                                format!("Instaladas ({installed_len})"),
+                                skill_filter == SkillFilter::Installed,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.agent_skill_filter = SkillFilter::Installed;
+                                this.poke(cx);
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            pill(
+                                "agent-skill-filter-available",
+                                format!("Disponíveis ({available_len})"),
+                                skill_filter == SkillFilter::Available,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.agent_skill_filter = SkillFilter::Available;
+                                this.poke(cx);
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            pill(
+                                "agent-skill-filter-pending",
+                                format!("Pendentes ({pending_len})"),
+                                skill_filter == SkillFilter::Pending,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.agent_skill_filter = SkillFilter::Pending;
+                                this.poke(cx);
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            pill(
+                                "agent-skill-filter-disabled",
+                                format!("Desativadas ({disabled_len})"),
+                                skill_filter == SkillFilter::Disabled,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.agent_skill_filter = SkillFilter::Disabled;
+                                this.poke(cx);
+                                cx.notify();
+                            })),
+                        ),
+                );
+
+                if let Some(err) = self.agent_action_error.clone() {
+                    section = section.child(
+                        div()
+                            .p(px(sp.s2_5))
+                            .rounded(px(r.sm))
+                            .bg(c.danger_muted_bg)
+                            .border_1()
+                            .border_color(c.danger_muted_border)
+                            .text_size(px(ty.xs))
+                            .text_color(c.danger_muted)
+                            .child(err),
+                    );
+                }
+                if let Some(notice) = self.agent_action_notice.clone() {
+                    section = section.child(
+                        div()
+                            .p(px(sp.s2_5))
+                            .rounded(px(r.sm))
+                            .bg(c.surface_soft)
+                            .border_1()
+                            .border_color(c.success_border)
+                            .text_size(px(ty.xs))
+                            .text_color(c.pearl)
+                            .child(notice),
+                    );
+                }
+                if let Some(err) = self.agent_skills_error.clone() {
+                    section = section.child(
+                        div()
+                            .p(px(sp.s2_5))
+                            .rounded(px(r.sm))
+                            .bg(c.danger_muted_bg)
+                            .border_1()
+                            .border_color(c.danger_muted_border)
+                            .text_size(px(ty.xs))
+                            .text_color(c.danger_muted)
+                            .child(err),
+                    );
+                }
+
+                if !self.agent_skills_loaded {
+                    section = section.child(settings_hint("Lendo catálogo de skills…"));
+                } else {
+                    for bucket in buckets
+                        .into_iter()
+                        .filter(|b| skill_filter.matches_state(b.key))
+                    {
+                        let count = bucket.skills.len();
+                        let mut group_el = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(sp.s2))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .mt(px(sp.s1))
+                                    .child(
+                                        div()
+                                            .text_size(px(ty.xs))
+                                            .font_family(theme::FONT_DISPLAY)
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.primary)
+                                            .child(bucket.label.to_uppercase()),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(8.0))
+                                            .py(px(1.5))
+                                            .rounded_full()
+                                            .bg(c.card_bg)
+                                            .border_1()
+                                            .border_color(c.line)
+                                            .text_size(px(ty.xs))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.primary)
+                                            .child(format!("{count}")),
+                                    ),
+                            );
+
+                        if bucket.skills.is_empty() {
+                            group_el = group_el.child(
+                                div()
+                                    .p(px(sp.s2_5))
+                                    .rounded(px(r.sm))
+                                    .bg(c.deep)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.muted)
+                                    .child(bucket.empty_message),
+                            );
+                        } else {
+                            for skill in bucket.skills {
+                                let sid = skill.id.clone();
+                                let title = skill.name.clone().unwrap_or_else(|| sid.clone());
+                                let st = skill.state.as_deref().unwrap_or("unknown");
+                                let version = skill.version.as_deref().unwrap_or("0.0.0");
+                                let origin = origin_label(skill.origin.as_deref());
+                                let perm = skill.max_permission_level.unwrap_or(1);
+                                let reasons = collect_skill_reasons(&skill);
+                                let badge_color = match st {
+                                    "installed" => c.ok,
+                                    "available" => c.primary,
+                                    "pending" => c.warn,
+                                    _ => c.muted,
+                                };
+                                let badge_border = match st {
+                                    "installed" => c.success_border,
+                                    "available" => c.accent_border,
+                                    _ => c.line_strong,
+                                };
+                                let is_busy = busy_id.as_deref() == Some(sid.as_str());
+                                let can_disable = st == "installed";
+                                let can_enable = st == "disabled";
+
+                                let mut card = div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(sp.s2))
+                                    .p(px(sp.s3))
+                                    .rounded(px(r.md))
+                                    .bg(c.card_bg)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_start()
+                                            .justify_between()
+                                            .gap(px(sp.s2))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(2.0))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(ty.md))
+                                                            .font_weight(FontWeight::BOLD)
+                                                            .text_color(c.pearl)
+                                                            .child(title),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(ty.xs))
+                                                            .text_color(c.muted)
+                                                            .child(format!(
+                                                                "{sid} · v{version} · {origin} · nível {perm}"
+                                                            )),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .px(px(8.0))
+                                                    .py(px(2.5))
+                                                    .rounded_full()
+                                                    .bg(c.deep)
+                                                    .border_1()
+                                                    .border_color(badge_border)
+                                                    .text_size(px(ty.xs))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(badge_color)
+                                                    .child(state_label(st)),
+                                            ),
+                                    );
+
+                                if let Some(desc) = skill.description.filter(|d| !d.trim().is_empty()) {
+                                    card = card.child(
+                                        div()
+                                            .text_size(px(ty.sm))
+                                            .text_color(c.pearl)
+                                            .child(desc),
+                                    );
+                                }
+
+                                let mut foot = div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(sp.s2))
+                                    .child(
+                                        div()
+                                            .text_size(px(ty.xs))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(if skill.activation.can_activate {
+                                                c.ok
+                                            } else {
+                                                c.muted
+                                            })
+                                            .child(if skill.activation.can_activate {
+                                                "Pronta para ativar"
+                                            } else {
+                                                "Não ativável agora"
+                                            }),
+                                    );
+
+                                if can_disable || can_enable {
+                                    let btn_id = format!("skill-toggle-{sid}");
+                                    let skill_for_click = sid.clone();
+                                    let next_enable = can_enable;
+                                    let label = if is_busy {
+                                        "Atualizando…"
+                                    } else if can_enable {
+                                        "Ativar"
+                                    } else {
+                                        "Desativar"
+                                    };
+                                    foot = foot.child(
+                                        div()
+                                            .id(SharedString::from(btn_id))
+                                            .cursor_pointer()
+                                            .px(px(10.0))
+                                            .py(px(4.5))
+                                            .rounded(px(r.sm))
+                                            .bg(if can_enable {
+                                                c.accent_tint
+                                            } else {
+                                                c.deep
+                                            })
+                                            .border_1()
+                                            .border_color(if can_enable {
+                                                c.accent
+                                            } else {
+                                                c.line_strong
+                                            })
+                                            .text_size(px(ty.xs))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(c.pearl)
+                                            .when(busy_id.is_some(), |el| el.opacity(0.55))
+                                            .hover(|s| s.border_color(c.primary))
+                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                this.toggle_agent_skill(
+                                                    skill_for_click.clone(),
+                                                    next_enable,
+                                                    cx,
+                                                );
+                                            }))
+                                            .child(label),
+                                    );
+                                }
+
+                                card = card.child(foot);
+
+                                if !reasons.is_empty() {
+                                    let mut reasons_el = div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .pt(px(2.0));
+                                    for reason in reasons {
+                                        reasons_el = reasons_el.child(
+                                            div()
+                                                .text_size(px(ty.xs))
+                                                .text_color(c.primary)
+                                                .child(format!("• {reason}")),
+                                        );
+                                    }
+                                    card = card.child(reasons_el);
+                                }
+
+                                group_el = group_el.child(card);
+                            }
+                        }
+
+                        section = section.child(group_el);
+                    }
+
+                    if !invalid_skills.is_empty() {
+                        let mut inv_el = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(sp.s2))
+                            .child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .font_family(theme::FONT_DISPLAY)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.err)
+                                    .child("MANIFESTOS INVÁLIDOS"),
+                            );
+                        for skill in invalid_skills {
+                            let reasons = collect_skill_reasons(&skill);
+                            let mut card = div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(sp.s1_5))
+                                .p(px(sp.s3))
+                                .rounded(px(r.md))
+                                .bg(c.card_bg)
+                                .border_1()
+                                .border_color(c.danger_muted_border)
+                                .child(
+                                    div()
+                                        .text_size(px(ty.md))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.pearl)
+                                        .child(skill.id),
+                                );
+                            for reason in reasons {
+                                card = card.child(
+                                    div()
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.err)
+                                        .child(format!("• {reason}")),
+                                );
+                            }
+                            inv_el = inv_el.child(card);
+                        }
+                        section = section.child(inv_el);
+                    }
+                }
+
+                section.into_any_element()
+            }
+            AgentCenterTab::Executions => {
+                let mut section = div().flex().flex_col().gap(px(sp.s3));
+
+                section = section
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(sp.s3))
+                            .p(px(sp.s2_5))
+                            .rounded(px(r.md))
+                            .bg(c.card_bg)
+                            .border_1()
+                            .border_color(c.line)
+                            .text_size(px(ty.xs))
+                            .child(
+                                div()
+                                    .text_color(c.pearl)
+                                    .child(format!("Total: {exec_total}")),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.ok)
+                                    .child(format!("Verificadas: {exec_verified}")),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.err)
+                                    .child(format!("Falhas: {exec_failed}")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(sp.s1_5))
+                            .child(
+                                pill(
+                                    "agent-exec-filter-all",
+                                    format!("Todas ({exec_total})"),
+                                    exec_filter == ExecFilter::All,
+                                )
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.agent_exec_filter = ExecFilter::All;
+                                    this.poke(cx);
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                pill(
+                                    "agent-exec-filter-verified",
+                                    format!("Verificadas ({exec_verified})"),
+                                    exec_filter == ExecFilter::Verified,
+                                )
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.agent_exec_filter = ExecFilter::Verified;
+                                    this.poke(cx);
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                pill(
+                                    "agent-exec-filter-failed",
+                                    format!("Falhas ({exec_failed})"),
+                                    exec_filter == ExecFilter::Failed,
+                                )
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.agent_exec_filter = ExecFilter::Failed;
+                                    this.poke(cx);
+                                    cx.notify();
+                                })),
+                            ),
+                    );
+
+                if let Some(err) = self.agent_executions_error.clone() {
+                    section = section.child(
+                        div()
+                            .p(px(sp.s2_5))
+                            .rounded(px(r.sm))
+                            .bg(c.danger_muted_bg)
+                            .border_1()
+                            .border_color(c.danger_muted_border)
+                            .text_size(px(ty.xs))
+                            .text_color(c.danger_muted)
+                            .child(err),
+                    );
+                }
+
+                if !self.agent_executions_loaded {
+                    section = section.child(settings_hint("Lendo histórico de execuções…"));
+                } else {
+                    let visible: Vec<_> = self
+                        .agent_executions
+                        .iter()
+                        .filter(|rec| match exec_filter {
+                            ExecFilter::All => true,
+                            ExecFilter::Verified => classify_execution_status(rec).verified,
+                            ExecFilter::Failed => !classify_execution_status(rec).verified,
+                        })
+                        .cloned()
+                        .collect();
+
+                    if visible.is_empty() {
+                        let empty_msg = if self.agent_executions.is_empty() {
+                            "Nenhuma execução registrada ainda."
+                        } else {
+                            "Nenhuma execução corresponde ao filtro selecionado."
+                        };
+                        section = section.child(
+                            div()
+                                .p(px(sp.s3))
+                                .rounded(px(r.md))
+                                .bg(c.deep)
+                                .border_1()
+                                .border_color(c.line)
+                                .text_size(px(ty.sm))
+                                .text_color(c.muted)
+                                .child(empty_msg),
+                        );
+                    } else {
+                        for record in visible {
+                            let status = classify_execution_status(&record);
+                            let status_color = match status.tone {
+                                ExecutionTone::Ok => c.ok,
+                                ExecutionTone::Warn => c.warn,
+                                ExecutionTone::Err => c.err,
+                            };
+                            let status_border = match status.tone {
+                                ExecutionTone::Ok => c.success_border,
+                                ExecutionTone::Warn => c.accent_border,
+                                ExecutionTone::Err => c.danger_muted_border,
+                            };
+                            let when = format_execution_time(&record.started_at);
+                            let dur = format_duration_ms(record.duration_ms);
+                            let mut meta_parts = Vec::new();
+                            if !when.is_empty() {
+                                meta_parts.push(when);
+                            }
+                            if !dur.is_empty() {
+                                meta_parts.push(dur);
+                            }
+                            if let Some(orig) = record.origin.as_deref() {
+                                meta_parts.push(orig.to_string());
+                            }
+                            if let Some(perm) = record.permission_level {
+                                meta_parts.push(format!("nível {perm}"));
+                            }
+
+                            let mut card = div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(sp.s1_5))
+                                .p(px(sp.s3))
+                                .rounded(px(r.md))
+                                .bg(c.card_bg)
+                                .border_1()
+                                .border_color(c.line)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_start()
+                                        .justify_between()
+                                        .gap(px(sp.s2))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(2.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(ty.md))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(c.pearl)
+                                                        .child(record.tool),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(ty.xs))
+                                                        .text_color(c.muted)
+                                                        .child(meta_parts.join(" · ")),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .px(px(8.0))
+                                                .py(px(2.5))
+                                                .rounded_full()
+                                                .bg(c.deep)
+                                                .border_1()
+                                                .border_color(status_border)
+                                                .text_size(px(ty.xs))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(status_color)
+                                                .child(status.label),
+                                        ),
+                                );
+
+                            if let Some(summary) = record
+                                .input_summary
+                                .filter(|s| !s.trim().is_empty())
+                            {
+                                card = card.child(
+                                    div()
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.muted)
+                                        .child(summary),
+                                );
+                            }
+
+                            if let Some(reason) = record.reason.filter(|s| !s.trim().is_empty()) {
+                                card = card.child(
+                                    div()
+                                        .p(px(sp.s2))
+                                        .rounded(px(r.sm))
+                                        .bg(if status.tone == ExecutionTone::Ok {
+                                            c.surface_soft
+                                        } else {
+                                            c.danger_muted_bg
+                                        })
+                                        .border_1()
+                                        .border_color(status_border)
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.pearl)
+                                        .child(format!("Motivo: {reason}")),
+                                );
+                            }
+
+                            section = section.child(card);
+                        }
+                    }
+                }
+
+                section.into_any_element()
+            }
+        };
+
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(sp.s3))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(sp.s2))
+                    .pb(px(sp.s2))
+                    .border_b_1()
+                    .border_color(c.line)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(sp.s1_5))
+                            .child(
+                                div()
+                                    .id("agent-tab-skills")
+                                    .cursor_pointer()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(r.sm))
+                                    .border_1()
+                                    .bg(if active_tab == AgentCenterTab::Skills {
+                                        c.accent_tint
+                                    } else {
+                                        c.surface_soft
+                                    })
+                                    .border_color(if active_tab == AgentCenterTab::Skills {
+                                        c.accent
+                                    } else {
+                                        c.line
+                                    })
+                                    .text_size(px(ty.xs))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.pearl)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.agent_tab = AgentCenterTab::Skills;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Skills ({skills_count})")),
+                            )
+                            .child(
+                                div()
+                                    .id("agent-tab-executions")
+                                    .cursor_pointer()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(r.sm))
+                                    .border_1()
+                                    .bg(if active_tab == AgentCenterTab::Executions {
+                                        c.accent_tint
+                                    } else {
+                                        c.surface_soft
+                                    })
+                                    .border_color(if active_tab == AgentCenterTab::Executions {
+                                        c.accent
+                                    } else {
+                                        c.line
+                                    })
+                                    .text_size(px(ty.xs))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.pearl)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.agent_tab = AgentCenterTab::Executions;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Execuções ({execs_count})")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("agent-center-refresh")
+                            .cursor_pointer()
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(r.sm))
+                            .bg(c.surface_soft)
+                            .border_1()
+                            .border_color(c.line_strong)
+                            .text_size(px(ty.xs))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.primary)
+                            .hover(|s| s.border_color(c.primary))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.fetch_agent_center(cx);
+                                this.poke(cx);
+                            }))
+                            .child(if loading { "Atualizando…" } else { "Atualizar" }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("agent-center-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .pr(px(4.0))
+                    .child(body_el),
+            )
     }
 
     /// Mesma regra do web: cada mensagem rende XP, mas quem soma é o core.
@@ -5768,7 +6714,8 @@ impl Render for UsamiApp {
         let is_listening = self.is_listening;
         let active_drawer = self.active_drawer;
         let chat_open = active_drawer == ActiveDrawer::Chat;
-        let side_drawer_open = active_drawer == ActiveDrawer::Vrma && !chat_open;
+        let side_drawer_open =
+            matches!(active_drawer, ActiveDrawer::Vrma | ActiveDrawer::Skills) && !chat_open;
         let bond_level = self.bond_level;
         let bond_exp_pct = self.bond_exp_pct;
         let bond = self.bond.clone();
@@ -6196,6 +7143,35 @@ impl Render for UsamiApp {
                                             cx.notify();
                                         }))
                                         .child(icon("gear", 16.0)),
+                                )
+                                .child(
+                                    div()
+                                        .id("top-skills-btn")
+                                        .cursor_pointer()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size(px(38.0))
+                                        .rounded_full()
+                                        .bg(if active_drawer == ActiveDrawer::Skills {
+                                            c.icon_bg_active
+                                        } else {
+                                            c.icon_bg
+                                        })
+                                        .border_1()
+                                        .border_color(if active_drawer == ActiveDrawer::Skills {
+                                            c.primary
+                                        } else {
+                                            c.line
+                                        })
+                                        .when(active_drawer == ActiveDrawer::Skills, |el| {
+                                            el.shadow(theme::glow(c.primary, 14.0))
+                                        })
+                                        .hover(|style| style.bg(c.icon_bg_hover).border_color(c.line_strong))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.toggle_drawer(ActiveDrawer::Skills, cx);
+                                        }))
+                                        .child(icon("skills", 16.0)),
                                 )
                                 .child(
                                     div()
@@ -7022,7 +7998,11 @@ impl Render for UsamiApp {
                         .top_0()
                         .bottom_0()
                         .right_0()
-                        .w(px(420.0))
+                        .w(px(if active_drawer == ActiveDrawer::Skills {
+                            460.0
+                        } else {
+                            420.0
+                        }))
                         .h(viewport_h)
                         .flex()
                         .flex_col()
@@ -7052,6 +8032,7 @@ impl Render for UsamiApp {
                                             ActiveDrawer::Bond => "VÍNCULO COM A USAMI",
                                             ActiveDrawer::Settings => "CONFIGURAÇÕES",
                                             ActiveDrawer::Vrma => "ANIMAÇÕES VRMA",
+                                            ActiveDrawer::Skills => "CENTRAL DE SKILLS",
                                             ActiveDrawer::None => "",
                                         }),
                                 )
@@ -7157,6 +8138,12 @@ impl Render for UsamiApp {
                                     )
                             }
                             ActiveDrawer::Settings => div(),
+                            ActiveDrawer::Skills => div()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .child(self.render_agent_center_drawer(cx)),
                             ActiveDrawer::None => div(),
                         }),
                 )

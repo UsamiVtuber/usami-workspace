@@ -73,7 +73,7 @@
     {
       "parameters": {
         "operation": "write",
-        "fileName": "={{ $env.USAMI_VAULT_PATH || '/home/node/vault' }}/Inbox/Automations/{{ $('Gerar Nota de Briefing').item.json.filename }}",
+        "fileName": "={{ '/files/obsidian/usami/Inbox/Automations/' + $('Gerar Nota de Briefing').item.json.filename }}",
         "dataPropertyName": "data",
         "options": {}
       },
@@ -88,18 +88,16 @@
     },
     {
       "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://127.0.0.1:8787/api/n8n/command",
+        "url": "http://10.42.0.91:8787/api/n8n/command",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "content-type",
               "value": "application/json"
-            },
-            {
-              "name": "x-usami-token",
-              "value": "={{ $env.USAMI_API_TOKEN || '' }}"
             }
           ]
         },
@@ -128,6 +126,16 @@
         1300,
         300
       ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        },
+        "genericAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        }
+      },
       "onError": "continueRegularOutput"
     }
   ],

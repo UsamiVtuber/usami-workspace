@@ -24,8 +24,10 @@
     },
     {
       "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://127.0.0.1:8787/api/memory/maintenance",
+        "url": "http://10.42.0.91:8787/api/memory/maintenance",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -36,10 +38,6 @@
             {
               "name": "Origin",
               "value": "http://127.0.0.1:5173"
-            },
-            {
-              "name": "x-usami-token",
-              "value": "={{ $env.USAMI_API_TOKEN || '' }}"
             }
           ]
         },
@@ -54,7 +52,17 @@
       "position": [
         420,
         300
-      ]
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        },
+        "genericAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        }
+      }
     },
     {
       "parameters": {

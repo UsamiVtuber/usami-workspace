@@ -430,10 +430,6 @@ impl Theme {
     pub fn vn_exp_fill_bg(&self) -> Background {
         Self::gradient(90.0, Palette::vn_pink_neon(), Palette::vn_lavender_bright())
     }
-
-    pub fn vn_bubble_tag_bg(&self) -> Background {
-        Self::gradient(90.0, rgba(0xf052b573), rgba(0xa77abf4d))
-    }
 }
 
 pub fn theme() -> &'static Theme {

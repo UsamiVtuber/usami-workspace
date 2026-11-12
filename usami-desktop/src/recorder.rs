@@ -18,6 +18,10 @@ const PREROLL_MS: usize = 400;
 const START_FRAMES: usize = 6; // 120 ms de voz abrem a fala
 const SILENCE_FRAMES: usize = 45; // 900 ms de silêncio encerram o turno
 const MIN_UTTERANCE_MS: usize = 350;
+// Prévia ao vivo: a cada ~1,2 s de fala contínua uma cópia do que já foi dito
+// vai para o STT, para a legenda do topo aparecer enquanto a pessoa fala.
+const PARTIAL_MS: usize = 1200;
+const PARTIAL_MIN_MS: usize = 600;
 
 /// Portão único da escuta: a UI suspende enquanto pensa/fala e o usuário
 /// suspende ao mutar. A thread de captura descarta tudo enquanto fechado.
@@ -54,10 +58,19 @@ impl Default for MicGate {
     }
 }
 
+/// Fala entregue à UI. `turn` sobe a cada utterance: a prévia de um turno já
+/// encerrado nunca deve reaparecer depois que o texto final foi aceito.
+#[derive(Clone, Debug)]
+pub struct VoiceSlice {
+    pub turn: u64,
+    pub wav: Vec<u8>,
+}
+
 pub struct VoiceListener {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
-    segments: Option<UnboundedReceiver<Vec<u8>>>,
+    segments: Option<UnboundedReceiver<VoiceSlice>>,
+    partials: Option<UnboundedReceiver<VoiceSlice>>,
 }
 
 impl VoiceListener {
@@ -66,13 +79,17 @@ impl VoiceListener {
         let thread_stop = Arc::clone(&stop);
         let (ready_tx, ready_rx) = mpsc::channel();
         let (segments_tx, segments_rx) = unbounded_channel();
-        let handle = thread::spawn(move || capture_loop(thread_stop, gate, segments_tx, ready_tx));
+        let (partials_tx, partials_rx) = unbounded_channel();
+        let handle = thread::spawn(move || {
+            capture_loop(thread_stop, gate, segments_tx, partials_tx, ready_tx)
+        });
 
         match ready_rx.recv_timeout(READY_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 stop,
                 handle: Some(handle),
                 segments: Some(segments_rx),
+                partials: Some(partials_rx),
             }),
             Ok(Err(error)) => {
                 let _ = handle.join();
@@ -87,8 +104,13 @@ impl VoiceListener {
     }
 
     /// Entrega o canal de WAVs prontos. Só pode ser chamado uma vez.
-    pub fn take_segments(&mut self) -> Option<UnboundedReceiver<Vec<u8>>> {
+    pub fn take_segments(&mut self) -> Option<UnboundedReceiver<VoiceSlice>> {
         self.segments.take()
+    }
+
+    /// Entrega o canal de prévias da fala em andamento (fatias parciais).
+    pub fn take_partials(&mut self) -> Option<UnboundedReceiver<VoiceSlice>> {
+        self.partials.take()
     }
 
     pub fn stop(mut self) {
@@ -111,10 +133,11 @@ impl Drop for VoiceListener {
 fn capture_loop(
     stop: Arc<AtomicBool>,
     gate: Arc<MicGate>,
-    segments: UnboundedSender<Vec<u8>>,
+    segments: UnboundedSender<VoiceSlice>,
+    partials: UnboundedSender<VoiceSlice>,
     ready: mpsc::Sender<Result<(), String>>,
 ) {
-    if let Err(error) = capture_until_stopped(&stop, &gate, &segments, &ready) {
+    if let Err(error) = capture_until_stopped(&stop, &gate, &segments, &partials, &ready) {
         // `start` fica esperando a inicialização; informar a falha evita 3 s
         // de espera até o timeout quando não há microfone ou formato válido.
         let _ = ready.send(Err(error));
@@ -124,7 +147,8 @@ fn capture_loop(
 fn capture_until_stopped(
     stop: &AtomicBool,
     gate: &MicGate,
-    segments: &UnboundedSender<Vec<u8>>,
+    segments: &UnboundedSender<VoiceSlice>,
+    partials: &UnboundedSender<VoiceSlice>,
     ready: &mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     let host = cpal::default_host();
@@ -169,8 +193,16 @@ fn capture_until_stopped(
         }
         let complete = pending.len() - pending.len() % frame_len;
         for frame in pending[..complete].chunks_exact(frame_len) {
-            if let Some(samples) = vad.push_frame(frame) {
-                let _ = segments.send(encode_wav(&samples, sample_rate));
+            if let Some(chunk) = vad.push_frame(frame) {
+                let _ = segments.send(VoiceSlice {
+                    turn: chunk.turn,
+                    wav: encode_wav(&chunk.samples, sample_rate),
+                });
+            } else if let Some(chunk) = vad.partial_snapshot() {
+                let _ = partials.send(VoiceSlice {
+                    turn: chunk.turn,
+                    wav: encode_wav(&chunk.samples, sample_rate),
+                });
             }
         }
         pending.drain(..complete);
@@ -272,7 +304,15 @@ enum VadState {
     Speech {
         samples: Vec<i16>,
         silence_frames: usize,
+        /// Quadros desde a última prévia enviada ao STT.
+        partial_frames: usize,
     },
+}
+
+/// Amostras de um turno de fala (final ou prévia).
+struct VadChunk {
+    turn: u64,
+    samples: Vec<i16>,
 }
 
 /// Detector de atividade de voz por energia, com piso de ruído adaptativo e
@@ -284,9 +324,12 @@ struct Vad {
     silence_frames: usize,
     min_samples: usize,
     max_samples: usize,
+    partial_every: usize,
+    partial_min_samples: usize,
     noise_floor: f32,
     preroll: VecDeque<i16>,
     state: VadState,
+    turn: u64,
 }
 
 impl Vad {
@@ -298,13 +341,16 @@ impl Vad {
             silence_frames: SILENCE_FRAMES,
             min_samples: samples(MIN_UTTERANCE_MS),
             max_samples: sample_rate as usize * MAX_UTTERANCE_SECONDS,
+            partial_every: PARTIAL_MS / FRAME_MS,
+            partial_min_samples: samples(PARTIAL_MIN_MS),
             noise_floor: 0.0,
             preroll: VecDeque::new(),
             state: VadState::Idle { loud_frames: 0 },
+            turn: 0,
         }
     }
 
-    fn push_frame(&mut self, frame: &[i16]) -> Option<Vec<i16>> {
+    fn push_frame(&mut self, frame: &[i16]) -> Option<VadChunk> {
         let rms = frame_rms(frame);
         match std::mem::replace(&mut self.state, VadState::Idle { loud_frames: 0 }) {
             VadState::Idle { mut loud_frames } => {
@@ -317,9 +363,12 @@ impl Vad {
                 self.push_preroll(frame);
                 if loud_frames >= self.start_frames {
                     let samples = self.preroll.drain(..).collect();
+                    self.turn += 1;
                     self.state = VadState::Speech {
                         samples,
                         silence_frames: 0,
+                        // A prévia conta só a fala deste turno, não o pré-roll.
+                        partial_frames: 0,
                     };
                 } else {
                     self.state = VadState::Idle { loud_frames };
@@ -329,16 +378,19 @@ impl Vad {
             VadState::Speech {
                 mut samples,
                 mut silence_frames,
+                mut partial_frames,
             } => {
                 samples.extend_from_slice(frame);
+                partial_frames += 1;
                 if rms > self.continue_threshold() {
                     silence_frames = 0;
                 } else {
                     silence_frames += 1;
                 }
                 if silence_frames >= self.silence_frames || samples.len() >= self.max_samples {
+                    let turn = self.turn;
                     if samples.len() >= self.min_samples {
-                        Some(samples)
+                        Some(VadChunk { turn, samples })
                     } else {
                         None
                     }
@@ -346,11 +398,33 @@ impl Vad {
                     self.state = VadState::Speech {
                         samples,
                         silence_frames,
+                        partial_frames,
                     };
                     None
                 }
             }
         }
+    }
+
+    /// Enquanto a fala continua, devolve a cada ~1,2 s uma cópia do que já foi
+    /// dito para o STT montar a legenda ao vivo. O turno final não depende dela.
+    fn partial_snapshot(&mut self) -> Option<VadChunk> {
+        let VadState::Speech {
+            samples,
+            partial_frames,
+            ..
+        } = &mut self.state
+        else {
+            return None;
+        };
+        if *partial_frames < self.partial_every || samples.len() < self.partial_min_samples {
+            return None;
+        }
+        *partial_frames = 0;
+        Some(VadChunk {
+            turn: self.turn,
+            samples: samples.clone(),
+        })
     }
 
     fn reset(&mut self) {
@@ -413,8 +487,8 @@ mod tests {
     fn feed(vad: &mut Vad, frame: &[i16], times: usize) -> Option<Vec<i16>> {
         let mut out = None;
         for _ in 0..times {
-            if let Some(samples) = vad.push_frame(frame) {
-                out = Some(samples);
+            if let Some(chunk) = vad.push_frame(frame) {
+                out = Some(chunk.samples);
             }
         }
         out
@@ -440,6 +514,35 @@ mod tests {
         // Dois quadros barulhentos não bastam para abrir a fala (mínimo: 6).
         assert!(feed(&mut vad, &speech_frame(), 2).is_none());
         assert!(feed(&mut vad, &silence_frame(), SILENCE_FRAMES + 5).is_none());
+    }
+
+    #[test]
+    fn vad_emits_partial_snapshots_while_speaking() {
+        let mut vad = Vad::new(RATE);
+        assert!(feed(&mut vad, &speech_frame(), 10).is_none());
+        // Antes de 1,2 s de fala contínua ainda não há prévia.
+        assert!(vad.partial_snapshot().is_none());
+
+        let frames = PARTIAL_MS / FRAME_MS;
+        for _ in 0..frames {
+            assert!(vad.push_frame(&speech_frame()).is_none());
+        }
+        let partial = vad.partial_snapshot().expect("prévia a cada 1,2 s");
+        assert_eq!(partial.turn, 1);
+        assert!(partial.samples.len() >= frames * FRAME);
+        assert!(partial.samples.iter().all(|sample| *sample != 0));
+
+        // Logo depois de enviar, o contador recomeça.
+        assert!(vad.partial_snapshot().is_none());
+
+        // O turno final carrega o mesmo id da prévia.
+        let mut final_chunk = None;
+        for _ in 0..=SILENCE_FRAMES {
+            if let Some(chunk) = vad.push_frame(&silence_frame()) {
+                final_chunk = Some(chunk);
+            }
+        }
+        assert_eq!(final_chunk.expect("silêncio encerra o turno").turn, 1);
     }
 
     #[test]

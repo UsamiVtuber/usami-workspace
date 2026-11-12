@@ -73,6 +73,26 @@ pub fn api_token_from_env() -> Option<String> {
     None
 }
 
+/// Erros de rede chegam em inglês técnico (`error sending request for url ...`);
+/// a UI é pt-BR e não deve vazar isso para quem usa o app.
+fn map_request_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        return "O servidor local demorou para responder.".to_string();
+    }
+    if error.is_connect() {
+        return "Servidor local indisponível — inicie o core em 127.0.0.1:8787.".to_string();
+    }
+    if let Some(status) = error.status() {
+        return match status.as_u16() {
+            401 => "Token recusado pelo servidor local (USAMI_API_TOKEN).".to_string(),
+            403 => "Origem não autorizada pelo servidor local.".to_string(),
+            503 => "Servidor local sem token configurado (USAMI_API_TOKEN).".to_string(),
+            code => format!("O servidor local respondeu com erro {code}."),
+        };
+    }
+    "Falha ao falar com o servidor local.".to_string()
+}
+
 // Sem timeout, um backend desligado deixava o app em "PENSANDO" até o TCP
 // desistir. O teto de 90 s cobre o turno de chat mais lento + TTS.
 fn build_http_client() -> reqwest::Client {
@@ -214,6 +234,9 @@ pub struct MemoryData {
     pub history: Vec<MemoryHistoryItem>,
     #[serde(default)]
     pub affinity: Option<MemoryAffinity>,
+    /// Cópia dos medidores do vínculo guardada no memory.json pelo core.
+    #[serde(default)]
+    pub bond: Option<BondData>,
 }
 
 impl MemoryData {
@@ -604,12 +627,12 @@ impl UsamiApiClient {
                 .json(&payload)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<ChatResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<ChatResponse, String>(res)
         });
@@ -638,9 +661,9 @@ impl UsamiApiClient {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(map_request_error)?
             .error_for_status()
-            .map_err(|e| e.to_string())?;
+            .map_err(map_request_error)?;
 
         if is_pcm_stream(&response) {
             let sample_rate = pcm_sample_rate(&response);
@@ -649,7 +672,7 @@ impl UsamiApiClient {
                 response,
             })
         } else {
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+            let bytes = response.bytes().await.map_err(map_request_error)?;
             Ok(TtsStream::Audio(bytes.to_vec()))
         }
     }
@@ -663,7 +686,7 @@ impl UsamiApiClient {
             let part = reqwest::multipart::Part::bytes(wav)
                 .file_name("mic.wav")
                 .mime_str("audio/wav")
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
             let form = reqwest::multipart::Form::new().part("audio", part);
             let mut req = client.post(url).multipart(form);
             if let Some(ref t) = token {
@@ -672,12 +695,12 @@ impl UsamiApiClient {
             let response = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<SttResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<String, String>(response.text)
         });
@@ -701,12 +724,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<MemoryResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<MemoryResponse, String>(res)
         });
@@ -734,12 +757,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<MemoryForgetResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<MemoryForgetResponse, String>(res)
         });
@@ -763,12 +786,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<BondResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<BondResponse, String>(res)
         });
@@ -792,12 +815,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<AchievementsResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<AchievementsResponse, String>(res)
         });
@@ -836,12 +859,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<BondResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<BondResponse, String>(res)
         });
@@ -865,12 +888,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<PersonalityResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<PersonalityResponse, String>(res)
         });
@@ -898,12 +921,12 @@ impl UsamiApiClient {
             let res = req
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .error_for_status()
-                .map_err(|e| e.to_string())?
+                .map_err(map_request_error)?
                 .json::<PersonalityResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<PersonalityResponse, String>(res)
         });
@@ -933,7 +956,7 @@ impl UsamiApiClient {
                 req = req.header("x-usami-token", t);
             }
 
-            let res = req.send().await.map_err(|e| e.to_string())?;
+            let res = req.send().await.map_err(map_request_error)?;
 
             if !res.status().is_success() {
                 return Err(format!("HTTP {}", res.status()));
@@ -942,7 +965,7 @@ impl UsamiApiClient {
             let data = res
                 .json::<ProactiveEventsResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<ProactiveEventsResponse, String>(data)
         });
@@ -974,7 +997,7 @@ impl UsamiApiClient {
                 req = req.header("x-usami-token", t);
             }
 
-            let res = req.send().await.map_err(|e| e.to_string())?;
+            let res = req.send().await.map_err(map_request_error)?;
 
             if !res.status().is_success() {
                 return Err(format!("HTTP {}", res.status()));
@@ -983,7 +1006,7 @@ impl UsamiApiClient {
             let data = res
                 .json::<ProactiveAckResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_request_error)?;
 
             Ok::<ProactiveAckResponse, String>(data)
         });
@@ -1438,6 +1461,16 @@ mod tests {
                 "affinity": {
                     "score": 65,
                     "lastDailyGainDate": "2026-11-08"
+                },
+                "bond": {
+                    "intimacy": {"carinho": 31, "humor": 0, "companhia": 26},
+                    "meters": {
+                        "carinho": {"xp": 31, "level": 2, "progress": 0.1714},
+                        "humor": {"xp": 0, "level": 1, "progress": 0.0},
+                        "companhia": {"xp": 26, "level": 2, "progress": 0.0286}
+                    },
+                    "summary": {"xp": 31, "level": 2, "name": "Amigos Próximos", "line": "", "next": 60, "remaining": 29, "progress": 0.1714, "max": false},
+                    "updatedAt": "2026-11-10T20:00:00.000Z"
                 }
             }
         }"#;
@@ -1449,6 +1482,10 @@ mod tests {
         assert_eq!(data.recent_facts.len(), 1);
         assert_eq!(data.summaries.len(), 1);
         assert_eq!(data.affinity.map(|a| a.score), Some(65));
+        let bond = data.bond.expect("espelho do vínculo");
+        assert_eq!(bond.intimacy.carinho, 31);
+        assert_eq!(bond.meters.carinho.level, 2);
+        assert_eq!(bond.summary.name, "Amigos Próximos");
     }
 
     #[test]

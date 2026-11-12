@@ -731,6 +731,14 @@ struct UsamiApp {
     last_proactive_speech: Instant,
     last_voice_ended: Instant,
     last_voice_commit: Option<(String, Instant)>,
+    /// Prévia do STT enquanto a pessoa ainda fala (fatias parciais).
+    live_transcript: SharedString,
+    /// Identifica a sessão de escuta atual; prévias atrasadas de uma sessão
+    /// anterior não podem reaparecer depois de parar ou reiniciar o microfone.
+    listen_session: u64,
+    /// Último turno cujo texto final já foi aceito; prévias desse turno ou de
+    /// turnos anteriores são descartadas ao chegar atrasadas.
+    voice_turn_closed: u64,
     attached_media: Option<AttachedMedia>,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
@@ -1024,6 +1032,9 @@ impl UsamiApp {
             last_proactive_speech: Instant::now() - Duration::from_secs(300),
             last_voice_ended: Instant::now() - Duration::from_secs(300),
             last_voice_commit: None,
+            live_transcript: SharedString::default(),
+            listen_session: 0,
+            voice_turn_closed: 0,
             attached_media: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
@@ -1417,11 +1428,72 @@ impl UsamiApp {
                     cx.notify();
                     return;
                 };
+                let partials = listener.take_partials();
                 self.listener = Some(listener);
                 self.is_listening = true;
+                self.listen_session = self.listen_session.wrapping_add(1);
+                let session = self.listen_session;
                 self.last_voice_commit = None;
+                self.live_transcript = SharedString::default();
+                self.voice_turn_closed = 0;
                 self.sync_mic_gate();
                 self.status_text = "OUVINDO...".into();
+
+                // Prévia ao vivo: fatias do áudio em andamento vão para o STT em
+                // paralelo ao turno final. A latência só atrasa a legenda; parar
+                // de falar continua encerrando o turno pelo caminho normal.
+                if let Some(mut partials) = partials {
+                    let api = Arc::clone(&self.api_client);
+                    cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                        let cx = cx.clone();
+                        async move {
+                            while let Some(mut slice) = partials.recv().await {
+                                // O STT local pode demorar mais que o intervalo das
+                                // fatias; transcrever a mais recente evita fila parada.
+                                while let Ok(newer) = partials.try_recv() {
+                                    slice = newer;
+                                }
+                                let Ok(text) = api.transcribe(slice.wav).await else {
+                                    continue;
+                                };
+                                let trimmed = text.trim().to_string();
+                                if trimmed.is_empty() {
+                                    continue;
+                                }
+                                let active = cx
+                                    .update(|cx: &mut App| {
+                                        if let Some(this) = this.upgrade() {
+                                            this.update(cx, |view, cx| {
+                                                if !view.is_listening
+                                                    || !view.is_calling
+                                                    || view.listen_session != session
+                                                {
+                                                    return false;
+                                                }
+                                                // Chegou depois do texto final: é só um
+                                                // eco atrasado do turno já respondido.
+                                                if slice.turn <= view.voice_turn_closed {
+                                                    return true;
+                                                }
+                                                if view.live_transcript.as_ref() != trimmed {
+                                                    view.live_transcript = trimmed.clone().into();
+                                                    cx.notify();
+                                                }
+                                                true
+                                            })
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .unwrap_or(false);
+                                if !active {
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                    .detach();
+                }
 
                 // Consome as falas detectadas pela VAD e manda para o STT. O loop
                 // vive enquanto o listener existir; trocar de chamada recria tudo.
@@ -1430,8 +1502,32 @@ impl UsamiApp {
                     let cx = cx.clone();
                     async move {
                         let mut segments = segments;
-                        while let Some(wav) = segments.recv().await {
-                            let transcript = api.transcribe(wav).await;
+                        while let Some(slice) = segments.recv().await {
+                            // Fecha o turno antes de transcrever: prévias dele que
+                            // ainda estejam na fila não podem reaparecer na legenda.
+                            let accepted = cx
+                                .update(|cx: &mut App| {
+                                    if let Some(this) = this.upgrade() {
+                                        this.update(cx, |view, cx| {
+                                            if !view.is_listening || !view.is_calling {
+                                                return false;
+                                            }
+                                            view.voice_turn_closed =
+                                                view.voice_turn_closed.max(slice.turn);
+                                            view.live_transcript = SharedString::default();
+                                            cx.notify();
+                                            true
+                                        })
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .unwrap_or(false);
+                            if !accepted {
+                                break;
+                            }
+
+                            let transcript = api.transcribe(slice.wav).await;
                             let active = cx
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
@@ -1487,6 +1583,7 @@ impl UsamiApp {
             }
             Err(error) => {
                 self.is_listening = false;
+                self.live_transcript = SharedString::default();
                 self.sync_mic_gate();
                 self.status_text = format!("MIC: {error}").into();
             }
@@ -1496,6 +1593,8 @@ impl UsamiApp {
 
     fn stop_listening(&mut self) {
         self.is_listening = false;
+        self.listen_session = self.listen_session.wrapping_add(1);
+        self.live_transcript = SharedString::default();
         self.sync_mic_gate();
         if let Some(listener) = self.listener.take() {
             listener.stop();
@@ -2108,6 +2207,10 @@ impl UsamiApp {
             if drawer == ActiveDrawer::Bond {
                 // Abrir o painel relê o core: o web (ou outra janela) pode ter mudado.
                 self.fetch_bond(cx);
+                // Diário, Álbum e Memória também acompanham os registros/espelho do core.
+                if !self.memory_loading {
+                    self.fetch_memory(cx);
+                }
             }
         }
         cx.notify();
@@ -2517,6 +2620,85 @@ fn render_settings_category<E: IntoElement>(
                                         ))),
                                 ),
                         );
+
+                        // Espelho dos medidores: a mesma leitura do painel de
+                        // Laços, guardada no memory.json pelo core.
+                        if let Some(bond) = mem.bond.as_ref() {
+                            let meters: [(&'static str, u32, u32, f32); 3] = [
+                                ("Carinho", bond.intimacy.carinho, bond.meters.carinho.level, bond.meters.carinho.progress),
+                                ("Humor", bond.intimacy.humor, bond.meters.humor.level, bond.meters.humor.progress),
+                                ("Companhia", bond.intimacy.companhia, bond.meters.companhia.level, bond.meters.companhia.progress),
+                            ];
+                            view = view.child(
+                                div()
+                                    .mt(px(sp.s3))
+                                    .p(px(sp.s3))
+                                    .rounded(px(r.md))
+                                    .bg(c.card_bg)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .child(
+                                        div()
+                                            .text_size(px(ty.xs))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.primary)
+                                            .child(SharedString::from(format!(
+                                                "VÍNCULO (ESPELHO) · {}",
+                                                bond.summary.name
+                                            ))),
+                                    )
+                                    .children(meters.into_iter().map(|(label, xp, level, pct)| {
+                                        div()
+                                            .mt(px(sp.s2))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(3.0))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .justify_between()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(ty.xs))
+                                                            .text_color(c.pearl)
+                                                            .child(label),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(ty.xs))
+                                                            .text_color(c.muted)
+                                                            .child(SharedString::from(format!(
+                                                                "Nv.{} · {} XP",
+                                                                level, xp
+                                                            ))),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .h(px(6.0))
+                                                    .rounded_full()
+                                                    .bg(c.bond_track)
+                                                    .overflow_hidden()
+                                                    .child(
+                                                        div()
+                                                            .h_full()
+                                                            .w(relative(pct.clamp(0.0, 1.0)))
+                                                            .rounded_full()
+                                                            .bg(c.primary),
+                                                    ),
+                                            )
+                                    }))
+                                    .child(
+                                        div()
+                                            .mt(px(sp.s2))
+                                            .text_size(px(10.0))
+                                            .text_color(c.faint)
+                                            .child("Cópia dos medidores de Laços salva no memory.json."),
+                                    ),
+                            );
+                        }
 
                         // Banner de liberação de exclusão
                         view = view.child(
@@ -3164,6 +3346,7 @@ fn render_settings_category<E: IntoElement>(
         div()
             .id("vn-settings-page")
             .flex_1()
+            .min_h(px(0.0))
             .flex()
             .flex_col()
             .gap(px(sp.s5))
@@ -3285,7 +3468,7 @@ fn render_settings_category<E: IntoElement>(
     }
 
     fn load_settings_data(&mut self, cx: &mut Context<Self>) {
-        if self.memory_data.is_none() && !self.memory_loading {
+        if !self.memory_loading {
             self.fetch_memory(cx);
         }
         if self.personality_data.is_none() && !self.personality_loading {
@@ -3785,6 +3968,19 @@ fn format_unlocked_at(iso: &str) -> String {
     }
 }
 
+/// Resumo diário é um parágrafo inteiro; nas listas mostramos só o começo.
+fn truncate_chars(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Saída da janela principal: capítulo "Início" — cena de convivência com a
 /// personagem (caixa de diálogo VN + indicadores compactos de vínculo).
 fn render_vn_tab_home(
@@ -3996,35 +4192,56 @@ fn render_vn_tab_home(
         )
 }
 
+/// Monta as páginas cronológicas do Diário unindo o histórico do vínculo e os
+/// resumos diários da memória sem deixar o log recente apagar as lembranças antigas.
+fn collect_diary_entries(
+    bond: Option<&api::BondData>,
+    memory: Option<&api::MemoryData>,
+) -> Vec<(String, String, String, String)> {
+    let mut entries: Vec<(String, String, String, String)> = Vec::new();
+    if let Some(b) = bond {
+        entries.extend(b.log.iter().take(24).map(|entry| {
+            let title = if entry.count > 1 {
+                format!("{} (×{})", entry.text, entry.count)
+            } else {
+                entry.text.clone()
+            };
+            (
+                format!("[{}]", vn_history_tag(&entry.kind)),
+                title,
+                relative_when(entry.at),
+                format_date(entry.at),
+            )
+        }));
+    }
+    // O bond.json local pode estar zerado, mas os resumos diários da memória
+    // continuam guardados no core — eles são as páginas antigas do diário.
+    if let Some(m) = memory {
+        entries.extend(m.summaries.iter().rev().take(24).map(|summary| {
+            (
+                "[LEMBRANÇA]".to_string(),
+                truncate_chars(&summary.summary, 120),
+                String::new(),
+                format_unlocked_at(&summary.date),
+            )
+        }));
+    }
+    entries
+}
+
 /// Capítulo "Diário": páginas cronológicas com os momentos reais do vínculo,
 /// compostas como anotações íntimas (bilhetinho + registros datados).
-fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl IntoElement {
+fn render_vn_tab_diary(
+    bond: Option<&api::BondData>,
+    memory: Option<&api::MemoryData>,
+    t: &theme::Theme,
+) -> impl IntoElement {
     let c = t.color;
     let line = bond
         .map(|b| b.summary.line.clone())
         .filter(|l| !l.is_empty())
         .unwrap_or_else(|| "Cada dia ao seu lado vira uma página nova.".to_string());
-    let entries: Vec<(String, String, String, String)> = bond
-        .map(|b| {
-            b.log
-                .iter()
-                .take(12)
-                .map(|entry| {
-                    let title = if entry.count > 1 {
-                        format!("{} (×{})", entry.text, entry.count)
-                    } else {
-                        entry.text.clone()
-                    };
-                    (
-                        format!("[{}]", vn_history_tag(&entry.kind)),
-                        title,
-                        relative_when(entry.at),
-                        format_date(entry.at),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let entries = collect_diary_entries(bond, memory);
     let today = format_date(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -4033,6 +4250,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
     );
     div()
         .flex_1()
+        .min_h(px(0.0))
         .flex()
         .flex_col()
         .gap(px(12.0))
@@ -4040,6 +4258,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
         // Cabeçalho editorial
         .child(
             div()
+                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -4062,11 +4281,12 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
         // Bilhetinho com a frase do vínculo
         .child(
             div()
+                .flex_shrink_0()
                 .p(px(12.0))
                 .rounded(px(14.0))
-                .bg(rgb(0xfae9f4))
+                .bg(t.vn_card_bg())
                 .border_1()
-                .border_color(rgba(0xf5c3e199))
+                .border_color(theme::Palette::vn_border_bright())
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
@@ -4079,13 +4299,13 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                             div()
                                 .text_size(px(10.0))
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(0x8a2b6e))
+                                .text_color(theme::Palette::vn_pink_soft())
                                 .child("✦ BILHETINHO DE HOJE"),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(rgb(0xd1478f))
+                                .text_color(theme::Palette::vn_pink_soft())
                                 .child("♡"),
                         ),
                 )
@@ -4094,7 +4314,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                         .text_size(px(13.0))
                         .font(theme::font_character_italic())
                         .line_height(px(18.0))
-                        .text_color(rgb(0x4a183b))
+                        .text_color(c.pearl)
                         .child(format!("“{line}”")),
                 )
                 .child(
@@ -4105,7 +4325,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                             div()
                                 .text_size(px(10.0))
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(0x8a2b6e))
+                                .text_color(c.muted)
                                 .child("— Usami ♡"),
                         ),
                 ),
@@ -4114,6 +4334,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
         .child(
             div()
                 .flex_1()
+                .min_h(px(0.0))
                 .p(px(12.0))
                 .rounded(px(16.0))
                 .bg(t.vn_card_bg())
@@ -4122,6 +4343,7 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
+                .overflow_hidden()
                 .child(
                     div()
                         .text_size(px(12.0))
@@ -4132,9 +4354,13 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                 )
                 .child(
                     div()
+                        .id("vn-diary-pages")
                         .flex()
                         .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
                         .gap(px(4.0))
+                        .overflow_y_scroll()
                         .when(entries.is_empty(), |col| {
                             col.child(
                                 div()
@@ -4147,16 +4373,26 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                             entries
                                 .into_iter()
                                 .map(|(tag, title, when, date)| {
+                                    let stamp = if when.is_empty() {
+                                        date
+                                    } else {
+                                        format!("{when} · {date}")
+                                    };
                                     div()
                                         .flex()
+                                        .flex_shrink_0()
+                                        .w_full()
+                                        .min_w(px(0.0))
                                         .items_center()
                                         .gap(px(8.0))
                                         .p(px(6.0))
                                         .rounded(px(8.0))
+                                        .overflow_hidden()
                                         .bg(rgba(0x22123d66))
                                         .child(
                                             div()
                                                 .w(px(76.0))
+                                                .flex_shrink_0()
                                                 .text_size(px(9.5))
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_color(theme::Palette::vn_pink_soft())
@@ -4164,17 +4400,27 @@ fn render_vn_tab_diary(bond: Option<&api::BondData>, t: &theme::Theme) -> impl I
                                         )
                                         .child(
                                             div()
+                                                .flex()
+                                                .flex_col()
                                                 .flex_1()
-                                                .text_size(px(11.5))
-                                                .text_color(c.pearl)
-                                                .child(title),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(10.0))
-                                                .font(theme::font_character_italic())
-                                                .text_color(c.faint)
-                                                .child(format!("{when} · {date}")),
+                                                .min_w(px(0.0))
+                                                .gap(px(1.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.5))
+                                                        .line_height(px(15.0))
+                                                        .text_color(c.pearl)
+                                                        .line_clamp(2)
+                                                        .text_ellipsis()
+                                                        .child(title),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(9.5))
+                                                        .font(theme::font_character_italic())
+                                                        .text_color(c.faint)
+                                                        .child(stamp),
+                                                ),
                                         )
                                 }),
                         ),
@@ -4246,9 +4492,13 @@ fn render_vn_history_item(icon: String, title: String, time: String) -> impl Int
 
 
 /// Capítulo "Álbum de Memórias": lembranças derivadas de marcos reais do
-/// vínculo (primeiro momento, risada, voz, chamada) + próximos capítulos
-/// bloqueados. Nada de memória fictícia.
-fn render_vn_tab_memories(bond: Option<&api::BondData>, t: &theme::Theme) -> impl IntoElement {
+/// vínculo (primeiro momento, risada, voz, chamada) + resumos diários já
+/// guardados no core. Nada de memória fictícia.
+fn render_vn_tab_memories(
+    bond: Option<&api::BondData>,
+    memory: Option<&api::MemoryData>,
+    t: &theme::Theme,
+) -> impl IntoElement {
     let c = t.color;
     let mut memories: Vec<(&'static str, String, String, bool, String)> = Vec::new();
     if let Some(b) = bond {
@@ -4301,14 +4551,29 @@ fn render_vn_tab_memories(bond: Option<&api::BondData>, t: &theme::Theme) -> imp
             ));
         }
     }
+    if let Some(m) = memory {
+        for summary in m.summaries.iter().rev().take(18) {
+            let date = format_unlocked_at(&summary.date);
+            memories.push((
+                "[DIÁRIO]",
+                format!("Diário de {date}"),
+                truncate_chars(&summary.summary, 120),
+                true,
+                date,
+            ));
+        }
+    }
+    let has_memories = !memories.is_empty();
     div()
         .flex_1()
+        .min_h(px(0.0))
         .flex()
         .flex_col()
         .gap(px(12.0))
         .overflow_hidden()
         .child(
             div()
+                .flex_shrink_0()
                 .text_size(px(16.0))
                 .font_family(theme::FONT_CHARACTER)
                 .font_weight(FontWeight::BOLD)
@@ -4317,15 +4582,34 @@ fn render_vn_tab_memories(bond: Option<&api::BondData>, t: &theme::Theme) -> imp
         )
         .child(
             div()
+                .flex_shrink_0()
                 .text_size(px(11.5))
                 .text_color(theme::Palette::vn_pink_soft())
                 .child("Capítulos reais da história de vocês — os próximos ainda estão por escrever:"),
         )
+        .when(!has_memories, |col| {
+            col.child(
+                div()
+                    .flex_shrink_0()
+                    .p(px(12.0))
+                    .rounded(px(14.0))
+                    .bg(t.vn_card_bg())
+                    .border_1()
+                    .border_color(theme::Palette::vn_card_border())
+                    .text_size(px(10.5))
+                    .text_color(c.muted)
+                    .child("Nenhuma memória guardada ainda — os primeiros capítulos aparecem conforme vocês conversam."),
+            )
+        })
         .child(
             div()
+                .id("vn-album-grid")
                 .flex()
                 .flex_wrap()
+                .flex_1()
+                .min_h(px(0.0))
                 .gap(px(12.0))
+                .overflow_y_scroll()
                 .children(memories.into_iter().map(
                     |(tag, title, desc, unlocked, date)| {
                         render_vn_large_memory(tag, title, desc, unlocked, date)
@@ -4344,6 +4628,7 @@ fn render_vn_large_memory(
     let t = theme::theme();
     div()
         .w(px(320.0))
+        .min_w(px(0.0))
         .p(px(10.0))
         .rounded(px(14.0))
         .bg(t.vn_card_bg())
@@ -4353,6 +4638,7 @@ fn render_vn_large_memory(
         } else {
             t.color.line_strong
         })
+        .overflow_hidden()
         .flex()
         .gap(px(10.0))
         .child(
@@ -4378,6 +4664,8 @@ fn render_vn_large_memory(
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
@@ -4387,13 +4675,18 @@ fn render_vn_large_memory(
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
                         .text_color(t.color.pearl)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
                         .child(title),
                 )
                 .child(
                     div()
+                        .w_full()
                         .text_size(px(10.5))
                         .line_height(px(14.0))
                         .text_color(t.color.muted)
+                        .line_clamp(3)
+                        .text_ellipsis()
                         .child(desc),
                 )
                 .child(
@@ -4462,12 +4755,14 @@ fn render_vn_tab_bonds(
         .unwrap_or_default();
     div()
         .flex_1()
+        .min_h(px(0.0))
         .flex()
         .flex_col()
         .gap(px(12.0))
         .overflow_hidden()
         .child(
             div()
+                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -4497,6 +4792,7 @@ fn render_vn_tab_bonds(
         // Medidores delicados
         .child(
             div()
+                .flex_shrink_0()
                 .p(px(12.0))
                 .rounded(px(16.0))
                 .bg(t.vn_card_bg())
@@ -4550,6 +4846,7 @@ fn render_vn_tab_bonds(
         .child(
             div()
                 .flex_1()
+                .min_h(px(0.0))
                 .p(px(12.0))
                 .rounded(px(16.0))
                 .bg(t.vn_card_bg())
@@ -4558,8 +4855,10 @@ fn render_vn_tab_bonds(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
+                .overflow_hidden()
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_size(px(12.0))
                         .font_family(theme::FONT_CHARACTER)
                         .font_weight(FontWeight::BOLD)
@@ -4568,9 +4867,13 @@ fn render_vn_tab_bonds(
                 )
                 .child(
                     div()
+                        .id("vn-bonds-moments")
                         .flex()
                         .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
                         .gap(px(4.0))
+                        .overflow_y_scroll()
                         .when(history.is_empty(), |col| {
                             col.child(
                                 div()
@@ -4617,12 +4920,14 @@ fn render_vn_tab_achievements(
     let total = achievements.len();
     div()
         .flex_1()
+        .min_h(px(0.0))
         .flex()
         .flex_col()
         .gap(px(12.0))
         .overflow_hidden()
         .child(
             div()
+                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -4644,9 +4949,13 @@ fn render_vn_tab_achievements(
         )
         .child(
             div()
+                .id("vn-achievements-grid")
+                .flex_1()
+                .min_h(px(0.0))
                 .flex()
                 .flex_wrap()
                 .gap(px(10.0))
+                .overflow_y_scroll()
                 .when(achievements.is_empty(), |col| {
                     col.child(
                         div()
@@ -4879,13 +5188,15 @@ impl Render for UsamiApp {
         let bond_level = self.bond_level;
         let bond_exp_pct = self.bond_exp_pct;
         let bond = self.bond.clone();
+        let memory_data = self.memory_data.clone();
         let bond_tab = self.bond_tab;
         let achievements = self.achievements.clone();
         let show_bubble = self.show_bubble;
+        let live_transcript = self.live_transcript.clone();
+        let show_live_caption = is_listening && !live_transcript.is_empty();
         let bg_asset = self.bg_asset_path.clone();
         let vrm_entity = self.vrm_view.clone();
         let last_reply = self.last_reply.clone();
-        let last_emotion = self.last_emotion.clone();
         let input_text = self.input_text.clone();
         let input_active = self.input_active;
         let caret_on = self.caret_on;
@@ -5119,107 +5430,35 @@ impl Render for UsamiApp {
                         div().into_any_element()
                     }),
             )
-            // ── LAYER 3: FLOATING SPEECH BUBBLE (.bubble.her) ESTILO VISUAL NOVEL ──
+            // ── LAYER 3: LEGENDA DA USAMI (texto puro sobre a cena, sem balão) ──
             .when(show_bubble, |parent| {
                 parent.child(
                     div()
                         .absolute()
-                        .top(px(135.0))
-                        .left(px(140.0))
-                        .max_w(px(460.0))
-                        .relative()
-                        .pt(px(12.0))
-                        .pb(px(16.0))
-                        .px(px(sp.s5))
-                        .rounded_tl(px(r.xl))
-                        .rounded_tr(px(r.xl))
-                        .rounded_br(px(r.xl))
-                        .rounded_bl(px(sp.s1))
-                        .bg(rgba(0x130a24ee))
-                        .border_2()
-                        .border_color(theme::Palette::vn_card_border())
-                        .shadow(t.shadow.vn_card.clone())
-                        .id("floating-bubble")
-                        .cursor_pointer()
-                        .hover(|style| style.border_color(theme::Palette::vn_border_bright()))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.show_bubble = false;
-                            this.poke(cx);
-                            cx.notify();
-                        }))
+                        .left_0()
+                        .right_0()
+                        .bottom(px(150.0))
+                        .flex()
+                        .justify_center()
+                        .px(px(sp.s6))
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .mb(px(sp.s2))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.0))
-                                        .child(
-                                            div()
-                                                .px(px(8.0))
-                                                .py(px(2.0))
-                                                .rounded(px(10.0))
-                                                .bg(t.vn_bubble_tag_bg())
-                                                .border_1()
-                                                .border_color(theme::Palette::vn_card_border())
-                                                .text_size(px(ty.xs))
-                                                .font_family(theme::FONT_DISPLAY)
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(c.pearl)
-                                                .child("★ Usami ♡"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(ty.xs))
-                                                .font_family(theme::FONT_DISPLAY)
-                                                .text_color(theme::Palette::vn_pink_soft())
-                                                .child(format!("· {last_emotion}")),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(ty.xs))
-                                        .text_color(c.faint)
-                                        .hover(|s| s.text_color(c.pearl))
-                                        .child("✕"),
-                                ),
-                        )
-                        .child(
-                            div()
+                                .id("speech-caption")
+                                .max_w(px(620.0))
+                                .px(px(sp.s4))
+                                .py(px(sp.s2_5))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.show_bubble = false;
+                                    this.poke(cx);
+                                    cx.notify();
+                                }))
+                                .text_center()
                                 .text_size(px(ty.bubble))
                                 .font(theme::font_character_italic())
-                                .line_height(px(24.0))
+                                .line_height(px(26.0))
                                 .text_color(c.pearl)
                                 .child(last_reply),
-                        )
-                        // Cursor de diálogo de Visual Novel no canto inferior direito
-                        .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .mt(px(4.0))
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(theme::Palette::vn_pink_neon())
-                                        .child("▼"),
-                                ),
-                        )
-                        // Rabicho embaixo à esquerda (.bubble.her::after), na cor do corpo.
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(20.0))
-                                .bottom(px(-11.0))
-                                .child(
-                                    img(asset_path("assets/icons/speech_tail.svg"))
-                                        .w(px(20.0))
-                                        .h(px(11.0)),
-                                ),
                         ),
                 )
             })
@@ -5420,6 +5659,52 @@ impl Render for UsamiApp {
                                         .text_size(px(ty.xs))
                                         .text_color(c.muted)
                                         .child("白ー (shiro) — Model by Sweet_nya555"),
+                                ),
+                        ),
+                )
+            })
+            // ── LAYER 4b: PRÉVIA AO VIVO DO STT (o que já foi entendido) ──
+            .when(show_live_caption, |parent| {
+                parent.child(
+                    div()
+                        .absolute()
+                        .top(px(94.0))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .px(px(sp.s6))
+                        .child(
+                            div()
+                                .id("live-stt-caption")
+                                .max_w(px(640.0))
+                                .px(px(sp.s4))
+                                .py(px(sp.s2))
+                                .rounded(px(r.md))
+                                .bg(rgba(0x120a20dd))
+                                .border_1()
+                                .border_color(theme::Palette::vn_border_bright())
+                                .shadow(t.shadow.pill.clone())
+                                .flex()
+                                .items_center()
+                                .gap(px(sp.s2))
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(px(11.0))
+                                        .text_color(c.lavender)
+                                        .child("♪"),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .text_size(px(ty.sm))
+                                        .line_height(px(18.0))
+                                        .text_color(c.pearl)
+                                        .line_clamp(2)
+                                        .text_ellipsis()
+                                        .child(live_transcript),
                                 ),
                         ),
                 )
@@ -5871,6 +6156,7 @@ impl Render for UsamiApp {
                 parent.child(
                     div()
                         .id("chat-history")
+                        .occlude()
                         .absolute()
                         .left(px(sp.s6))
                         .bottom(px(84.0))
@@ -5928,6 +6214,7 @@ impl Render for UsamiApp {
                         )
                         .child(
                             div()
+                                .id("chat-message-list")
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .flex()
@@ -5935,7 +6222,7 @@ impl Render for UsamiApp {
                                 .justify_end()
                                 .gap(px(sp.s2_5))
                                 .p(px(sp.s3_5))
-                                .overflow_hidden()
+                                .overflow_y_scroll()
                                 .when(no_turns, |col| {
                                     col.justify_center().child(
                                         div()
@@ -5987,6 +6274,7 @@ impl Render for UsamiApp {
                                         )
                                         .child(
                                             div()
+                                                .max_w(px(343.0))
                                                 .py(px(sp.s2_5))
                                                 .px(px(sp.s3_5))
                                                 .rounded(px(r.lg))
@@ -6000,6 +6288,7 @@ impl Render for UsamiApp {
                                         );
                                     div()
                                         .flex()
+                                        .flex_shrink_0()
                                         .w_full()
                                         .when(is_user, |el| el.justify_end())
                                         .when(!is_user, |el| el.justify_start())
@@ -6009,6 +6298,7 @@ impl Render for UsamiApp {
                                     col.child(
                                         div()
                                             .flex()
+                                            .flex_shrink_0()
                                             .w_full()
                                             .justify_start()
                                             .child(
@@ -6059,6 +6349,8 @@ impl Render for UsamiApp {
                 parent
                     .child(
                     div()
+                        .id("side-drawer")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .bottom_0()
@@ -6219,6 +6511,7 @@ impl Render for UsamiApp {
                 parent.child(
                     div()
                         .id("vn-scrim-overlay")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -6257,6 +6550,7 @@ impl Render for UsamiApp {
                                 .child(
                                     div()
                                         .w(px(230.0))
+                                        .h_full()
                                         .flex_shrink_0()
                                         .flex()
                                         .flex_col()
@@ -6324,11 +6618,17 @@ impl Render for UsamiApp {
                                                         })))
                                                         .child(render_vn_tab_btn("vn-tab-diary", "02", "Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Diary;
+                                                            if !this.memory_loading {
+                                                                this.fetch_memory(cx);
+                                                            }
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
                                                         .child(render_vn_tab_btn("vn-tab-memories", "03", "Álbum de Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Memories;
+                                                            if !this.memory_loading {
+                                                                this.fetch_memory(cx);
+                                                            }
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
@@ -6398,6 +6698,9 @@ impl Render for UsamiApp {
                                 .child(
                                     div()
                                         .flex_1()
+                                        .h_full()
+                                        .min_w(px(0.0))
+                                        .min_h(px(0.0))
                                         .flex()
                                         .flex_col()
                                         .p(px(18.0))
@@ -6406,6 +6709,7 @@ impl Render for UsamiApp {
                                         // Header Superior de Nível e EXP
                                         .child(
                                             div()
+                                                .flex_shrink_0()
                                                 .flex()
                                                 .items_center()
                                                 .justify_between()
@@ -6524,8 +6828,8 @@ impl Render for UsamiApp {
                                         .child(
                                             match bond_tab {
                                                 BondTab::Home => render_vn_tab_home(bond_level, bond.as_ref(), t).into_any_element(),
-                                                BondTab::Diary => render_vn_tab_diary(bond.as_ref(), t).into_any_element(),
-                                                BondTab::Memories => render_vn_tab_memories(bond.as_ref(), t).into_any_element(),
+                                                BondTab::Diary => render_vn_tab_diary(bond.as_ref(), memory_data.as_ref(), t).into_any_element(),
+                                                BondTab::Memories => render_vn_tab_memories(bond.as_ref(), memory_data.as_ref(), t).into_any_element(),
                                                 BondTab::Bonds => render_vn_tab_bonds(bond_level, bond.as_ref(), t).into_any_element(),
                                                 BondTab::Achievements => render_vn_tab_achievements(&achievements, t).into_any_element(),
                                                 BondTab::Profile => render_vn_tab_profile(t).into_any_element(),
@@ -6572,6 +6876,7 @@ fn main() {
                 view.update(cx, |this, cx| this.attach_window_observers(window, cx));
                 view.update(cx, |this, cx| this.fetch_bond(cx));
                 view.update(cx, |this, cx| this.fetch_achievements(cx));
+                view.update(cx, |this, cx| this.fetch_memory(cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view
@@ -6719,5 +7024,44 @@ mod tests {
             "oi tudo bem sim",
             t0 + Duration::from_secs(9)
         ));
+    }
+
+    #[test]
+    fn diary_keeps_memory_summaries_even_when_bond_log_is_full() {
+        use super::collect_diary_entries;
+        let log: Vec<serde_json::Value> = (0..15)
+            .map(|i| {
+                serde_json::json!({
+                    "kind": "chat",
+                    "text": format!("Momento {i}"),
+                    "at": 1_700_000_000_000_i64 + i * 1_000,
+                    "count": 1
+                })
+            })
+            .collect();
+        let bond: crate::api::BondData = serde_json::from_value(serde_json::json!({
+            "intimacy": { "carinho": 10, "humor": 5, "companhia": 8 },
+            "meters": {
+                "carinho": { "xp": 10, "level": 1, "progress": 0.5 },
+                "humor": { "xp": 5, "level": 1, "progress": 0.25 },
+                "companhia": { "xp": 8, "level": 1, "progress": 0.4 }
+            },
+            "log": log,
+            "summary": { "level": 1, "name": "Conhecidos", "xp": 23, "next": 30, "remaining": 7, "max": false, "line": "oi" }
+        }))
+        .expect("bond json");
+        let memory: crate::api::MemoryData = serde_json::from_value(serde_json::json!({
+            "summaries": [
+                { "date": "2026-11-09", "summary": "Primeiro dia" },
+                { "date": "2026-11-10", "summary": "Segundo dia" }
+            ]
+        }))
+        .expect("memory json");
+
+        let entries = collect_diary_entries(Some(&bond), Some(&memory));
+        assert_eq!(entries.len(), 17);
+        assert_eq!(entries[15].0, "[LEMBRANÇA]");
+        assert_eq!(entries[15].1, "Segundo dia");
+        assert_eq!(entries[16].1, "Primeiro dia");
     }
 }

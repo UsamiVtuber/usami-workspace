@@ -164,6 +164,8 @@ pub struct ChatResponse {
     pub affinity: Option<i32>,
     #[serde(default)]
     pub stage: Option<String>,
+    #[serde(default)]
+    pub mood: Option<MoodData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -361,6 +363,62 @@ pub struct BondData {
 pub struct BondResponse {
     pub ok: bool,
     pub bond: BondData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MoodMeters {
+    #[serde(default)]
+    pub valence: u32,
+    #[serde(default)]
+    pub energy: u32,
+    #[serde(default)]
+    pub warmth: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MoodExpression {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoodTimelineEntry {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub emotion: String,
+    #[serde(default)]
+    pub reason: String,
+    pub at: i64,
+}
+
+/// Humor contínuo calculado pelo core (`GET /api/mood` e campo `mood` do chat).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MoodData {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(rename = "vrmEmotion", default)]
+    pub vrm_emotion: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub meters: MoodMeters,
+    #[serde(default)]
+    pub expression: MoodExpression,
+    #[serde(default)]
+    pub timeline: Vec<MoodTimelineEntry>,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoodResponse {
+    pub ok: bool,
+    pub mood: MoodData,
 }
 
 /// Conquista desbloqueável avaliada pelo core a partir de atividade real.
@@ -867,6 +925,72 @@ impl UsamiApiClient {
                 .map_err(map_request_error)?;
 
             Ok::<BondResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn get_mood(&self) -> Result<MoodResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/mood", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(map_request_error)?
+                .error_for_status()
+                .map_err(map_request_error)?
+                .json::<MoodResponse>()
+                .await
+                .map_err(map_request_error)?;
+
+            Ok::<MoodResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    pub async fn post_mood_event(
+        &self,
+        emotion: &str,
+        reason: Option<&str>,
+    ) -> Result<MoodResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/mood/event", self.base_url);
+        let token = self.token.clone();
+        let payload = serde_json::json!({
+            "emotion": emotion,
+            "reason": reason.unwrap_or(""),
+        });
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req
+                .send()
+                .await
+                .map_err(map_request_error)?
+                .error_for_status()
+                .map_err(map_request_error)?
+                .json::<MoodResponse>()
+                .await
+                .map_err(map_request_error)?;
+
+            Ok::<MoodResponse, String>(res)
         });
 
         match handle.await {
@@ -1649,5 +1773,37 @@ mod tests {
         assert_eq!(body["data"], "Zm9v");
         assert_eq!(body["filename"], "foto.png");
         assert_eq!(body["prompt"], "olha isso");
+    }
+
+    #[tokio::test]
+    async fn mood_get_and_event_parse_meters_and_timeline() {
+        let payload = br#"{
+            "ok": true,
+            "mood": {
+                "id": "shy",
+                "label": "Envergonhada",
+                "vrmEmotion": "shy",
+                "reason": "Ficou corada com o elogio.",
+                "meters": { "valence": 72, "energy": 64, "warmth": 78 },
+                "expression": { "name": "16-prefab_awkward02", "label": "Constrangida" },
+                "timeline": [
+                    { "id": "shy", "label": "Envergonhada", "emotion": "shy", "reason": "Ficou corada com o elogio.", "at": 1700000000000 }
+                ]
+            }
+        }"#;
+        let (base_url, requests) = spawn_server("200 OK", "application/json", "", payload);
+        let client = UsamiApiClient::with_token(base_url, Some("token-mood".into()));
+
+        let res = client.get_mood().await.expect("busca humor");
+        assert!(res.ok);
+        assert_eq!(res.mood.id, "shy");
+        assert_eq!(res.mood.label, "Envergonhada");
+        assert_eq!(res.mood.meters.warmth, 78);
+        assert_eq!(res.mood.expression.label, "Constrangida");
+        assert_eq!(res.mood.timeline.len(), 1);
+
+        let req = requests.recv_timeout(Duration::from_secs(5)).expect("get");
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/api/mood");
     }
 }

@@ -14,7 +14,7 @@ use gpui_vrm::{VrmController, VrmView};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,7 @@ enum BondTab {
     Memories,
     Bonds,
     Achievements,
+    Mood,
     Profile,
     Settings,
 }
@@ -705,6 +706,10 @@ struct UsamiApp {
     /// Estado do vínculo vindo do core (`GET /api/bond`); None até a primeira
     /// resposta. `bond_level`/`bond_exp_pct` acompanham o summary para o pill.
     bond: Option<api::BondData>,
+    /// Monitor de humor contínuo vindo do core (`GET /api/mood` / `/api/chat`).
+    mood: Option<api::MoodData>,
+    mood_loading: bool,
+    prev_portrait_image: Arc<Mutex<Option<Arc<RenderImage>>>>,
     bond_level: u32,
     bond_exp_pct: u32,
     bg_asset_path: Option<PathBuf>,
@@ -925,6 +930,7 @@ impl UsamiApp {
                                         > Duration::from_millis(4500);
                                 if view.is_ui_idle != is_idle {
                                     view.is_ui_idle = is_idle;
+                                    view.vrm_controller.set_portrait_enabled(!is_idle);
                                     changed = true;
                                 }
                                 // Caret pisca enquanto o composer está ativo (o mesmo
@@ -960,6 +966,8 @@ impl UsamiApp {
             }
         })
         .detach();
+
+        vrm_controller.set_portrait_enabled(true);
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -1005,6 +1013,9 @@ impl UsamiApp {
             bond_tab: BondTab::Home,
             chat_history,
             bond: None,
+            mood: None,
+            mood_loading: false,
+            prev_portrait_image: Arc::new(Mutex::new(None)),
             achievements: Vec::new(),
             bond_level: 1,
             bond_exp_pct: 0,
@@ -1053,6 +1064,7 @@ impl UsamiApp {
         self.last_interaction = Instant::now();
         if self.is_ui_idle {
             self.is_ui_idle = false;
+            self.vrm_controller.set_portrait_enabled(true);
             cx.notify();
         }
     }
@@ -1937,6 +1949,9 @@ impl UsamiApp {
                                     if let Some(stage) = response.stage.clone() {
                                         view.server_stage = Some(stage.into());
                                     }
+                                    if let Some(mood) = response.mood.clone() {
+                                        view.mood = Some(mood);
+                                    }
 
                                     cx.notify();
 
@@ -2122,6 +2137,7 @@ impl UsamiApp {
             text: event.text.clone(),
             emotion: Some(emotion.clone()),
         });
+        self.fetch_mood(cx);
         self.touch_ui(cx);
         cx.notify();
 
@@ -2207,6 +2223,7 @@ impl UsamiApp {
             if drawer == ActiveDrawer::Bond {
                 // Abrir o painel relê o core: o web (ou outra janela) pode ter mudado.
                 self.fetch_bond(cx);
+                self.fetch_mood(cx);
                 // Diário, Álbum e Memória também acompanham os registros/espelho do core.
                 if !self.memory_loading {
                     self.fetch_memory(cx);
@@ -3528,6 +3545,81 @@ fn render_settings_category<E: IntoElement>(
                             match res {
                                 Ok(resp) => view.achievements = resp.achievements,
                                 Err(error) => eprintln!("[Conquistas] indisponível: {error}"),
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Busca o humor persistido no core (`GET /api/mood`) sem bloquear a UI.
+    fn fetch_mood(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() || self.mood_loading {
+            return;
+        }
+        self.mood_loading = true;
+        let had_mood = self.mood.is_some();
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_mood().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.mood_loading = false;
+                            match res {
+                                Ok(resp) => {
+                                    if !had_mood && resp.mood.vrm_emotion != "neutral" {
+                                        view.vrm_controller.set_emotion_with_options(
+                                            &resp.mood.vrm_emotion,
+                                            8.0,
+                                            false,
+                                        );
+                                    }
+                                    view.mood = Some(resp.mood);
+                                }
+                                Err(error) => eprintln!("[Humor] indisponível: {error}"),
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Aplica uma expressão no avatar ao vivo e registra o ajuste de humor no core.
+    fn trigger_mood_preview(
+        &mut self,
+        emotion: &'static str,
+        reason: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.vrm_controller
+            .set_emotion_with_options(emotion, 8.0, false);
+        self.last_emotion = emotion.into();
+        self.poke(cx);
+        cx.notify();
+
+        if !self.api_client.has_token() {
+            return;
+        }
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.post_mood_event(emotion, Some(reason)).await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            match res {
+                                Ok(resp) => view.mood = Some(resp.mood),
+                                Err(error) => eprintln!("[Humor] falha ao atualizar: {error}"),
                             }
                             cx.notify();
                         });
@@ -5165,6 +5257,498 @@ fn render_vn_profile_row(label: &'static str, val: &'static str) -> impl IntoEle
         )
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct MoodVisual {
+    label: &'static str,
+    glyph: &'static str,
+    accent: Rgba,
+}
+
+fn mood_visual(id: &str) -> MoodVisual {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "happy" => MoodVisual {
+            label: "Radiante",
+            glyph: "✦",
+            accent: rgb(0xffd166),
+        },
+        "soft" | "love" => MoodVisual {
+            label: "Carinhosa",
+            glyph: "♡",
+            accent: rgb(0xf052b5),
+        },
+        "tsundere" => MoodVisual {
+            label: "Tsundere",
+            glyph: "!",
+            accent: rgb(0xf778ba),
+        },
+        "shy" | "embarrassed" => MoodVisual {
+            label: "Envergonhada",
+            glyph: "〃",
+            accent: rgb(0xf59ec9),
+        },
+        "curious" | "surprised" | "thoughtful" => MoodVisual {
+            label: "Curiosa",
+            glyph: "★",
+            accent: rgb(0x68d8ff),
+        },
+        "sleepy" | "yawn" | "tired" => MoodVisual {
+            label: "Sonolenta",
+            glyph: "☾",
+            accent: rgb(0xa77abf),
+        },
+        "grumpy" | "angry" | "pout" => MoodVisual {
+            label: "Emburrada",
+            glyph: "♯",
+            accent: rgb(0xff8c5a),
+        },
+        "sad" | "sorrow" => MoodVisual {
+            label: "Carente",
+            glyph: "…",
+            accent: rgb(0x7aa2f7),
+        },
+        _ => MoodVisual {
+            label: "Tranquila",
+            glyph: "•",
+            accent: rgb(0x3ecf8e),
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MoodPreset {
+    id: &'static str,
+    emotion: &'static str,
+    label: &'static str,
+    reason: &'static str,
+}
+
+fn mood_preset_options() -> &'static [MoodPreset] {
+    &[
+        MoodPreset {
+            id: "happy",
+            emotion: "happy",
+            label: "Animada",
+            reason: "Sorriso animado pelo monitor",
+        },
+        MoodPreset {
+            id: "soft",
+            emotion: "soft",
+            label: "Carinhosa",
+            reason: "Clima carinhoso pelo monitor",
+        },
+        MoodPreset {
+            id: "tsundere",
+            emotion: "tsundere",
+            label: "Tsundere",
+            reason: "Biquinho tsundere pelo monitor",
+        },
+        MoodPreset {
+            id: "shy",
+            emotion: "shy",
+            label: "Envergonhada",
+            reason: "Ficou corada pelo monitor",
+        },
+        MoodPreset {
+            id: "curious",
+            emotion: "curious",
+            label: "Curiosa",
+            reason: "Olhar curioso pelo monitor",
+        },
+        MoodPreset {
+            id: "sleepy",
+            emotion: "sleepy",
+            label: "Sonolenta",
+            reason: "Ficou com soninho pelo monitor",
+        },
+        MoodPreset {
+            id: "angry",
+            emotion: "angry",
+            label: "Brava",
+            reason: "Ficou emburrada pelo monitor",
+        },
+        MoodPreset {
+            id: "neutral",
+            emotion: "neutral",
+            label: "Neutra",
+            reason: "Voltando ao normal pelo monitor",
+        },
+    ]
+}
+
+/// Moldura animada estilo LEGO com captura ao vivo do rosto do próprio avatar VRM.
+fn render_lego_portrait(
+    size_px: f32,
+    radius_px: f32,
+    accent: Rgba,
+    portrait_img: Option<Arc<RenderImage>>,
+    prev_slot: Arc<Mutex<Option<Arc<RenderImage>>>>,
+    fallback_glyph: &'static str,
+) -> Div {
+    let r = px(radius_px);
+    let corners = Corners {
+        top_left: r,
+        top_right: r,
+        bottom_right: r,
+        bottom_left: r,
+    };
+    let has_portrait = portrait_img.is_some();
+
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(size_px))
+        .h(px(size_px))
+        .rounded(r)
+        .overflow_hidden()
+        .bg(rgba(0x160a24eb))
+        .border_2()
+        .border_color(accent)
+        .shadow(theme::glow(accent, 14.0))
+        .when(!has_portrait, |el| {
+            el.flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(size_px * 0.42))
+                .text_color(accent)
+                .child(fallback_glyph)
+        })
+        .when_some(portrait_img, move |el, img| {
+            el.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        if let Ok(mut guard) = prev_slot.lock()
+                            && let Some(old) = guard.replace(img.clone())
+                            && old.id != img.id
+                        {
+                            let _ = window.drop_image(old);
+                        }
+                        let _ = window.paint_image(bounds, corners, img, 0, false);
+                    },
+                )
+                .size_full(),
+            )
+        })
+}
+
+fn render_mood_meter_row(
+    label: &'static str,
+    value: u32,
+    fill_color: Rgba,
+    t: &theme::Theme,
+) -> impl IntoElement {
+    let clamped = value.min(100) as f32 / 100.0;
+    let c = t.color;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_size(px(11.0))
+                .child(div().text_color(c.muted).child(label))
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c.pearl)
+                        .child(format!("{value}%")),
+                ),
+        )
+        .child(
+            div()
+                .h(px(7.0))
+                .w_full()
+                .rounded_full()
+                .bg(c.bond_track)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(clamped))
+                        .rounded_full()
+                        .bg(fill_color),
+                ),
+        )
+}
+
+impl UsamiApp {
+    fn render_vn_tab_mood(
+        &self,
+        mood: Option<&api::MoodData>,
+        t: &theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let c = t.color;
+        let mood_id = mood
+            .map(|m| m.id.as_str())
+            .unwrap_or_else(|| self.last_emotion.as_ref());
+        let vis = mood_visual(mood_id);
+        let title_label = mood
+            .map(|m| m.label.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(vis.label)
+            .to_string();
+        let reason_text = mood
+            .map(|m| m.reason.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Acompanhando seu ritmo em tempo real.")
+            .to_string();
+        let expr_label = mood
+            .map(|m| m.expression.label.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Neutra")
+            .to_string();
+        let active_emotion = mood
+            .map(|m| m.vrm_emotion.as_str())
+            .unwrap_or_else(|| self.last_emotion.as_ref())
+            .to_string();
+
+        let valence = mood.map(|m| m.meters.valence).unwrap_or(62);
+        let energy = mood.map(|m| m.meters.energy).unwrap_or(58);
+        let warmth = mood.map(|m| m.meters.warmth).unwrap_or(65);
+        let timeline = mood.map(|m| m.timeline.clone()).unwrap_or_default();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let portrait_img = self.vrm_controller.portrait_image();
+        let prev_slot = self.prev_portrait_image.clone();
+
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .overflow_hidden()
+            // Cartão principal com retrato LEGO ao vivo + resumo + medidores
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .gap(px(16.0))
+                    .items_center()
+                    .p(px(14.0))
+                    .rounded(px(16.0))
+                    .bg(t.vn_card_bg())
+                    .border_1()
+                    .border_color(theme::Palette::vn_card_border())
+                    .child(
+                        render_lego_portrait(
+                            132.0,
+                            66.0,
+                            vis.accent,
+                            portrait_img,
+                            prev_slot,
+                            vis.glyph,
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .child(
+                                                div()
+                                                    .text_size(px(18.0))
+                                                    .font_family(theme::FONT_CHARACTER)
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(c.pearl)
+                                                    .child(format!("{} {title_label}", vis.glyph)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px(px(8.0))
+                                                    .py(px(2.0))
+                                                    .rounded_full()
+                                                    .bg(rgba(0xf052b622))
+                                                    .border_1()
+                                                    .border_color(vis.accent)
+                                                    .text_size(px(10.5))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(c.pearl)
+                                                    .child(format!("Expressão: {expr_label}")),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(c.muted)
+                                    .child(reason_text),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.0))
+                                    .child(render_mood_meter_row("Bom Humor", valence, vis.accent, t))
+                                    .child(render_mood_meter_row("Energia", energy, theme::Palette::vn_gold(), t))
+                                    .child(render_mood_meter_row("Carinho", warmth, c.accent, t)),
+                            ),
+                    ),
+            )
+            // Controles rápidos para testar expressões ao vivo no avatar
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme::Palette::vn_pink_soft())
+                            .child("TESTAR EXPRESSÃO NO AVATAR"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(6.0))
+                            .children(mood_preset_options().iter().map(|preset| {
+                                let selected = active_emotion == preset.emotion;
+                                let p_vis = mood_visual(preset.id);
+                                let emo = preset.emotion;
+                                let reason = preset.reason;
+                                div()
+                                    .id(SharedString::from(format!("mood-preset-{}", preset.id)))
+                                    .cursor_pointer()
+                                    .px(px(10.0))
+                                    .py(px(5.0))
+                                    .rounded_full()
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.pearl)
+                                    .bg(if selected {
+                                        rgba(0xf052b638)
+                                    } else {
+                                        rgba(0x22123d88)
+                                    })
+                                    .border_1()
+                                    .border_color(if selected {
+                                        p_vis.accent
+                                    } else {
+                                        c.line_strong
+                                    })
+                                    .hover(|style| {
+                                        style
+                                            .bg(c.icon_bg_hover)
+                                            .border_color(p_vis.accent)
+                                    })
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.trigger_mood_preview(emo, reason, cx);
+                                    }))
+                                    .child(format!("{} {}", p_vis.glyph, preset.label))
+                            })),
+                    ),
+            )
+            // Linha do tempo rolável do humor
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme::Palette::vn_pink_soft())
+                    .child("VARIAÇÕES RECENTES"),
+            )
+            .child(
+                div()
+                    .id("vn-mood-timeline")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .overflow_y_scroll()
+                    .when(timeline.is_empty(), |col| {
+                        col.child(
+                            div()
+                                .p(px(10.0))
+                                .rounded(px(10.0))
+                                .bg(t.vn_card_bg())
+                                .border_1()
+                                .border_color(c.line)
+                                .text_size(px(11.5))
+                                .text_color(c.muted)
+                                .child("As mudanças de humor aparecem aqui conforme vocês conversam."),
+                        )
+                    })
+                    .children(timeline.iter().map(|entry| {
+                        let e_vis = mood_visual(&entry.id);
+                        let when = if entry.at > 0 && now_ms > 0 {
+                            relative_when_at(entry.at, now_ms)
+                        } else {
+                            "agora".into()
+                        };
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(10.0))
+                            .p(px(8.0))
+                            .rounded(px(10.0))
+                            .bg(rgba(0x22123d77))
+                            .border_1()
+                            .border_color(c.line)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .min_w(px(0.0))
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .px(px(7.0))
+                                            .py(px(2.0))
+                                            .rounded_full()
+                                            .bg(rgba(0x100819cc))
+                                            .border_1()
+                                            .border_color(e_vis.accent)
+                                            .text_size(px(10.5))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.pearl)
+                                            .child(format!("{} {}", e_vis.glyph, entry.label)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(11.5))
+                                            .text_color(c.pearl)
+                                            .child(entry.reason.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.5))
+                                    .text_color(c.muted)
+                                    .child(when),
+                            )
+                    })),
+            )
+    }
+}
+
 impl Render for UsamiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme::theme();
@@ -5191,6 +5775,24 @@ impl Render for UsamiApp {
         let memory_data = self.memory_data.clone();
         let bond_tab = self.bond_tab;
         let achievements = self.achievements.clone();
+        let mood_data = self.mood.clone();
+        let mood_vis = mood_visual(
+            mood_data
+                .as_ref()
+                .map(|m| m.id.as_str())
+                .unwrap_or_else(|| self.last_emotion.as_ref()),
+        );
+        let mood_label: String = mood_data
+            .as_ref()
+            .map(|m| m.label.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| mood_vis.label.to_string());
+        let hud_portrait = if !is_idle && active_drawer != ActiveDrawer::Bond {
+            self.vrm_controller.portrait_image()
+        } else {
+            None
+        };
+        let hud_prev_slot = self.prev_portrait_image.clone();
         let show_bubble = self.show_bubble;
         let live_transcript = self.live_transcript.clone();
         let show_live_caption = is_listening && !live_transcript.is_empty();
@@ -5232,6 +5834,70 @@ impl Render for UsamiApp {
             c.muted
         } else {
             c.ok
+        };
+
+        let top_mood_badge = if active_drawer != ActiveDrawer::Bond {
+            Some(
+                div()
+                    .id("top-mood-portrait")
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(sp.s2))
+                    .pl(px(3.0))
+                    .pr(px(sp.s3))
+                    .py(px(3.0))
+                    .rounded_full()
+                    .bg(c.status_bg)
+                    .border_1()
+                    .border_color(mood_vis.accent)
+                    .hover(|style| {
+                        style
+                            .bg(c.icon_bg_hover)
+                            .border_color(c.primary)
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.bond_tab = BondTab::Mood;
+                        this.active_drawer = ActiveDrawer::Bond;
+                        this.fetch_bond(cx);
+                        this.fetch_mood(cx);
+                        if !this.memory_loading {
+                            this.fetch_memory(cx);
+                        }
+                        this.poke(cx);
+                        cx.notify();
+                    }))
+                    .child(render_lego_portrait(
+                        48.0,
+                        24.0,
+                        mood_vis.accent,
+                        hud_portrait,
+                        hud_prev_slot,
+                        mood_vis.glyph,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(9.5))
+                                    .text_color(c.muted)
+                                    .child("HUMOR"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .font_family(theme::FONT_DISPLAY)
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c.pearl)
+                                    .child(format!("{} {mood_label}", mood_vis.glyph)),
+                            ),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
         };
 
         div()
@@ -5654,6 +6320,7 @@ impl Render for UsamiApp {
                                         }))
                                         .child(format!("♥ NÍVEL {bond_level}")),
                                 )
+                                .when_some(top_mood_badge, |row, badge| row.child(badge))
                                 .child(
                                     div()
                                         .text_size(px(ty.xs))
@@ -6643,12 +7310,18 @@ impl Render for UsamiApp {
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-profile", "06", "Perfil da Usami", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-mood", "06", "Humor", bond_tab == BondTab::Mood, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Mood;
+                                                            this.fetch_mood(cx);
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        })))
+                                                        .child(render_vn_tab_btn("vn-tab-profile", "07", "Perfil da Usami", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Profile;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-settings", "07", "Ajustes", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-settings", "08", "Ajustes", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Settings;
                                                             this.load_settings_data(cx);
                                                             this.poke(cx);
@@ -6832,6 +7505,7 @@ impl Render for UsamiApp {
                                                 BondTab::Memories => render_vn_tab_memories(bond.as_ref(), memory_data.as_ref(), t).into_any_element(),
                                                 BondTab::Bonds => render_vn_tab_bonds(bond_level, bond.as_ref(), t).into_any_element(),
                                                 BondTab::Achievements => render_vn_tab_achievements(&achievements, t).into_any_element(),
+                                                BondTab::Mood => self.render_vn_tab_mood(mood_data.as_ref(), t, cx).into_any_element(),
                                                 BondTab::Profile => render_vn_tab_profile(t).into_any_element(),
                                                 BondTab::Settings => self.render_settings_page(cx).into_any_element(),
                                             }
@@ -6877,6 +7551,7 @@ fn main() {
                 view.update(cx, |this, cx| this.fetch_bond(cx));
                 view.update(cx, |this, cx| this.fetch_achievements(cx));
                 view.update(cx, |this, cx| this.fetch_memory(cx));
+                view.update(cx, |this, cx| this.fetch_mood(cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
                 view
@@ -6892,8 +7567,8 @@ mod tests {
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
         ProactivityConfig, asset_path, farewell_can_close, first_existing, is_duplicate_utterance,
-        manifest_dir, normalize_utterance_key, push_key_char_with_dead_key, relative_when_at,
-        vn_history_tag,
+        manifest_dir, mood_preset_options, mood_visual, normalize_utterance_key,
+        push_key_char_with_dead_key, relative_when_at, vn_history_tag,
     };
     use std::time::{Duration, Instant};
 
@@ -7063,5 +7738,18 @@ mod tests {
         assert_eq!(entries[15].0, "[LEMBRANÇA]");
         assert_eq!(entries[15].1, "Segundo dia");
         assert_eq!(entries[16].1, "Primeiro dia");
+    }
+
+    #[test]
+    fn mood_visual_maps_profiles_and_presets() {
+        assert_eq!(mood_visual("tsundere").label, "Tsundere");
+        assert_eq!(mood_visual("soft").label, "Carinhosa");
+        assert_eq!(mood_visual("SLEEPY").label, "Sonolenta");
+        assert_eq!(mood_visual("desconhecido").label, "Tranquila");
+
+        let presets = mood_preset_options();
+        assert!(presets.iter().any(|p| p.emotion == "happy"));
+        assert!(presets.iter().any(|p| p.emotion == "tsundere"));
+        assert!(presets.iter().any(|p| p.emotion == "neutral"));
     }
 }

@@ -269,22 +269,6 @@ fn settings_code(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
-#[allow(dead_code)]
-fn settings_disabled_button(label: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .px(px(15.0))
-        .py(px(9.0))
-        .rounded(px(t.radius.sm))
-        .bg(t.color.card_bg)
-        .border_1()
-        .border_color(t.color.line_strong)
-        .text_size(px(t.text.sm))
-        .text_color(t.color.pearl)
-        .opacity(0.4)
-        .child(label)
-}
-
 fn settings_danger_button(label: &'static str) -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -301,25 +285,6 @@ fn settings_danger_button(label: &'static str) -> impl IntoElement {
         .child(label)
 }
 
-#[allow(dead_code)]
-fn settings_disabled_input(placeholder: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .h(px(38.0))
-        .w_full()
-        .px(px(t.space.s2_5))
-        .flex()
-        .items_center()
-        .rounded(px(8.0))
-        .bg(t.color.icon_bg)
-        .border_1()
-        .border_color(t.color.line_strong)
-        .text_size(px(t.text.sm))
-        .text_color(t.color.faint)
-        .opacity(0.55)
-        .child(placeholder)
-}
-
 fn settings_dl_row(key: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
     let t = theme::theme();
     div()
@@ -332,111 +297,6 @@ fn settings_dl_row(key: &'static str, value: impl Into<SharedString>) -> impl In
         .text_size(px(t.text.sm))
         .child(div().text_color(t.color.muted).child(key))
         .child(div().text_color(t.color.pearl).child(value.into()))
-}
-
-#[allow(dead_code)]
-fn settings_disabled_slider() -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .h(px(16.0))
-        .w_full()
-        .my(px(t.space.s2_5))
-        .flex()
-        .items_center()
-        .opacity(0.4)
-        .child(
-            div()
-                .h(px(6.0))
-                .w_full()
-                .rounded_full()
-                .bg(t.color.surface_soft)
-                .border_1()
-                .border_color(t.color.line_strong),
-        )
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .size(px(14.0))
-                .rounded_full()
-                .bg(t.color.primary),
-        )
-}
-
-// `.trait-row` do web: rótulo à esquerda, valor em destaque à direita e o
-// slider logo abaixo. O trilho repete `settings_disabled_slider` sem as margens
-// verticais, que aqui vêm do `gap` da linha.
-#[allow(dead_code)]
-fn settings_trait_row(label: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .items_center()
-                .text_size(px(t.text.md))
-                .text_color(t.color.pearl)
-                .child(label)
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(t.color.primary)
-                        .child("50"),
-                ),
-        )
-        .child(
-            div()
-                .h(px(16.0))
-                .w_full()
-                .flex()
-                .items_center()
-                .opacity(0.4)
-                .child(
-                    div()
-                        .h(px(6.0))
-                        .w_full()
-                        .rounded_full()
-                        .bg(t.color.surface_soft)
-                        .border_1()
-                        .border_color(t.color.line_strong),
-                )
-                .child(
-                    // Traço neutro: o valor de referência é 50, então o pino
-                    // fica no centro do trilho.
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .top_0()
-                        .bottom_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(div().size(px(14.0)).rounded_full().bg(t.color.primary)),
-                ),
-        )
-}
-
-#[allow(dead_code)]
-fn settings_disabled_textarea() -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .min_h(px(88.0))
-        .w_full()
-        .p(px(t.space.s2_5))
-        .rounded(px(10.0))
-        .bg(t.color.icon_bg)
-        .border_1()
-        .border_color(t.color.line_strong)
-        .text_size(px(t.text.md))
-        .line_height(px(21.0))
-        .text_color(t.color.faint)
-        .opacity(0.55)
-        .child("Ex.: me chame de capitão; fale mais de coelhos.")
 }
 
 // Item de lista do web (`aside ul`): marcador e texto na cor do painel.
@@ -661,7 +521,7 @@ fn resolve_key_char_with_dead_key(
     Some(out)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn push_key_char_with_dead_key(
     input_text: &mut String,
     pending_dead_key: &mut Option<char>,
@@ -672,11 +532,9 @@ fn push_key_char_with_dead_key(
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct TextSpanToken {
     start_char_idx: usize,
-    end_char_idx: usize,
     text: String,
     is_whitespace: bool,
 }
@@ -696,10 +554,8 @@ fn tokenize_text_spans(text: &str) -> Vec<TextSpanToken> {
         } else if is_ws == in_ws {
             current.push(ch);
         } else {
-            let end_idx = idx;
             tokens.push(TextSpanToken {
                 start_char_idx: start_idx,
-                end_char_idx: end_idx,
                 text: current,
                 is_whitespace: in_ws,
             });
@@ -710,10 +566,8 @@ fn tokenize_text_spans(text: &str) -> Vec<TextSpanToken> {
         }
     }
     if !current.is_empty() {
-        let end_idx = text.chars().count();
         tokens.push(TextSpanToken {
             start_char_idx: start_idx,
-            end_char_idx: end_idx,
             text: current,
             is_whitespace: in_ws,
         });
@@ -2125,7 +1979,7 @@ impl UsamiApp {
             }
         }
 
-        if let Some(mut media) = attached {
+        if let Some(media) = attached {
             self.status_text = "ANALISANDO MÍDIA".into();
             let user_msg = if text.is_empty() {
                 format!("[Mídia: {}]", media.filename)

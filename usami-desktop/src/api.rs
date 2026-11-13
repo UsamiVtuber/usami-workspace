@@ -940,6 +940,47 @@ pub fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Decodifica uma string base64 (padrão RFC 4648, com ou without padding).
+/// Ignora whitespace e devolve `None` se encontrar caractere inválido.
+pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    const TABLE: [i8; 256] = {
+        let mut t = [-1i8; 256];
+        let mut i = 0usize;
+        while i < 256 {
+            t[i] = -1;
+            i += 1;
+        }
+        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut i = 0usize;
+        while i < 64 {
+            t[chars[i] as usize] = i as i8;
+            i += 1;
+        }
+        t
+    };
+
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut buffer_bits = 0u32;
+    for byte in input.bytes() {
+        if byte == b'=' {
+            break;
+        }
+        let val = TABLE[byte as usize];
+        if val < 0 {
+            continue; // ignora whitespace / quebras de linha
+        }
+        buffer = (buffer << 6) | (val as u32);
+        buffer_bits += 6;
+        if buffer_bits >= 8 {
+            buffer_bits -= 8;
+            out.push((buffer >> buffer_bits) as u8);
+            buffer &= (1u32 << buffer_bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 pub struct UsamiApiClient {
     base_url: String,
     token: Option<String>,

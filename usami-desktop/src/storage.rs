@@ -22,12 +22,24 @@ const SESSION_HEARTBEAT_MS: u64 = 60_000;
 const CONVERSATION_VERSION: u32 = 1;
 const SESSION_VERSION: u32 = 1;
 
+/// Metadados leves de um anexo (imagem ou documento) persistido em disco.
+/// Os bytes não viajam no JSON: só o caminho relativo ao `data_dir()` é guardado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredMedia {
+    pub filename: String,
+    pub mime_type: String,
+    /// Caminho relativo a `data_dir()`, p. ex. `media/1699999999_arquivo.pdf`.
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredTurn {
     pub sender: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emotion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<StoredMedia>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -120,6 +132,47 @@ fn conversation_path() -> PathBuf {
     data_dir().join("conversation.json")
 }
 
+fn media_dir() -> PathBuf {
+    data_dir().join("media")
+}
+
+/// Resolve um caminho relativo de mídia (guardado no `StoredMedia.path`)
+/// de volta ao caminho absoluto em disco.
+pub fn media_path(relative: &str) -> PathBuf {
+    data_dir().join(relative)
+}
+
+/// Grava os bytes de um anexo em `data_dir()/media/` com um nome de arquivo
+/// seguro (timestamp + nome original sanitizado) e devolve o caminho relativo
+/// a ser guardado no `StoredMedia.path`. Devolve `None` em caso de falha.
+pub fn save_media_file(filename: &str, _mime_type: &str, bytes: &[u8]) -> Option<String> {
+    let dir = media_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    let safe_name = filename
+        .rsplit('/')
+        .next()
+        .and_then(|n| n.rsplit('\\').next())
+        .unwrap_or("anexo")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect::<String>();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let file_name = format!("{ts}_{safe_name}");
+    let path = dir.join(&file_name);
+    match fs::write(&path, bytes) {
+        Ok(()) => Some(format!("media/{file_name}")),
+        Err(error) => {
+            eprintln!("[Usami Storage] falha ao gravar mídia {}: {error}", path.display());
+            None
+        }
+    }
+}
+
 fn prefs_path() -> PathBuf {
     data_dir().join("ui.json")
 }
@@ -175,10 +228,12 @@ fn sanitize_turns(turns: Vec<StoredTurn>) -> Vec<StoredTurn> {
                 .emotion
                 .map(|value| value.trim().chars().take(64).collect::<String>())
                 .filter(|value| !value.is_empty());
+            let media = turn.media.filter(|m| !m.path.is_empty());
             Some(StoredTurn {
                 sender,
                 text,
                 emotion,
+                media,
             })
         })
         .collect()

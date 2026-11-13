@@ -71,6 +71,18 @@ struct ChatMessage {
     text: String,
     emotion: Option<String>,
     tool_badge: Option<String>,
+    time_str: Option<String>,
+    media: Option<AttachedMedia>,
+}
+
+fn current_phone_time() -> String {
+    let now = std::time::SystemTime::now();
+    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let total_secs = duration.as_secs();
+    let local_secs = total_secs.saturating_sub(3 * 3600);
+    let hours = (local_secs / 3600) % 24;
+    let mins = (local_secs % 3600) / 60;
+    format!("{:02}:{:02}", hours, mins)
 }
 
 fn format_tool_badge(agent_turn: Option<&api::AgentTurnSummary>) -> Option<String> {
@@ -100,6 +112,11 @@ fn stored_turns(turns: &[ChatMessage]) -> Vec<storage::StoredTurn> {
             },
             text: message.text.clone(),
             emotion: message.emotion.clone(),
+            media: message.media.as_ref().map(|m| storage::StoredMedia {
+                filename: m.filename.clone(),
+                mime_type: m.mime_type.clone(),
+                path: m.stored_path.clone().unwrap_or_default(),
+            }),
         })
         .collect()
 }
@@ -113,11 +130,31 @@ fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<ChatMessage> {
     if turn.text.is_empty() {
         return None;
     }
+    let media = turn.media.as_ref().and_then(|stored| {
+        let bytes = std::fs::read(storage::media_path(&stored.path)).ok()?;
+        let format = match stored.mime_type.as_str() {
+            "image/jpeg" | "image/jpg" => gpui::ImageFormat::Jpeg,
+            "image/webp" => gpui::ImageFormat::Webp,
+            "image/gif" => gpui::ImageFormat::Gif,
+            "image/bmp" => gpui::ImageFormat::Bmp,
+            _ => gpui::ImageFormat::Png,
+        };
+        let preview = Arc::new(gpui::Image::from_bytes(format, bytes.clone()));
+        Some(AttachedMedia {
+            filename: stored.filename.clone(),
+            mime_type: stored.mime_type.clone(),
+            data_base64: api::base64_encode(&bytes),
+            preview,
+            stored_path: Some(stored.path.clone()),
+        })
+    });
     Some(ChatMessage {
         sender,
         text: turn.text,
         emotion: turn.emotion,
         tool_badge: None,
+        time_str: Some(current_phone_time()),
+        media,
     })
 }
 
@@ -492,6 +529,8 @@ struct AttachedMedia {
     mime_type: String,
     data_base64: String,
     preview: Arc<gpui::Image>,
+    /// Caminho relativo a `data_dir()` onde o arquivo foi gravado, se já persistido.
+    stored_path: Option<String>,
 }
 
 impl AttachedMedia {
@@ -510,6 +549,7 @@ impl AttachedMedia {
             mime_type: mime_type.into(),
             data_base64,
             preview,
+            stored_path: None,
         }
     }
 }
@@ -575,57 +615,110 @@ fn compose_dead_accent(accent: char, base: char) -> Option<char> {
     }
 }
 
+fn resolve_key_char_with_dead_key(
+    pending_dead_key: &mut Option<char>,
+    ch: &str,
+) -> Option<String> {
+    let mut chars = ch.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return None,
+    };
+
+    if chars.next().is_none() {
+        if let Some(dead) = pending_dead_key.take() {
+            if first == dead {
+                return Some(dead.to_string());
+            } else if let Some(composed) = compose_dead_accent(dead, first) {
+                return Some(composed.to_string());
+            } else if !first.is_ascii() {
+                return Some(first.to_string());
+            } else if first == ' ' {
+                return Some(dead.to_string());
+            } else {
+                let mut s = String::with_capacity(8);
+                s.push(dead);
+                s.push(first);
+                return Some(s);
+            }
+        }
+
+        if is_dead_accent_char(first) {
+            *pending_dead_key = Some(first);
+            return None;
+        }
+
+        return Some(first.to_string());
+    }
+
+    let mut out = String::new();
+    if let Some(dead) = pending_dead_key.take() {
+        if !ch.starts_with(dead) {
+            out.push(dead);
+        }
+    }
+    out.push_str(ch);
+    Some(out)
+}
+
+#[allow(dead_code)]
 fn push_key_char_with_dead_key(
     input_text: &mut String,
     pending_dead_key: &mut Option<char>,
     ch: &str,
 ) {
-    let mut chars = ch.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return,
-    };
-
-    // Caso 1: é apenas um caractere (caso mais comum ao digitar)
-    if chars.next().is_none() {
-        if let Some(dead) = pending_dead_key.take() {
-            if first == dead {
-                // Pressionou o mesmo acento duas vezes seguidas -> emite o acento literal
-                input_text.push(dead);
-            } else if let Some(composed) = compose_dead_accent(dead, first) {
-                // O Windows enviou a vogal crua após a dead key -> compomos manualmente
-                input_text.push(composed);
-            } else if !first.is_ascii() {
-                // O kernel do Windows (ToUnicode com flag 1<<2) já compôs o caractere
-                // na segunda tecla (ex: enviou '´' na dead key e 'í' na vogal) ->
-                // descartamos o acento pendente duplicado e inserimos apenas 'í'.
-                input_text.push(first);
-            } else if first == ' ' {
-                input_text.push(dead);
-            } else {
-                // Consoante/símbolo que não combina com o acento -> preserva ambos
-                input_text.push(dead);
-                input_text.push(first);
-            }
-            return;
-        }
-
-        if is_dead_accent_char(first) {
-            *pending_dead_key = Some(first);
-            return;
-        }
-
-        input_text.push(first);
-        return;
+    if let Some(inserted) = resolve_key_char_with_dead_key(pending_dead_key, ch) {
+        input_text.push_str(&inserted);
     }
+}
 
-    // Caso 2: múltiplos caracteres no mesmo evento (ex: dead key + consoante vindo do OS)
-    if let Some(dead) = pending_dead_key.take() {
-        if !ch.starts_with(dead) {
-            input_text.push(dead);
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct TextSpanToken {
+    start_char_idx: usize,
+    end_char_idx: usize,
+    text: String,
+    is_whitespace: bool,
+}
+
+fn tokenize_text_spans(text: &str) -> Vec<TextSpanToken> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut start_idx = 0;
+    let mut in_ws = false;
+
+    for (idx, ch) in text.chars().enumerate() {
+        let is_ws = ch.is_whitespace();
+        if current.is_empty() {
+            in_ws = is_ws;
+            start_idx = idx;
+            current.push(ch);
+        } else if is_ws == in_ws {
+            current.push(ch);
+        } else {
+            let end_idx = idx;
+            tokens.push(TextSpanToken {
+                start_char_idx: start_idx,
+                end_char_idx: end_idx,
+                text: current,
+                is_whitespace: in_ws,
+            });
+            current = String::new();
+            start_idx = idx;
+            in_ws = is_ws;
+            current.push(ch);
         }
     }
-    input_text.push_str(ch);
+    if !current.is_empty() {
+        let end_idx = text.chars().count();
+        tokens.push(TextSpanToken {
+            start_char_idx: start_idx,
+            end_char_idx: end_idx,
+            text: current,
+            is_whitespace: in_ws,
+        });
+    }
+    tokens
 }
 
 fn normalize_utterance_key(text: &str) -> String {
@@ -685,6 +778,10 @@ fn sanitize_speech_text(text: &str) -> String {
 struct UsamiApp {
     focus_handle: FocusHandle,
     input_text: String,
+    cursor_char_idx: usize,
+    selection_anchor: Option<usize>,
+    is_mouse_selecting: bool,
+    drag_start_idx: usize,
     pending_dead_key: Option<char>,
     input_active: bool,
     caret_on: bool,
@@ -724,6 +821,8 @@ struct UsamiApp {
     window_subscriptions: Vec<Subscription>,
     close_subscription: Option<Subscription>,
     active_drawer: ActiveDrawer,
+    /// Rolagem do chat do smartphone; abrir o painel salta para a última mensagem.
+    phone_scroll: ScrollHandle,
     settings_advanced_open: bool,
     bond_tab: BondTab,
     chat_history: Vec<ChatMessage>,
@@ -922,6 +1021,8 @@ impl UsamiApp {
                         .into(),
                 emotion: Some("tsundere".into()),
                 tool_badge: None,
+                time_str: Some(current_phone_time()),
+                media: None,
             });
         }
         if abrupt_previous {
@@ -930,6 +1031,8 @@ impl UsamiApp {
                 text: "Você fechou o app sem se despedir da última vez... eu fiquei aqui esperando, sabia?".into(),
                 emotion: Some("tsundere".into()),
                 tool_badge: None,
+                time_str: Some(current_phone_time()),
+                media: None,
             });
             storage::save_conversation(&stored_turns(&chat_history));
         }
@@ -1036,6 +1139,10 @@ impl UsamiApp {
         Self {
             focus_handle: cx.focus_handle(),
             input_text: String::new(),
+            cursor_char_idx: 0,
+            selection_anchor: None,
+            is_mouse_selecting: false,
+            drag_start_idx: 0,
             pending_dead_key: None,
             input_active: false,
             caret_on: true,
@@ -1073,6 +1180,7 @@ impl UsamiApp {
             window_subscriptions: Vec::new(),
             close_subscription,
             active_drawer: ActiveDrawer::None,
+            phone_scroll: ScrollHandle::new(),
             settings_advanced_open: false,
             bond_tab: BondTab::Home,
             chat_history,
@@ -1175,13 +1283,189 @@ impl UsamiApp {
         self.poke(cx);
     }
 
-    fn push_history(&mut self, message: ChatMessage) {
+    fn push_history(&mut self, mut message: ChatMessage) {
+        if message.time_str.is_none() {
+            message.time_str = Some(current_phone_time());
+        }
         self.chat_history.push(message);
         if self.chat_history.len() > storage::MAX_STORED_TURNS {
             let overflow = self.chat_history.len() - storage::MAX_STORED_TURNS;
             self.chat_history.drain(0..overflow);
         }
         self.persist_history();
+        // Segue a última mensagem como no WhatsApp, mas sem arrancar o painel
+        // de quem está lendo o histórico acima.
+        if self.active_drawer == ActiveDrawer::Chat {
+            let max = self.phone_scroll.max_offset().height;
+            let at_bottom = -self.phone_scroll.offset().y >= max - px(32.0);
+            if at_bottom {
+                self.phone_scroll.scroll_to_bottom();
+            }
+        }
+    }
+
+    fn cursor_idx(&self) -> usize {
+        self.cursor_char_idx.min(self.input_text.chars().count())
+    }
+
+    fn selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.cursor_idx();
+        if anchor == cursor {
+            None
+        } else {
+            Some((anchor.min(cursor), anchor.max(cursor)))
+        }
+    }
+
+    fn delete_selection(&mut self) -> bool {
+        if let Some((start, end)) = self.selection_range() {
+            let chars: Vec<char> = self.input_text.chars().collect();
+            let mut new_chars = Vec::with_capacity(chars.len());
+            new_chars.extend_from_slice(&chars[..start]);
+            new_chars.extend_from_slice(&chars[end..]);
+            self.input_text = new_chars.into_iter().collect();
+            self.cursor_char_idx = start;
+            self.selection_anchor = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn insert_str_at_cursor(&mut self, text: &str) {
+        self.delete_selection();
+        let chars: Vec<char> = self.input_text.chars().collect();
+        let idx = self.cursor_idx();
+        let mut new_chars = Vec::with_capacity(chars.len() + text.chars().count());
+        new_chars.extend_from_slice(&chars[..idx]);
+        new_chars.extend(text.chars());
+        let count = text.chars().count();
+        new_chars.extend_from_slice(&chars[idx..]);
+        self.input_text = new_chars.into_iter().collect();
+        self.cursor_char_idx = idx + count;
+        self.selection_anchor = None;
+    }
+
+    fn backspace_at_cursor(&mut self) {
+        if !self.delete_selection() {
+            let cursor = self.cursor_idx();
+            if cursor > 0 {
+                let chars: Vec<char> = self.input_text.chars().collect();
+                let mut new_chars = Vec::with_capacity(chars.len().saturating_sub(1));
+                new_chars.extend_from_slice(&chars[..cursor - 1]);
+                new_chars.extend_from_slice(&chars[cursor..]);
+                self.input_text = new_chars.into_iter().collect();
+                self.cursor_char_idx = cursor - 1;
+            }
+        }
+    }
+
+    fn delete_forward_at_cursor(&mut self) {
+        if !self.delete_selection() {
+            let cursor = self.cursor_idx();
+            let chars: Vec<char> = self.input_text.chars().collect();
+            if cursor < chars.len() {
+                let mut new_chars = Vec::with_capacity(chars.len().saturating_sub(1));
+                new_chars.extend_from_slice(&chars[..cursor]);
+                new_chars.extend_from_slice(&chars[cursor + 1..]);
+                self.input_text = new_chars.into_iter().collect();
+            }
+        }
+    }
+
+    fn move_cursor_left(&mut self, shift: bool, ctrl: bool) {
+        if shift && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_idx());
+        }
+        let chars: Vec<char> = self.input_text.chars().collect();
+        let current = self.cursor_idx();
+        if ctrl {
+            let mut target = current;
+            while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
+                target -= 1;
+            }
+            while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
+                target -= 1;
+            }
+            self.cursor_char_idx = target;
+        } else if !shift {
+            if let Some((start, _)) = self.selection_range() {
+                self.cursor_char_idx = start;
+            } else if current > 0 {
+                self.cursor_char_idx = current - 1;
+            }
+        } else if current > 0 {
+            self.cursor_char_idx = current - 1;
+        }
+        if !shift {
+            self.selection_anchor = None;
+        }
+    }
+
+    fn move_cursor_right(&mut self, shift: bool, ctrl: bool) {
+        if shift && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_idx());
+        }
+        let chars: Vec<char> = self.input_text.chars().collect();
+        let current = self.cursor_idx();
+        if ctrl {
+            let mut target = current;
+            while target < chars.len() && chars.get(target).map_or(false, |c| !c.is_whitespace()) {
+                target += 1;
+            }
+            while target < chars.len() && chars.get(target).map_or(false, |c| c.is_whitespace()) {
+                target += 1;
+            }
+            self.cursor_char_idx = target;
+        } else if !shift {
+            if let Some((_, end)) = self.selection_range() {
+                self.cursor_char_idx = end;
+            } else if current < chars.len() {
+                self.cursor_char_idx = current + 1;
+            }
+        } else if current < chars.len() {
+            self.cursor_char_idx = current + 1;
+        }
+        if !shift {
+            self.selection_anchor = None;
+        }
+    }
+
+    fn move_cursor_home(&mut self, shift: bool) {
+        if shift && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_idx());
+        } else if !shift {
+            self.selection_anchor = None;
+        }
+        self.cursor_char_idx = 0;
+    }
+
+    fn move_cursor_end(&mut self, shift: bool) {
+        if shift && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_idx());
+        } else if !shift {
+            self.selection_anchor = None;
+        }
+        self.cursor_char_idx = self.input_text.chars().count();
+    }
+
+    fn select_word_at(&mut self, char_idx: usize) {
+        let chars: Vec<char> = self.input_text.chars().collect();
+        if chars.is_empty() {
+            return;
+        }
+        let idx = char_idx.min(chars.len().saturating_sub(1));
+        let mut start = idx;
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        let mut end = idx;
+        while end < chars.len() && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        self.selection_anchor = Some(start);
+        self.cursor_char_idx = end;
     }
 
     fn persist_history(&self) {
@@ -1328,6 +1612,8 @@ impl UsamiApp {
             text: text.to_string(),
             emotion: Some(emotion.to_string()),
             tool_badge: None,
+            time_str: Some(current_phone_time()),
+            media: None,
         });
         self.poke(cx);
         cx.notify();
@@ -1656,6 +1942,8 @@ impl UsamiApp {
                                                     ) {
                                                         return true;
                                                     }
+                                                    view.cursor_char_idx = trimmed.chars().count();
+                                                    view.selection_anchor = None;
                                                     view.input_text = trimmed;
                                                     if view.is_busy {
                                                         // Não fala por cima: guarda no campo.
@@ -1728,7 +2016,7 @@ impl UsamiApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Selecione uma imagem para a Usami".into()),
+            prompt: Some("Selecione uma imagem ou arquivo para a Usami".into()),
         });
 
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1753,7 +2041,16 @@ impl UsamiApp {
                                 Some("webp") => "image/webp",
                                 Some("gif") => "image/gif",
                                 Some("bmp") => "image/bmp",
-                                _ => "image/png",
+                                Some("pdf") => "application/pdf",
+                                Some("txt") => "text/plain",
+                                Some("doc") => "application/msword",
+                                Some("docx") => {
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                }
+                                Some("mp4") => "video/mp4",
+                                Some("mp3") => "audio/mpeg",
+                                Some("zip") => "application/zip",
+                                _ => "application/octet-stream",
                             };
                             let media = AttachedMedia::from_bytes(filename, mime, bytes);
                             let _ = cx.update(|cx: &mut App| {
@@ -1776,13 +2073,15 @@ impl UsamiApp {
     fn submit(&mut self, cx: &mut Context<Self>) {
         self.touch_ui(cx);
         let text = self.input_text.trim().to_string();
-        let attached = self.attached_media.take();
+        let mut attached = self.attached_media.take();
         if (text.is_empty() && attached.is_none()) || self.is_busy {
             self.attached_media = attached;
             return;
         }
 
         self.input_text.clear();
+        self.cursor_char_idx = 0;
+        self.selection_anchor = None;
         self.pending_dead_key = None;
         self.input_active = false;
         self.is_busy = true;
@@ -1795,7 +2094,21 @@ impl UsamiApp {
         self.vrm_controller.clear_expressions();
         self.vrm_controller.set_expression("19-prefab_doubt", 0.45);
 
-        if let Some(media) = attached {
+        // Persiste o anexo em disco (apenas na primeira gravação) para que
+        // sobreviva a reinicializações do app.
+        if let Some(media) = attached.as_mut() {
+            if media.stored_path.is_none() {
+                if let Some(bytes) = api::base64_decode(&media.data_base64) {
+                    media.stored_path = storage::save_media_file(
+                        &media.filename,
+                        &media.mime_type,
+                        &bytes,
+                    );
+                }
+            }
+        }
+
+        if let Some(mut media) = attached {
             self.status_text = "ANALISANDO MÍDIA".into();
             let user_msg = if text.is_empty() {
                 format!("[Mídia: {}]", media.filename)
@@ -1807,6 +2120,8 @@ impl UsamiApp {
                 text: user_msg,
                 emotion: None,
                 tool_badge: None,
+                time_str: Some(current_phone_time()),
+                media: Some(media.clone()),
             });
             cx.notify();
 
@@ -1882,6 +2197,8 @@ impl UsamiApp {
                                             text: response.reply.clone(),
                                             emotion: Some(emotion.clone()),
                                             tool_badge: None,
+                                            time_str: Some(current_phone_time()),
+                                            media: None,
                                         });
 
                                         cx.notify();
@@ -1964,6 +2281,8 @@ impl UsamiApp {
             text: text.clone(),
             emotion: None,
             tool_badge: None,
+            time_str: Some(current_phone_time()),
+            media: None,
         });
 
         cx.notify();
@@ -2040,6 +2359,8 @@ impl UsamiApp {
                                         text: response.reply.clone(),
                                         emotion: Some(emotion.clone()),
                                         tool_badge: format_tool_badge(response.agent_turn.as_ref()),
+                                        time_str: Some(current_phone_time()),
+                                        media: None,
                                     });
 
                                     view.last_source = response.source.clone().map(Into::into);
@@ -2264,6 +2585,8 @@ impl UsamiApp {
             text: event.text.clone(),
             emotion: Some(emotion.clone()),
             tool_badge: None,
+            time_str: Some(current_phone_time()),
+            media: None,
         });
         self.fetch_mood(cx);
         self.touch_ui(cx);
@@ -2348,7 +2671,10 @@ impl UsamiApp {
             self.active_drawer = ActiveDrawer::None;
         } else {
             self.active_drawer = drawer;
-            if drawer == ActiveDrawer::Bond {
+            if drawer == ActiveDrawer::Chat {
+                // Abrir no fim da conversa: o scroll nasce no topo por padrão.
+                self.phone_scroll.scroll_to_bottom();
+            } else if drawer == ActiveDrawer::Bond {
                 // Abrir o painel relê o core: o web (ou outra janela) pode ter mudado.
                 self.fetch_bond(cx);
                 self.fetch_mood(cx);
@@ -7847,8 +8173,25 @@ fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElement {
         )
 }
 
-fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
+fn render_vn_tab_profile(
+    mood: Option<&api::MoodData>,
+    vis: MoodVisual,
+    portrait_img: Option<Arc<RenderImage>>,
+    prev_slot: Arc<Mutex<Option<Arc<RenderImage>>>>,
+    t: &theme::Theme,
+) -> impl IntoElement {
     let c = t.color;
+    let mood_label = mood
+        .map(|m| m.label.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(vis.label)
+        .to_string();
+    let mood_reason = mood
+        .map(|m| m.reason.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Acompanhando seu ritmo em tempo real.")
+        .to_string();
+
     div()
         .flex_1()
         .flex()
@@ -7859,6 +8202,54 @@ fn render_vn_tab_profile(t: &theme::Theme) -> impl IntoElement {
         .bg(t.vn_card_bg())
         .border_1()
         .border_color(theme::Palette::vn_card_border())
+        .child(
+            div()
+                .flex()
+                .gap(px(14.0))
+                .items_center()
+                .p(px(12.0))
+                .rounded(px(14.0))
+                .bg(rgba(0x22123d80))
+                .border_1()
+                .border_color(vis.accent)
+                .shadow(theme::glow(vis.accent, 10.0))
+                .child(render_lego_portrait(
+                    84.0,
+                    42.0,
+                    vis.accent,
+                    portrait_img,
+                    prev_slot,
+                    vis.glyph,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(9.5))
+                                .text_color(c.muted)
+                                .child("HUMOR"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(15.0))
+                                .font_family(theme::FONT_DISPLAY)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(c.pearl)
+                                .child(format!("{} {mood_label}", vis.glyph)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(vis.accent)
+                                .child(mood_reason),
+                        ),
+                ),
+        )
         .child(
             div()
                 .flex()
@@ -8503,10 +8894,15 @@ impl Render for UsamiApp {
         let input_active = self.input_active;
         let caret_on = self.caret_on;
         let caret_visible = input_active && caret_on;
+        let cursor_pos = self.cursor_idx();
+        let sel_range = self.selection_range();
+        let input_tokens = tokenize_text_spans(&input_text);
+        let total_input_chars = input_text.chars().count();
         let has_media = self.attached_media.is_some();
         let attached_media = self.attached_media.clone();
         let send_enabled = !is_busy && (!input_text.trim().is_empty() || has_media);
         let turns = self.chat_history.clone();
+        let phone_scroll = self.phone_scroll.clone();
         let no_turns = turns.is_empty();
 
         let status_label: SharedString = if is_calling {
@@ -8548,7 +8944,7 @@ impl Render for UsamiApp {
             c.ok
         };
 
-        let top_mood_badge = if active_drawer != ActiveDrawer::Bond {
+        let top_mood_badge = if active_drawer != ActiveDrawer::Bond && active_drawer != ActiveDrawer::Chat {
             Some(
                 div()
                     .id("top-mood-portrait")
@@ -8583,8 +8979,8 @@ impl Render for UsamiApp {
                         48.0,
                         24.0,
                         mood_vis.accent,
-                        hud_portrait,
-                        hud_prev_slot,
+                        hud_portrait.clone(),
+                        hud_prev_slot.clone(),
                         mood_vis.glyph,
                     ))
                     .child(
@@ -8713,24 +9109,68 @@ impl Render for UsamiApp {
 
                                     this.input_active = true;
                                     this.pending_dead_key = None;
-                                    this.input_text.push_str(&text);
+                                    this.insert_str_at_cursor(&text);
+                                    this.caret_on = true;
                                     cx.notify();
                                 }
                             }
                         }
+                    } else if key.eq_ignore_ascii_case("a") {
+                        this.input_active = true;
+                        this.selection_anchor = Some(0);
+                        this.cursor_char_idx = this.input_text.chars().count();
+                        this.caret_on = true;
+                        cx.notify();
+                        return;
+                    } else if key.eq_ignore_ascii_case("c") {
+                        if let Some((start, end)) = this.selection_range() {
+                            let chars: Vec<char> = this.input_text.chars().collect();
+                            let text: String = chars[start..end].iter().collect();
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }
+                        return;
+                    } else if key.eq_ignore_ascii_case("x") {
+                        if let Some((start, end)) = this.selection_range() {
+                            let chars: Vec<char> = this.input_text.chars().collect();
+                            let text: String = chars[start..end].iter().collect();
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                            this.delete_selection();
+                            this.caret_on = true;
+                            cx.notify();
+                        }
+                        return;
                     } else if key.eq_ignore_ascii_case("w") || key == "backspace" {
                         this.input_active = true;
                         this.pending_dead_key = None;
-                        if let Some(idx) = this.input_text.rfind(' ') {
-                            this.input_text.truncate(idx);
-                        } else {
-                            this.input_text.clear();
+                        if !this.delete_selection() {
+                            let chars: Vec<char> = this.input_text.chars().collect();
+                            let current = this.cursor_idx();
+                            if current > 0 {
+                                let mut target = current;
+                                while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
+                                    target -= 1;
+                                }
+                                while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
+                                    target -= 1;
+                                }
+                                let mut new_chars = Vec::with_capacity(chars.len());
+                                new_chars.extend_from_slice(&chars[..target]);
+                                new_chars.extend_from_slice(&chars[current..]);
+                                this.input_text = new_chars.into_iter().collect();
+                                this.cursor_char_idx = target;
+                            }
                         }
+                        this.caret_on = true;
                         cx.notify();
+                        return;
                     } else if key.eq_ignore_ascii_case("u") {
                         this.pending_dead_key = None;
                         this.input_text.clear();
+                        this.cursor_char_idx = 0;
+                        this.selection_anchor = None;
+                        this.caret_on = true;
                         cx.notify();
+                        return;
                     }
                     return;
                 }
@@ -8741,12 +9181,51 @@ impl Render for UsamiApp {
                 }
 
                 if key == "enter" {
-                    this.submit(cx);
+                    if ks.modifiers.shift {
+                        this.input_active = true;
+                        this.pending_dead_key = None;
+                        this.insert_str_at_cursor("\n");
+                        this.caret_on = true;
+                        cx.notify();
+                    } else {
+                        this.submit(cx);
+                    }
+                } else if key == "left" || key == "arrowleft" {
+                    this.input_active = true;
+                    this.pending_dead_key = None;
+                    this.move_cursor_left(ks.modifiers.shift, ks.modifiers.control);
+                    this.caret_on = true;
+                    cx.notify();
+                } else if key == "right" || key == "arrowright" {
+                    this.input_active = true;
+                    this.pending_dead_key = None;
+                    this.move_cursor_right(ks.modifiers.shift, ks.modifiers.control);
+                    this.caret_on = true;
+                    cx.notify();
+                } else if key == "home" {
+                    this.input_active = true;
+                    this.pending_dead_key = None;
+                    this.move_cursor_home(ks.modifiers.shift);
+                    this.caret_on = true;
+                    cx.notify();
+                } else if key == "end" {
+                    this.input_active = true;
+                    this.pending_dead_key = None;
+                    this.move_cursor_end(ks.modifiers.shift);
+                    this.caret_on = true;
+                    cx.notify();
+                } else if key == "delete" {
+                    this.input_active = true;
+                    this.pending_dead_key = None;
+                    this.delete_forward_at_cursor();
+                    this.caret_on = true;
+                    cx.notify();
                 } else if key == "backspace" {
                     this.input_active = true;
                     if this.pending_dead_key.take().is_none() {
-                        this.input_text.pop();
+                        this.backspace_at_cursor();
                     }
+                    this.caret_on = true;
                     cx.notify();
                 } else if key == "escape" {
                     this.pending_dead_key = None;
@@ -8756,15 +9235,21 @@ impl Render for UsamiApp {
                 } else if key == "space" || key == " " {
                     this.input_active = true;
                     if let Some(dead) = this.pending_dead_key.take() {
-                        this.input_text.push(dead);
+                        let mut s = String::new();
+                        s.push(dead);
+                        this.insert_str_at_cursor(&s);
                     } else {
-                        this.input_text.push(' ');
+                        this.insert_str_at_cursor(" ");
                     }
+                    this.caret_on = true;
                     cx.notify();
                 } else if let Some(ref ch) = ks.key_char {
                     if !ch.chars().any(|c| c.is_control()) {
                         this.input_active = true;
-                        push_key_char_with_dead_key(&mut this.input_text, &mut this.pending_dead_key, ch);
+                        if let Some(resolved) = resolve_key_char_with_dead_key(&mut this.pending_dead_key, ch) {
+                            this.insert_str_at_cursor(&resolved);
+                        }
+                        this.caret_on = true;
                         cx.notify();
                     }
                 } else if key.chars().count() == 1 {
@@ -8773,7 +9258,10 @@ impl Render for UsamiApp {
                         this.input_active = true;
                         let mut buf = [0u8; 4];
                         let s = c.encode_utf8(&mut buf);
-                        push_key_char_with_dead_key(&mut this.input_text, &mut this.pending_dead_key, s);
+                        if let Some(resolved) = resolve_key_char_with_dead_key(&mut this.pending_dead_key, s) {
+                            this.insert_str_at_cursor(&resolved);
+                        }
+                        this.caret_on = true;
                         cx.notify();
                     }
                 }
@@ -8808,38 +9296,6 @@ impl Render for UsamiApp {
                         div().into_any_element()
                     }),
             )
-            // ── LAYER 3: LEGENDA DA USAMI (texto puro sobre a cena, sem balão) ──
-            .when(show_bubble, |parent| {
-                parent.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom(px(150.0))
-                        .flex()
-                        .justify_center()
-                        .px(px(sp.s6))
-                        .child(
-                            div()
-                                .id("speech-caption")
-                                .max_w(px(620.0))
-                                .px(px(sp.s4))
-                                .py(px(sp.s2_5))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.show_bubble = false;
-                                    this.poke(cx);
-                                    cx.notify();
-                                }))
-                                .text_center()
-                                .text_size(px(ty.bubble))
-                                .font(theme::font_character_italic())
-                                .line_height(px(26.0))
-                                .text_color(c.pearl)
-                                .child(last_reply),
-                        ),
-                )
-            })
             // ── LAYER 4: HEADER SUPERIOR (SOME NO IDLE) ──
             .when(!is_idle, |parent| {
                 parent.child(
@@ -9163,10 +9619,33 @@ impl Render for UsamiApp {
                     .flex_col()
                     .items_center()
                     .gap(px(9.0))
-                    .opacity(if is_idle { 0.15 } else { 1.0 })
+                    // Legenda da Usami no fluxo vertical: nunca colide com o
+                    // disclaimer nem com o composer quando o texto cresce.
+                    .when(show_bubble, |parent| {
+                        parent.child(
+                            div()
+                                .id("speech-caption")
+                                .max_w(px(620.0))
+                                .px(px(sp.s4))
+                                .py(px(sp.s2_5))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.show_bubble = false;
+                                    this.poke(cx);
+                                    cx.notify();
+                                }))
+                                .text_center()
+                                .text_size(px(ty.bubble))
+                                .font(theme::font_character_italic())
+                                .line_height(px(26.0))
+                                .text_color(c.pearl)
+                                .child(last_reply),
+                        )
+                    })
                     // Disclaimer (sempre presente; o idle esmaece junto, como na web)
                     .child(
                         div()
+                            .opacity(if is_idle { 0.15 } else { 1.0 })
                             .text_size(px(ty.xs))
                             .text_color(c.faint)
                             .child("Mensagens usam os provedores configurados para responder."),
@@ -9176,6 +9655,7 @@ impl Render for UsamiApp {
                         parent.child(
                             div()
                                 .id("composer-media-preview-row")
+                                .opacity(if is_idle { 0.15 } else { 1.0 })
                                 .w(px(640.0))
                                 .max_w(px(640.0))
                                 .pl(px(sp.s2))
@@ -9227,11 +9707,13 @@ impl Render for UsamiApp {
                     .child(
                         div()
                             .id("composer-bar")
+                            .opacity(if is_idle { 0.15 } else { 1.0 })
                             .w(px(720.0))
                             .max_w(px(760.0))
-                            .min_h(px(46.0))
+                            .min_h(px(48.0))
+                            .max_h(px(140.0))
                             .flex()
-                            .items_center()
+                            .items_end()
                             .gap(px(sp.s1_5))
                             .pt(px(sp.s1_5))
                             .pb(px(sp.s1_5))
@@ -9239,6 +9721,7 @@ impl Render for UsamiApp {
                             .pr(px(sp.s2))
                             .rounded(px(r.composer))
                             .bg(c.composer_bg)
+                            .overflow_hidden()
                             .border_1()
                             .border_color(if input_active { theme::Palette::vn_border_bright() } else { c.line_strong })
                             .shadow(if input_active {
@@ -9248,6 +9731,9 @@ impl Render for UsamiApp {
                             })
                             .on_mouse_move(cx.listener(|this, _, _, cx| {
                                 this.poke(cx);
+                            }))
+                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                this.is_mouse_selecting = false;
                             }))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.poke(cx);
@@ -9275,15 +9761,29 @@ impl Render for UsamiApp {
                                     }))
                                     .child(icon("image", 18.0)),
                             )
-                            // Campo de texto expansível
+                            // Campo de texto expansível multiline com seleção precisa de fragmentos
                             .child(
                                 div()
                                     .id("input-box")
+                                    .flex()
+                                    .flex_col()
+                                    // flex_1() = grow 1 + shrink 1 + basis 0: ocupa a
+                                    // largura restante e pode encolher até o limite da barra.
                                     .flex_1()
                                     .min_w(px(0.0))
+                                    // min_h(0) + pai com max_h: a caixa encolhe até o limite
+                                    // do modal e ativa a rolagem em vez de estourar.
+                                    .min_h(px(0.0))
+                                    // 5 linhas de 22px + py(6): o limite cai na
+                                    // fronteira da linha, sem glifo pela metade.
+                                    .max_h(px(122.0))
+                                    .overflow_y_scroll()
                                     .px(px(sp.s1_5))
                                     .py(px(sp.s1_5))
                                     .cursor_text()
+                                    .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                        this.is_mouse_selecting = false;
+                                    }))
                                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                         this.poke(cx);
                                         this.input_active = true;
@@ -9294,20 +9794,20 @@ impl Render for UsamiApp {
                                     .child(
                                         div()
                                             .flex()
+                                            .flex_shrink_0()
                                             .w_full()
                                             .min_w(px(0.0))
-                                            .overflow_hidden()
                                             .items_center()
                                             .when(input_text.is_empty(), |row| {
                                                 row.when(input_active, |row| {
                                                     row.child(
                                                         div()
                                                             .flex_shrink_0()
-                                                            .w(px(1.5))
+                                                            .w(px(2.0))
                                                             .h(px(16.0))
-                                                            .mr(px(1.5))
+                                                            .mr(px(2.0))
                                                             .bg(if caret_visible {
-                                                                c.primary
+                                                                theme::Palette::vn_pink_neon()
                                                             } else {
                                                                 gpui::rgba(0x00000000)
                                                             }),
@@ -9328,31 +9828,260 @@ impl Render for UsamiApp {
                                                 )
                                             })
                                             .when(!input_text.is_empty(), |row| {
+                                                let make_caret = |visible: bool| {
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .w(px(2.0))
+                                                        .h(px(16.0))
+                                                        .rounded(px(1.0))
+                                                        .mx(px(0.5))
+                                                        .bg(if visible {
+                                                            theme::Palette::vn_pink_neon()
+                                                        } else {
+                                                            gpui::rgba(0x00000000)
+                                                        })
+                                                };
+                                                let mut sel_highlight = theme::Palette::vn_pink_neon();
+                                                sel_highlight.a = 0.38;
+
                                                 row.child(
                                                     div()
-                                                        .flex_1()
+                                                        .flex()
+                                                        .flex_wrap()
+                                                        .items_center()
+                                                        .gap_y(px(2.0))
+                                                        .w_full()
                                                         .min_w(px(0.0))
-                                                        .max_h(px(90.0))
-                                                        .overflow_hidden()
                                                         .text_size(px(ty.input))
-                                                        .line_height(px(20.0))
+                                                        .line_height(px(22.0))
                                                         .text_color(c.pearl)
-                                                        .child(input_text.clone()),
-                                                )
-                                                .when(input_active, |row| {
-                                                    row.child(
-                                                        div()
-                                                            .flex_shrink_0()
-                                                            .w(px(1.5))
-                                                            .h(px(16.0))
-                                                            .ml(px(2.0))
-                                                            .bg(if caret_visible {
-                                                                theme::Palette::vn_pink_neon()
+                                                        .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                                            this.is_mouse_selecting = false;
+                                                        }))
+                                                        .children(input_tokens.iter().enumerate().flat_map(|(token_i, token)| {
+                                                            let mut els: Vec<AnyElement> = Vec::new();
+
+                                                            if token.is_whitespace {
+                                                                let t_chars: Vec<char> = token.text.chars().collect();
+                                                                for (offset, ch) in t_chars.into_iter().enumerate() {
+                                                                    let char_idx = token.start_char_idx + offset;
+                                                                    if ch == '\n' {
+                                                                        if sel_range.is_none() && cursor_pos == char_idx {
+                                                                            els.push(make_caret(caret_visible).into_any_element());
+                                                                        }
+                                                                        els.push(div().w_full().h(px(0.0)).into_any_element());
+                                                                    } else {
+                                                                        let is_selected = sel_range.map_or(false, |(s, e)| char_idx >= s && char_idx < e);
+                                                                        let mut ws_el = div()
+                                                                            .id(("ws", char_idx))
+                                                                            .flex_shrink_0()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .h(px(20.0))
+                                                                            .min_w(px(5.5))
+                                                                            .cursor_text()
+                                                                            .when(is_selected, |el| el.bg(sel_highlight).rounded(px(2.0)))
+                                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                                                                this.poke(cx);
+                                                                                this.input_active = true;
+                                                                                this.caret_on = true;
+                                                                                this.is_mouse_selecting = true;
+                                                                                this.drag_start_idx = char_idx;
+                                                                                if event.modifiers.shift {
+                                                                                    if this.selection_anchor.is_none() {
+                                                                                        this.selection_anchor = Some(this.cursor_char_idx);
+                                                                                    }
+                                                                                } else {
+                                                                                    this.selection_anchor = None;
+                                                                                }
+                                                                                this.cursor_char_idx = char_idx;
+                                                                                window.focus(&this.focus_handle);
+                                                                                cx.notify();
+                                                                            }))
+                                                                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                                                if this.is_mouse_selecting {
+                                                                                    this.selection_anchor = Some(this.drag_start_idx);
+                                                                                    this.cursor_char_idx = char_idx;
+                                                                                    this.caret_on = true;
+                                                                                    cx.notify();
+                                                                                }
+                                                                            }))
+                                                                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                                                                this.is_mouse_selecting = false;
+                                                                            }))
+                                                                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                                                                this.poke(cx);
+                                                                                this.input_active = true;
+                                                                                this.caret_on = true;
+                                                                                let count = match event {
+                                                                                    ClickEvent::Mouse(m) => m.down.click_count,
+                                                                                    _ => 1,
+                                                                                };
+                                                                                if count >= 3 {
+                                                                                    this.selection_anchor = Some(0);
+                                                                                    this.cursor_char_idx = this.input_text.chars().count();
+                                                                                } else if count == 2 {
+                                                                                    this.select_word_at(char_idx);
+                                                                                } else {
+                                                                                    this.cursor_char_idx = char_idx;
+                                                                                    this.selection_anchor = None;
+                                                                                }
+                                                                                window.focus(&this.focus_handle);
+                                                                                cx.notify();
+                                                                            }));
+
+                                                                        if sel_range.is_none() && cursor_pos == char_idx {
+                                                                            ws_el = ws_el.child(make_caret(caret_visible));
+                                                                        }
+                                                                        els.push(ws_el.into_any_element());
+                                                                    }
+                                                                }
                                                             } else {
-                                                                gpui::rgba(0x00000000)
-                                                            }),
-                                                    )
-                                                })
+                                                                let t_chars: Vec<char> = token.text.chars().collect();
+                                                                let mut word_el = div()
+                                                                    .id(("word-group", token_i))
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .flex_shrink_0();
+
+                                                                for (offset, ch) in t_chars.into_iter().enumerate() {
+                                                                    let char_idx = token.start_char_idx + offset;
+                                                                    let is_selected = sel_range.map_or(false, |(s, e)| char_idx >= s && char_idx < e);
+                                                                    let mut char_el = div()
+                                                                        .id(("char", char_idx))
+                                                                        .flex_shrink_0()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .h(px(20.0))
+                                                                        .cursor_text()
+                                                                        .when(is_selected, |el| el.bg(sel_highlight).rounded(px(2.0)))
+                                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                                                            this.poke(cx);
+                                                                            this.input_active = true;
+                                                                            this.caret_on = true;
+                                                                            this.is_mouse_selecting = true;
+                                                                            this.drag_start_idx = char_idx;
+                                                                            if event.modifiers.shift {
+                                                                                if this.selection_anchor.is_none() {
+                                                                                    this.selection_anchor = Some(this.cursor_char_idx);
+                                                                                }
+                                                                            } else {
+                                                                                this.selection_anchor = None;
+                                                                            }
+                                                                            this.cursor_char_idx = char_idx;
+                                                                            window.focus(&this.focus_handle);
+                                                                            cx.notify();
+                                                                        }))
+                                                                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                                            if this.is_mouse_selecting {
+                                                                                this.selection_anchor = Some(this.drag_start_idx);
+                                                                                this.cursor_char_idx = char_idx;
+                                                                                this.caret_on = true;
+                                                                                cx.notify();
+                                                                            }
+                                                                        }))
+                                                                        .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                                                            this.is_mouse_selecting = false;
+                                                                        }))
+                                                                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                                                            this.poke(cx);
+                                                                            this.input_active = true;
+                                                                            this.caret_on = true;
+                                                                            let count = match event {
+                                                                                ClickEvent::Mouse(m) => m.down.click_count,
+                                                                                _ => 1,
+                                                                            };
+                                                                            if count >= 3 {
+                                                                                this.selection_anchor = Some(0);
+                                                                                this.cursor_char_idx = this.input_text.chars().count();
+                                                                            } else if count == 2 {
+                                                                                this.select_word_at(char_idx);
+                                                                            } else {
+                                                                                this.cursor_char_idx = char_idx;
+                                                                                this.selection_anchor = None;
+                                                                            }
+                                                                            window.focus(&this.focus_handle);
+                                                                            cx.notify();
+                                                                        }));
+
+                                                                    if sel_range.is_none() && cursor_pos == char_idx {
+                                                                        char_el = char_el.child(make_caret(caret_visible));
+                                                                    }
+                                                                    char_el = char_el.child(
+                                                                        div()
+                                                                            .px(px(0.5))
+                                                                            .text_color(if is_selected { gpui::rgba(0xffffffff) } else { c.pearl })
+                                                                            .child(ch.to_string()),
+                                                                    );
+                                                                    word_el = word_el.child(char_el);
+                                                                }
+                                                                els.push(word_el.into_any_element());
+                                                            }
+
+                                                            els
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .id("char-end")
+                                                                .flex_shrink_0()
+                                                                .flex()
+                                                                .items_center()
+                                                                .h(px(20.0))
+                                                                .min_w(px(10.0))
+                                                                .cursor_text()
+                                                                .when(sel_range.is_none() && cursor_pos >= total_input_chars, |el| {
+                                                                    el.child(make_caret(caret_visible))
+                                                                })
+                                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                                                    this.poke(cx);
+                                                                    this.input_active = true;
+                                                                    this.caret_on = true;
+                                                                    this.is_mouse_selecting = true;
+                                                                    this.drag_start_idx = total_input_chars;
+                                                                    if event.modifiers.shift {
+                                                                        if this.selection_anchor.is_none() {
+                                                                            this.selection_anchor = Some(this.cursor_char_idx);
+                                                                        }
+                                                                    } else {
+                                                                        this.selection_anchor = None;
+                                                                    }
+                                                                    this.cursor_char_idx = total_input_chars;
+                                                                    window.focus(&this.focus_handle);
+                                                                    cx.notify();
+                                                                }))
+                                                                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                                    if this.is_mouse_selecting {
+                                                                        this.selection_anchor = Some(this.drag_start_idx);
+                                                                        this.cursor_char_idx = total_input_chars;
+                                                                        this.caret_on = true;
+                                                                        cx.notify();
+                                                                    }
+                                                                }))
+                                                                .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _cx| {
+                                                                    this.is_mouse_selecting = false;
+                                                                }))
+                                                                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                                                    this.poke(cx);
+                                                                    this.input_active = true;
+                                                                    this.caret_on = true;
+                                                                    let count = match event {
+                                                                        ClickEvent::Mouse(m) => m.down.click_count,
+                                                                        _ => 1,
+                                                                    };
+                                                                    if count >= 3 {
+                                                                        this.selection_anchor = Some(0);
+                                                                        this.cursor_char_idx = total_input_chars;
+                                                                    } else if count == 2 {
+                                                                        this.select_word_at(total_input_chars.saturating_sub(1));
+                                                                    } else {
+                                                                        this.cursor_char_idx = total_input_chars;
+                                                                        this.selection_anchor = None;
+                                                                    }
+                                                                    window.focus(&this.focus_handle);
+                                                                    cx.notify();
+                                                                })),
+                                                        ),
+                                                )
                                             }),
                                     ),
                             )
@@ -9594,201 +10323,696 @@ impl Render for UsamiApp {
                         )
                     }),
             )
-            // ── LAYER 6: HISTÓRICO DA CONVERSA (PAINEL FLUTUANTE DA WEB) ──
+            // ── LAYER 6: PAINEL DE CONVERSA EM FORMATO SMARTPHONE ESTILO WHATSAPP ──
             .when(chat_open, |parent| {
+                let status_subtitle: SharedString = if is_busy {
+                    "digitando...".into()
+                } else if is_calling {
+                    "em chamada de voz".into()
+                } else if self.is_companion_mode {
+                    "modo companion ativo".into()
+                } else {
+                    "online".into()
+                };
+
                 parent.child(
                     div()
-                        .id("chat-history")
+                        .id("chat-history-smartphone")
+                        // Sem occlude, a rodinha sobre o telefone também chega ao
+                        // VrmView (que ajusta a câmera no scroll) e a modelo
+                        // cresce/diminui enquanto a conversa rola.
                         .occlude()
                         .absolute()
                         .left(px(sp.s6))
                         .bottom(px(84.0))
-                        .w(px(390.0))
-                        .max_h(px(483.0))
+                        .w(px(382.0))
+                        .h(px(615.0))
                         .flex()
                         .flex_col()
+                        // Chassis do smartphone flagship (titânio escovado com aro metálico ultrafino chanfrado)
+                        .rounded(px(46.0))
                         .overflow_hidden()
-                        .rounded(px(r.xl))
-                        .bg(c.chat_bg)
+                        .bg(gpui::rgba(0x16181dff))
+                        .p(px(3.5))
                         .border_1()
-                        .border_color(c.line_strong)
-                        .shadow(t.shadow.panel.clone())
+                        .border_color(gpui::rgba(0xffffff28))
+                        .shadow(vec![
+                            BoxShadow {
+                                color: gpui::rgba(0x000000c0).into(),
+                                offset: point(px(0.0), px(20.0)),
+                                blur_radius: px(46.0),
+                                spread_radius: px(0.0),
+                            },
+                            BoxShadow {
+                                color: gpui::rgba(0x00000080).into(),
+                                offset: point(px(0.0), px(4.0)),
+                                blur_radius: px(14.0),
+                                spread_radius: px(0.0),
+                            },
+                        ])
                         .child(
+                            // Tela interna OLED do smartphone
                             div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .pt(px(sp.s3))
-                                .pr(px(sp.s3_5))
-                                .pb(px(sp.s2_5))
-                                .pl(px(sp.s4))
-                                .border_b_1()
-                                .border_color(c.line)
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(7.0))
-                                        .text_size(px(11.5))
-                                        .font_family(theme::FONT_DISPLAY)
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c.lavender)
-                                        .child(icon("chat_bubble", 14.0))
-                                        .child("CONVERSA"),
-                                )
-                                .child(
-                                    div()
-                                        .id("drawer-close-btn")
-                                        .cursor_pointer()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size(px(28.0))
-                                        .rounded_full()
-                                        .text_color(c.muted)
-                                        .hover(|style| style.bg(c.surface_soft).text_color(c.pearl))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.active_drawer = ActiveDrawer::None;
-                                            this.poke(cx);
-                                            cx.notify();
-                                        }))
-                                        .child(icon("close", 15.0)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("chat-message-list")
+                                .id("phone-screen")
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .flex()
                                 .flex_col()
-                                .justify_end()
-                                .gap(px(sp.s2_5))
-                                .p(px(sp.s3_5))
-                                .overflow_y_scroll()
-                                .when(no_turns, |col| {
-                                    col.justify_center().child(
-                                        div()
-                                            .py(px(22.0))
-                                            .px(px(sp.s3_5))
-                                            .flex()
-                                            .flex_col()
-                                            .items_center()
-                                            .child(
-                                                div()
-                                                    .mb(px(sp.s1_5))
-                                                    .text_size(px(ty.empty_title))
-                                                    .font_family(theme::FONT_CHARACTER)
-                                                    .italic()
-                                                    .text_color(c.pearl)
-                                                    .child("Comece do seu jeito."),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(ty.sm))
-                                                    .line_height(px(18.0))
-                                                    .text_color(c.muted)
-                                                    .child("Escreva abaixo ou inicie uma chamada com a Usami."),
-                                            ),
-                                    )
-                                })
-                                .children(turns.into_iter().map(|msg| {
-                                    let is_user = msg.sender == Sender::User;
-                                    let bubble = div()
+                                .rounded(px(42.0))
+                                .overflow_hidden()
+                                // overflow_hidden do GPUI recorta só retângulo:
+                                // qualquer filho opaco de canto reto cobre a
+                                // curva. Então o fundo arredondado da própria
+                                // tela pinta os cantos superiores com a cor do
+                                // cabeçalho, e as barras ficam transparentes.
+                                .bg(gpui::rgba(0x1f2c34ff))
+                                // 1. Barra de status integrada com Dynamic Island
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(32.0))
+                                        .px(px(16.0))
                                         .flex()
-                                        .flex_col()
-                                        .max_w(px(343.0))
-                                        .when(is_user, |el| el.items_end())
-                                        .when(!is_user, |el| el.items_start())
+                                        .items_center()
+                                        .justify_between()
+                                        // Horário à esquerda
                                         .child(
                                             div()
-                                                .mx(px(7.0))
-                                                .mb(px(sp.s1))
-                                                .text_size(px(ty.xs))
-                                                .font_family(theme::FONT_DISPLAY)
-                                                .text_color(if is_user { c.primary } else { c.muted })
-                                                .child(if is_user {
-                                                    SharedString::from("VOCÊ")
-                                                } else {
-                                                    let mut header = match msg.emotion.as_deref() {
-                                                        Some(emotion) => format!("USAMI · {emotion}"),
-                                                        None => "USAMI".to_string(),
-                                                    };
-                                                    if let Some(badge) = msg.tool_badge.as_deref() {
-                                                        header.push_str(&format!(" · {badge}"));
-                                                    }
-                                                    SharedString::from(header)
-                                                }),
+                                                .min_w(px(44.0))
+                                                .text_size(px(11.5))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(gpui::rgba(0xf0f2f5ff))
+                                                .child(current_phone_time()),
+                                        )
+                                        // Dynamic Island elegante centralizada
+                                        .child(
+                                            div()
+                                                .w(px(96.0))
+                                                .h(px(18.0))
+                                                .rounded_full()
+                                                .bg(gpui::rgba(0x000000ff))
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .px(px(8.0))
+                                                .child(
+                                                    div()
+                                                        .size(px(7.0))
+                                                        .rounded_full()
+                                                        .bg(gpui::rgba(0x111c2fff))
+                                                        .border_1()
+                                                        .border_color(gpui::rgba(0x070c17ee)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .w(px(26.0))
+                                                        .h(px(2.5))
+                                                        .rounded_full()
+                                                        .bg(gpui::rgba(0x28303cee)),
+                                                ),
+                                        )
+                                        // Indicadores 5G, Wi-Fi e Bateria à direita
+                                        .child(
+                                            div()
+                                                .min_w(px(44.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_end()
+                                                .gap(px(5.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(9.5))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(gpui::rgba(0xaebac1ff))
+                                                        .child("5G"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(9.5))
+                                                        .text_color(gpui::rgba(0xaebac1ff))
+                                                        .child("📶"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(2.5))
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(9.5))
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(gpui::rgba(0xaebac1ff))
+                                                                .child("98%"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w(px(16.0))
+                                                                .h(px(8.5))
+                                                                .rounded(px(2.0))
+                                                                .border_1()
+                                                                .border_color(gpui::rgba(0xaebac1ff))
+                                                                .p(px(1.0))
+                                                                .child(
+                                                                    div()
+                                                                        .w_full()
+                                                                        .h_full()
+                                                                        .rounded(px(1.0))
+                                                                        .bg(gpui::rgba(0x25d366ff)),
+                                                                ),
+                                                        ),
+                                                ),
+                                        ),
+                                )
+                                // 2. Header do WhatsApp
+                                .child(
+                                    div()
+                                        .px(px(8.0))
+                                        .py(px(7.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .border_b_1()
+                                        .border_color(gpui::rgba(0x24323cff))
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(6.0))
+                                                .child(
+                                                    div()
+                                                        .id("phone-back-arrow")
+                                                        .cursor_pointer()
+                                                        .px(px(4.0))
+                                                        .text_size(px(20.0))
+                                                        .text_color(gpui::rgba(0x00a884ff))
+                                                        .hover(|s| s.text_color(gpui::rgba(0x25d366ff)))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.active_drawer = ActiveDrawer::None;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("‹"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .relative()
+                                                        .size(px(34.0))
+                                                        .child(render_lego_portrait(
+                                                            34.0,
+                                                            17.0,
+                                                            mood_vis.accent,
+                                                            hud_portrait,
+                                                            hud_prev_slot.clone(),
+                                                            mood_vis.glyph,
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .absolute()
+                                                                .bottom(px(0.0))
+                                                                .right(px(0.0))
+                                                                .size(px(9.0))
+                                                                .rounded_full()
+                                                                .bg(gpui::rgba(0x25d366ff))
+                                                                .border_1()
+                                                                .border_color(gpui::rgba(0x1f2c34ff)),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .ml(px(4.0))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap(px(3.0))
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(13.0))
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(gpui::rgba(0xe9edefff))
+                                                                        .child("Usami"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(10.0))
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(gpui::rgba(0x25d366ff))
+                                                                        .child("✓"),
+                                                                ),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(10.0))
+                                                                .text_color(if is_busy {
+                                                                    gpui::rgba(0x25d366ff)
+                                                                } else {
+                                                                    gpui::rgba(0x8696a0ff)
+                                                                })
+                                                                .child(status_subtitle),
+                                                        ),
+                                                ),
                                         )
                                         .child(
                                             div()
-                                                .max_w(px(343.0))
-                                                .py(px(sp.s2_5))
-                                                .px(px(sp.s3_5))
-                                                .rounded(px(r.lg))
-                                                .bg(c.chat_turn_bg)
-                                                .border_1()
-                                                .border_color(if is_user { c.chat_user_border } else { c.line })
-                                                .text_size(px(ty.md))
-                                                .line_height(px(19.0))
-                                                .text_color(c.pearl)
-                                                .child(msg.text),
-                                        );
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .pr(px(2.0))
+                                                .child(
+                                                    div()
+                                                        .id("phone-call-btn")
+                                                        .cursor_pointer()
+                                                        .p(px(6.0))
+                                                        .rounded_full()
+                                                        .text_color(gpui::rgba(0xaebac1ff))
+                                                        .hover(|s| s.bg(gpui::rgba(0x2a3942ff)).text_color(gpui::rgba(0xe9edefff)))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.poke(cx);
+                                                            this.start_call(cx);
+                                                            cx.notify();
+                                                        }))
+                                                        .child(icon("phone", 16.0)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("phone-close-btn")
+                                                        .cursor_pointer()
+                                                        .p(px(6.0))
+                                                        .rounded_full()
+                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                        .hover(|s| s.bg(gpui::rgba(0x2a3942ff)).text_color(gpui::rgba(0xe9edefff)))
+                                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.active_drawer = ActiveDrawer::None;
+                                                            this.poke(cx);
+                                                            cx.notify();
+                                                        }))
+                                                        .child(icon("close", 14.0)),
+                                                ),
+                                        ),
+                                )
+                                // 3. Lista de Mensagens estilo WhatsApp (sem justify_end glitchy)
+                                .child(
                                     div()
+                                        .id("phone-chat-messages")
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .p(px(10.0))
+                                        .bg(gpui::rgba(0x0b141aff)) // Fundo de conversa
+                                        .overflow_y_scroll()
+                                        .track_scroll(&phone_scroll)
                                         .flex()
-                                        .flex_shrink_0()
-                                        .w_full()
-                                        .when(is_user, |el| el.justify_end())
-                                        .when(!is_user, |el| el.justify_start())
-                                        .child(bubble)
-                                }))
-                                .when(is_busy, |col| {
-                                    col.child(
-                                        div()
-                                            .flex()
-                                            .flex_shrink_0()
-                                            .w_full()
-                                            .justify_start()
-                                            .child(
+                                        .flex_col()
+                                        .gap(px(8.0))
+                                        // Pílula de data centralizada
+                                        .child(
+                                            div()
+                                                .w_full()
+                                                .flex()
+                                                .justify_center()
+                                                .mb(px(2.0))
+                                                .child(
+                                                    div()
+                                                        .rounded(px(6.0))
+                                                        .bg(gpui::rgba(0x182229ff))
+                                                        .px(px(10.0))
+                                                        .py(px(3.0))
+                                                        .text_size(px(10.0))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                        .child("HOJE"),
+                                                ),
+                                        )
+                                        // Aviso de segurança do WhatsApp
+                                        .child(
+                                            div()
+                                                .w_full()
+                                                .flex()
+                                                .justify_center()
+                                                .mb(px(4.0))
+                                                .child(
+                                                    div()
+                                                        .max_w(px(280.0))
+                                                        .rounded(px(6.0))
+                                                        .bg(gpui::rgba(0x182229ee))
+                                                        .px(px(8.0))
+                                                        .py(px(5.0))
+                                                        .text_size(px(9.5))
+                                                        .text_color(gpui::rgba(0xffd279ff))
+                                                        .text_center()
+                                                        .child("🔒 As mensagens são protegidas de ponta a ponta com a Usami."),
+                                                ),
+                                        )
+                                        .when(no_turns, |col| {
+                                            col.child(
+                                                div()
+                                                    .py(px(28.0))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.0))
+                                                            .font_weight(FontWeight::BOLD)
+                                                            .text_color(gpui::rgba(0xe9edefff))
+                                                            .child("Comece uma conversa! 👋"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .mt(px(4.0))
+                                                            .text_size(px(10.5))
+                                                            .text_color(gpui::rgba(0x8696a0ff))
+                                                            .child("Digite no teclado ou fale por chamada de voz."),
+                                                    ),
+                                            )
+                                        })
+                                        .children(turns.into_iter().map(|msg| {
+                                            let is_user = msg.sender == Sender::User;
+                                            let time = msg.time_str.as_deref().unwrap_or("agora");
+
+                                            if is_user {
                                                 div()
                                                     .flex()
-                                                    .items_center()
-                                                    .gap(px(5.0))
-                                                    .py(px(sp.s2_5))
-                                                    .px(px(sp.s3_5))
-                                                    .rounded(px(r.lg))
-                                                    .bg(c.chat_turn_bg)
-                                                    .border_1()
-                                                    .border_color(c.line)
-                                                    .children((0..3usize).map(|idx| {
+                                                    .flex_shrink_0()
+                                                    .w_full()
+                                                    .justify_end()
+                                                    .child(
                                                         div()
-                                                            .size(px(5.0))
-                                                            .rounded_full()
-                                                            .bg(c.lavender)
-                                                            .with_animation(
-                                                                ("typing", idx),
-                                                                Animation::new(Duration::from_millis(1200)).repeat(),
-                                                                move |el, delta| {
-                                                                    let phase = (delta + idx as f32 * 0.15) % 1.0;
-                                                                    let lift = if phase < 0.3 {
-                                                                        phase / 0.3 * 3.0
-                                                                    } else if phase < 0.6 {
-                                                                        (1.0 - (phase - 0.3) / 0.3) * 3.0
-                                                                    } else {
-                                                                        0.0
-                                                                    };
-                                                                    let opacity = if phase < 0.6 {
-                                                                        0.35 + phase / 0.6 * 0.65
-                                                                    } else {
-                                                                        1.0 - (phase - 0.6) / 0.4 * 0.65
-                                                                    };
-                                                                    el.opacity(opacity).mt(px(-lift))
-                                                                },
+                                                            .max_w(px(260.0))
+                                                            .py(px(6.0))
+                                                            .px(px(9.0))
+                                                            .rounded_tl(px(10.0))
+                                                            .rounded_bl(px(10.0))
+                                                            .rounded_br(px(10.0))
+                                                            .rounded_tr(px(2.0))
+                                                            .bg(gpui::rgba(0x005c4bff)) // Verde clássico outgoing do WhatsApp
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.5))
+                                                                    .line_height(px(17.0))
+                                                                    .text_color(gpui::rgba(0xe9edefff))
+                                                                    .child(msg.text),
                                                             )
-                                                    })),
+                                                            .when_some(msg.media.as_ref(), |_parent, media| {
+                                                                if media.mime_type.starts_with("image/") {
+                                                                    div()
+                                                                        .mt(px(6.0))
+                                                                        .w(px(150.0))
+                                                                        .h(px(105.0))
+                                                                        .rounded(px(8.0))
+                                                                        .overflow_hidden()
+                                                                        .bg(gpui::rgba(0x0b1419ff))
+                                                                        .border_1()
+                                                                        .border_color(gpui::rgba(0x2a3942ff))
+                                                                        .child(
+                                                                            img(media.preview.clone())
+                                                                                .size_full()
+                                                                                .object_fit(ObjectFit::Cover),
+                                                                        )
+                                                                } else {
+                                                                    div()
+                                                                        .mt(px(6.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap(px(8.0))
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                                        .child("📄")
+                                                                        .child(media.filename.clone())
+                                                                }
+                                                            })
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .justify_end()
+                                                                    .items_center()
+                                                                    .gap(px(3.0))
+                                                                    .mt(px(2.0))
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(9.5))
+                                                                            .text_color(gpui::rgba(0xffffffaa))
+                                                                            .child(time.to_string()),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(11.0))
+                                                                            .font_weight(FontWeight::BOLD)
+                                                                            .text_color(gpui::rgba(0x53bdebff)) // Check duplo azul de leitura!
+                                                                            .child("✓✓"),
+                                                                    ),
+                                                            ),
+                                                    )
+                                            } else {
+                                                let mut header = match msg.emotion.as_deref() {
+                                                    Some(emotion) => format!("USAMI · {emotion}"),
+                                                    None => "USAMI".to_string(),
+                                                };
+                                                if let Some(badge) = msg.tool_badge.as_deref() {
+                                                    header.push_str(&format!(" · {badge}"));
+                                                }
+
+                                                div()
+                                                    .flex()
+                                                    .flex_shrink_0()
+                                                    .w_full()
+                                                    .justify_start()
+                                                    .child(
+                                                        div()
+                                                            .max_w(px(260.0))
+                                                            .py(px(6.0))
+                                                            .px(px(9.0))
+                                                            .rounded_tr(px(10.0))
+                                                            .rounded_br(px(10.0))
+                                                            .rounded_bl(px(10.0))
+                                                            .rounded_tl(px(2.0))
+                                                            .bg(gpui::rgba(0x202c33ff)) // Cinza ardósia incoming do WhatsApp
+                                                            .child(
+                                                                div()
+                                                                    .mb(px(2.0))
+                                                                    .text_size(px(9.5))
+                                                                    .font_weight(FontWeight::BOLD)
+                                                                    .text_color(gpui::rgba(0x25d366ff))
+                                                                    .child(header),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.5))
+                                                                    .line_height(px(17.0))
+                                                                    .text_color(gpui::rgba(0xe9edefff))
+                                                                    .child(msg.text),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .justify_end()
+                                                                    .mt(px(2.0))
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(9.5))
+                                                                            .text_color(gpui::rgba(0x8696a0ff))
+                                                                            .child(time.to_string()),
+                                                                    ),
+                                                            ),
+                                                    )
+                                            }
+                                        }))
+                                        // Indicador de digitação suave (sem alterar margins e sem jitter de scroll!)
+                                        .when(is_busy, |col| {
+                                            col.child(
+                                                div()
+                                                    .flex()
+                                                    .flex_shrink_0()
+                                                    .w_full()
+                                                    .justify_start()
+                                                    .child(
+                                                        div()
+                                                            .py(px(7.0))
+                                                            .px(px(12.0))
+                                                            .rounded_tr(px(10.0))
+                                                            .rounded_br(px(10.0))
+                                                            .rounded_bl(px(10.0))
+                                                            .rounded_tl(px(2.0))
+                                                            .bg(gpui::rgba(0x202c33ff))
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap(px(4.0))
+                                                                    .children((0..3usize).map(|idx| {
+                                                                        div()
+                                                                            .size(px(5.5))
+                                                                            .rounded_full()
+                                                                            .bg(gpui::rgba(0x25d366ff))
+                                                                            .with_animation(
+                                                                                ("wa-typing", idx),
+                                                                                Animation::new(Duration::from_millis(1000)).repeat(),
+                                                                                move |el, delta| {
+                                                                                    let phase = (delta + idx as f32 * 0.25) % 1.0;
+                                                                                    let opacity = 0.25 + 0.75 * (phase * std::f32::consts::PI).sin().max(0.0);
+                                                                                    el.opacity(opacity)
+                                                                                },
+                                                                            )
+                                                                    })),
+                                                            ),
+                                                    ),
+                                            )
+                                        }),
+                                )
+                                // 4a. Placa do arco inferior. O GPUI limita cada raio
+                                // a metade da altura do quad, então uma faixa de
+                                // 46px desenharia raio 23. Esta placa de 84px (2x42)
+                                // garante o raio 42; o input bar opaco cobre os
+                                // primeiros 38px dela, então só a faixa de 46px
+                                // abaixo continua visível.
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .bottom_0()
+                                        .w_full()
+                                        .h(px(84.0))
+                                        .rounded_bl(px(42.0))
+                                        .rounded_br(px(42.0))
+                                        .bg(gpui::linear_gradient(
+                                            180.0,
+                                            gpui::linear_color_stop(
+                                                gpui::rgba(0x1f2c34ff),
+                                                0.55,
                                             ),
-                                    )
-                                }),
+                                            gpui::linear_color_stop(
+                                                gpui::rgba(0x0c1317ff),
+                                                1.0,
+                                            ),
+                                        )),
+                                )
+                                // 4b. Barra inferior do WhatsApp (dentro do smartphone)
+                                .child(
+                                    div()
+                                        .bg(gpui::rgba(0x1f2c34ff))
+                                        .px(px(8.0))
+                                        .pt(px(6.0))
+                                        // Safe area: afasta o input e o botão de enviar
+                                        // da borda inferior do chassi.
+                                        .pb(px(10.0))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_end()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(16.0))
+                                                .cursor_pointer()
+                                                .child("😊"),
+                                        )
+                                        .child(
+                                            // Container pai do input: altura máxima rígida e
+                                            // rolagem própria — o texto nunca dita a altura do
+                                            // celular nem empurra os botões laterais.
+                                            div()
+                                                .id("phone-input-scroll")
+                                                .flex_1()
+                                                .flex_shrink_0()
+                                                .min_w(px(0.0))
+                                                .min_h(px(0.0))
+                                                // 4 linhas de 16px + py(6) — corte sempre na
+                                                // fronteira da linha, nunca no meio do glifo.
+                                                .max_h(px(76.0))
+                                                .flex()
+                                                .flex_col()
+                                                .overflow_y_scroll()
+                                                .bg(gpui::rgba(0x2a3942ff))
+                                                .rounded_full()
+                                                .px(px(12.0))
+                                                .py(px(6.0))
+                                                .cursor_text()
+                                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                    this.poke(cx);
+                                                    this.input_active = true;
+                                                    this.caret_on = true;
+                                                    window.focus(&this.focus_handle);
+                                                    cx.notify();
+                                                }))
+                                                .child(
+                                                    // Elemento de texto em si: no GPUI, texto dentro
+                                                    // de scroll não ganha largura com w_full(), então a
+                                                    // quebra de linha exige uma largura explícita.
+                                                    div()
+                                                        .id("phone-input-content")
+                                                        .flex_shrink_0()
+                                                        .w(px(236.0))
+                                                        .whitespace_normal()
+                                                        .text_size(px(11.5))
+                                                        .line_height(px(16.0))
+                                                        .text_color(if input_text.is_empty() {
+                                                            gpui::rgba(0x8696a0ff)
+                                                        } else {
+                                                            gpui::rgba(0xe9edefff)
+                                                        })
+                                                        .child(if input_text.is_empty() {
+                                                            "Mensagem...".to_string()
+                                                        } else {
+                                                            input_text.clone()
+                                                        }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("phone-attach-btn")
+                                                .flex_shrink_0()
+                                                .cursor_pointer()
+                                                .p(px(5.0))
+                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                .hover(|s| s.text_color(gpui::rgba(0xe9edefff)))
+                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                    this.attach_file_prompt(cx);
+                                                }))
+                                                .child(icon("image", 16.0)),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("phone-send-btn")
+                                                .flex_shrink_0()
+                                                .cursor_pointer()
+                                                .size(px(32.0))
+                                                .rounded_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(gpui::rgba(0x25d366ff))
+                                                .text_color(gpui::rgba(0xffffffff))
+                                                .hover(|s| s.bg(gpui::rgba(0x20ba5cff)))
+                                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                    this.submit(cx);
+                                                }))
+                                                .child(icon("send", 14.0)),
+                                        ),
+                                )
+                                // 5. Home Bar inferior do Smartphone
+                                .child(
+                                    div()
+                                        .w_full()
+                                        // Faixa transparente: só reserva o espaço e
+                                        // posiciona a pílula. A cor e o arco vêm da
+                                        // placa absoluta (4a), que tem altura para
+                                        // honrar o raio de 42.
+                                        .h(px(46.0))
+                                        .flex()
+                                        .items_end()
+                                        .justify_center()
+                                        .pb(px(5.0))
+                                        .child(
+                                            div()
+                                                .w(px(100.0))
+                                                .h(px(3.5))
+                                                .rounded_full()
+                                                .bg(gpui::rgba(0xffffff40)),
+                                        ),
+                                ),
                         ),
                 )
             })
@@ -10298,7 +11522,14 @@ impl Render for UsamiApp {
                                                 BondTab::Bonds => render_vn_tab_bonds(bond_level, bond.as_ref(), t).into_any_element(),
                                                 BondTab::Achievements => render_vn_tab_achievements(&achievements, t).into_any_element(),
                                                 BondTab::Mood => self.render_vn_tab_mood(mood_data.as_ref(), t, cx).into_any_element(),
-                                                BondTab::Profile => render_vn_tab_profile(t).into_any_element(),
+                                                BondTab::Profile => render_vn_tab_profile(
+                                                    mood_data.as_ref(),
+                                                    mood_vis,
+                                                    self.vrm_controller.portrait_image(),
+                                                    self.prev_portrait_image.clone(),
+                                                    t,
+                                                )
+                                                .into_any_element(),
                                                 BondTab::Settings => self.render_settings_page(cx).into_any_element(),
                                             }
                                         ),

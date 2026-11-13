@@ -160,6 +160,23 @@ pub struct AgentTurnSummary {
     pub tools: Vec<String>,
 }
 
+/// Atividade ao vivo do turno do chat (`GET /api/chat/activity`).
+///
+/// O turno pode levar 10-20 s quando há ferramenta: sem esta leitura o
+/// desktop só descobre o resultado no fim e o usuário não sabe se a Usami
+/// está trabalhando ou travada.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatActivity {
+    #[serde(default)]
+    pub active: bool,
+    /// `thinking` | `tool` | `responding`
+    pub phase: Option<String>,
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    pub started_at: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub reply: String,
@@ -1059,6 +1076,35 @@ impl UsamiApiClient {
                 .map_err(map_request_error)?;
 
             Ok::<ChatResponse, String>(res)
+        });
+
+        match handle.await {
+            Ok(res) => res,
+            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        }
+    }
+
+    /// Lê a atividade ao vivo do turno (`GET /api/chat/activity`).
+    ///
+    /// Só o que a Usami está fazendo agora: `thinking` (modelo raciocinando),
+    /// `tool` (ferramenta em execução, com o nome) ou `responding`. Sem isso o
+    /// usuário fica 10-20 s sem saber se ela está trabalhando ou travada.
+    pub async fn get_chat_activity(&self) -> Result<ChatActivity, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/chat/activity", self.base_url);
+        let token = self.token.clone();
+
+        let handle = tokio_runtime().spawn(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                return Err(format!("Atividade indisponível (HTTP {status})."));
+            }
+            res.json::<ChatActivity>().await.map_err(map_request_error)
         });
 
         match handle.await {

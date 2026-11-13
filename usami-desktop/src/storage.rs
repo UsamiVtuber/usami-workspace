@@ -331,6 +331,7 @@ mod tests {
             sender: sender.into(),
             text: text.into(),
             emotion: None,
+            media: None,
         }
     }
 

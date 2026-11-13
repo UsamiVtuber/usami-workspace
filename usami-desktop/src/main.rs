@@ -790,6 +790,14 @@ struct UsamiApp {
     last_emotion: SharedString,
     show_bubble: bool,
     is_busy: bool,
+    /// Atividade ao vivo do turno em andamento (`GET /api/chat/activity`):
+    /// o que a Usami está fazendo enquanto a resposta não chegou.
+    /// `thinking` = modelo raciocinando, `tool` = ferramenta em execução
+    /// (`active_tool` traz o nome), `responding` = compondo a fala.
+    chat_activity: Option<crate::api::ChatActivity>,
+    active_tool: Option<String>,
+    /// Trava de polling da atividade: uma leitura por vez, sem empilhar.
+    activity_loading: bool,
     is_calling: bool,
     call_started_at: Option<Instant>,
     call_seconds: u64,
@@ -1126,6 +1134,12 @@ impl UsamiApp {
                                 if should_present {
                                     view.present_next_proactive(cx);
                                 }
+                                // Atividade do turno: enquanto há resposta pendente,
+                                // a cada ~1 s lemos o que a Usami está fazendo
+                                // (pensando / executando qual ferramenta).
+                                if view.is_busy && tick_counter % 2 == 0 {
+                                    view.fetch_chat_activity(cx);
+                                }
                             });
                         }
                     });
@@ -1151,6 +1165,9 @@ impl UsamiApp {
             last_emotion,
             show_bubble: true,
             is_busy: false,
+            chat_activity: None,
+            active_tool: None,
+            activity_loading: false,
             is_calling: false,
             call_started_at: None,
             call_seconds: 0,
@@ -2303,6 +2320,8 @@ impl UsamiApp {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
                             view.is_busy = false;
+                            view.chat_activity = None;
+                            view.active_tool = None;
                             view.sync_mic_gate();
                             view.poke(cx);
                             match res {
@@ -3978,6 +3997,44 @@ fn render_settings_category<E: IntoElement>(
                                 Err(error) => eprintln!("[Vínculo] indisponível: {error}"),
                             }
                             cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Lê a atividade ao vivo do turno em andamento.
+    ///
+    /// Só faz sentido enquanto `is_busy`: é o intervalo de 10-20 s em que o
+    /// usuário não sabe se a Usami está pensando, executando uma ferramenta
+    /// ou travada. `active_tool` carrega o nome da ferramenta em execução.
+    fn fetch_chat_activity(&mut self, cx: &mut Context<Self>) {
+        if !self.api_client.has_token() || self.activity_loading {
+            return;
+        }
+        self.activity_loading = true;
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let res = api.get_chat_activity().await;
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.activity_loading = false;
+                            if let Ok(activity) = res {
+                                let tool = activity.tool.clone().filter(|t| !t.is_empty());
+                                let phase = activity.phase.clone();
+                                let changed = view.active_tool != tool
+                                    || view.chat_activity.as_ref().and_then(|a| a.phase.clone()) != phase;
+                                view.active_tool = tool;
+                                view.chat_activity = if activity.active { Some(activity) } else { None };
+                                if changed {
+                                    cx.notify();
+                                }
+                            }
                         });
                     }
                 });
@@ -8851,6 +8908,26 @@ impl Render for UsamiApp {
         let viewport_h = window.viewport_size().height;
 
         let is_busy = self.is_busy;
+        // Atividade do turno em andamento: o que a Usami está fazendo AGORA
+        // (pensando / executando a ferramenta X / compondo a resposta).
+        let active_tool = self.active_tool.clone();
+        let activity_phase = self
+            .chat_activity
+            .as_ref()
+            .and_then(|a| a.phase.clone());
+        // Rótulo curto do balão de digitação: diz o que ela está fazendo,
+        // não só que está ocupada.
+        let typing_label: String = if !is_busy {
+            String::new()
+        } else if let Some(tool) = active_tool.as_deref() {
+            format!("executando {tool}...")
+        } else if activity_phase.as_deref() == Some("tool") {
+            "executando a ferramenta...".to_string()
+        } else if activity_phase.as_deref() == Some("responding") {
+            "respondendo...".to_string()
+        } else {
+            "pensando...".to_string()
+        };
         let is_calling = self.is_calling;
         let is_companion = self.is_companion_mode;
         let is_muted = self.is_muted;
@@ -8914,14 +8991,17 @@ impl Render for UsamiApp {
             )
             .into()
         } else if is_busy {
-            if let Some(turn) = self.last_agent_turn.as_ref() {
-                if turn.tools.len() > 1 {
-                    format!("EXECUTANDO · {}", turn.tools.join(" + ")).into()
-                } else if let Some(tool) = turn.tool.as_deref() {
-                    format!("EXECUTANDO · {tool}").into()
-                } else {
-                    "PENSANDO".into()
-                }
+            // A atividade ao vivo descreve o turno ATUAL. O `last_agent_turn`
+            // NÃO serve aqui: ele é preenchido só quando a resposta chega, ou
+            // seja, durante o turno ele ainda descreve o turno ANTERIOR — foi
+            // exatamente isso que fazia o desktop anunciar "EXECUTANDO · tool"
+            // enquanto ela estava apenas pensando.
+            if let Some(tool) = active_tool.as_deref() {
+                format!("EXECUTANDO · {tool}").into()
+            } else if activity_phase.as_deref() == Some("tool") {
+                "EXECUTANDO FERRAMENTA".into()
+            } else if activity_phase.as_deref() == Some("responding") {
+                "RESPONDENDO".into()
             } else {
                 "PENSANDO".into()
             }
@@ -10856,7 +10936,18 @@ impl Render for UsamiApp {
                                                                                     el.opacity(opacity)
                                                                                 },
                                                                             )
-                                                                    })),
+                                                                    }))
+                                                                    // Rótulo do que ela está fazendo agora: sem isto
+                                                                    // os três pontos não dizem se ela está pensando,
+                                                                    // executando uma ferramenta ou travada.
+                                                                    .when(!typing_label.is_empty(), |row| {
+                                                                    row.child(
+                                                                        div()
+                                                                            .text_size(px(11.0))
+                                                                            .text_color(gpui::rgba(0x8696a0ff))
+                                                                            .child(typing_label.clone()),
+                                                                    )
+                                                                }),
                                                             ),
                                                     ),
                                             )

@@ -1,10 +1,9 @@
 //! Header superior do desktop e legenda ao vivo de STT (Camadas 4 e 4b).
 
 use crate::agent_center_model::{pending_confirmations_count, pending_suggestions_count};
-use crate::model::{ActiveDrawer, BondTab};
+use crate::model::ActiveDrawer;
 use crate::theme;
 use crate::ui::widgets::icon;
-use crate::views::vn_bond::mood_visual;
 use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -24,85 +23,6 @@ impl UsamiApp {
         let show_live_caption = is_listening && !live_transcript.is_empty();
 
         let bond_level = self.bond_level;
-        let mood_data = self.mood.clone();
-        let mood_vis = mood_visual(
-            mood_data
-                .as_ref()
-                .map(|m| m.id.as_str())
-                .unwrap_or_else(|| self.last_emotion.as_ref()),
-        );
-        let mood_label: String = mood_data
-            .as_ref()
-            .map(|m| m.label.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| mood_vis.label.to_string());
-
-        let hud_portrait = if !is_idle && active_drawer != ActiveDrawer::Bond {
-            self.vrm_controller.portrait_image()
-        } else {
-            None
-        };
-        let hud_prev_slot = self.prev_portrait_image.clone();
-
-        let top_mood_badge = if active_drawer != ActiveDrawer::Bond && active_drawer != ActiveDrawer::Chat {
-            Some(
-                div()
-                    .id("top-mood-portrait")
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap(px(sp.s2))
-                    .pl(px(3.0))
-                    .pr(px(sp.s3))
-                    .py(px(3.0))
-                    .rounded_full()
-                    .bg(c.status_bg)
-                    .border_1()
-                    .border_color(c.line)
-                    .hover(|style| style.bg(c.surface_soft).border_color(c.line_strong))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.bond_tab = BondTab::Mood;
-                        this.active_drawer = ActiveDrawer::Bond;
-                        this.fetch_bond(cx);
-                        this.fetch_mood(cx);
-                        if !this.memory_loading {
-                            this.fetch_memory(cx);
-                        }
-                        this.poke(cx);
-                        cx.notify();
-                    }))
-                    .child(crate::views::vn_bond::render_lego_portrait(
-                        48.0,
-                        24.0,
-                        mood_vis.accent,
-                        hud_portrait,
-                        hud_prev_slot,
-                        mood_vis.glyph,
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .font_family(theme::FONT_DISPLAY)
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(mood_vis.accent)
-                                    .child(mood_label),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(9.0))
-                                    .text_color(c.muted)
-                                    .child("Humor da Usami"),
-                            ),
-                    ),
-            )
-        } else {
-            None
-        };
 
         div()
             // ── LAYER 4: HEADER SUPERIOR (SOME NO IDLE) ──
@@ -199,7 +119,7 @@ impl UsamiApp {
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.toggle_drawer(ActiveDrawer::Skills, cx);
                                         }))
-                                        .child(icon("folder_special", 16.0))
+                                        .child(icon("skills", 16.0))
                                         .when(agent_attention_count > 0, |parent| {
                                             parent.child(
                                                 div()
@@ -274,11 +194,13 @@ impl UsamiApp {
                                         })
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.load_settings_data(cx);
-                                            this.toggle_drawer(ActiveDrawer::Settings, cx);
+                                            this.phone_view_settings = true;
+                                            this.active_drawer = ActiveDrawer::Chat;
+                                            this.poke(cx);
+                                            cx.notify();
                                         }))
-                                        .child(icon("settings", 16.0)),
-                                )
-                                .when_some(top_mood_badge, |parent, badge| parent.child(badge)),
+                                        .child(icon("gear", 16.0)),
+                                ),
                         )
                         // Top Right: Créditos e modelo ativo
                         .child(

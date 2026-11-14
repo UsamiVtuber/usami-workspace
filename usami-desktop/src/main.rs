@@ -1,11 +1,15 @@
 pub mod agent_center_model;
 pub mod api;
+mod assets;
 pub mod audio;
+mod media;
 #[cfg(target_os = "windows")]
 mod presence;
 pub mod recorder;
 mod storage;
+mod speech;
 mod theme;
+mod text_input;
 
 use crate::agent_center_model::{
     AgentCenterTab, ExecFilter, ExecutionTone, SkillFilter, classify_execution_status,
@@ -14,15 +18,19 @@ use crate::agent_center_model::{
     pending_confirmations_count, pending_suggestions_count, permission_level_label, state_label,
     suggestion_kind_label, suggestion_status_label, summarize_executions,
 };
+use crate::assets::{asset_base_dir, asset_path, env_path, first_existing};
 use crate::api::UsamiApiClient;
 use crate::audio::AudioPlayer;
+use crate::media::AttachedMedia;
+use crate::speech::{is_duplicate_utterance, sanitize_speech_text};
+use crate::text_input::{resolve_key_char_with_dead_key, tokenize_text_spans};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -176,42 +184,6 @@ const CLOSE_FAREWELL_MAX: Duration = Duration::from_secs(10);
 /// sem falar — ou o teto rígido, para nunca travar o fechamento.
 fn farewell_can_close(elapsed: Duration, audio_done: bool, speaking: bool) -> bool {
     (elapsed >= CLOSE_FAREWELL_MIN && audio_done && !speaking) || elapsed >= CLOSE_FAREWELL_MAX
-}
-
-// Caminhos relativos à crate: o app roda de qualquer lugar do disco e continua
-// achando ícones, fundo, VRM e VRMA. Variáveis abaixo permitem apontar outra
-// instalação sem recompilar.
-fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-/// Pasta empacotada (release): `assets/` ao lado do executável. Em
-/// desenvolvimento não existe, então cai para a pasta da crate.
-fn asset_base_dir() -> &'static Path {
-    static BASE: OnceLock<PathBuf> = OnceLock::new();
-    BASE.get_or_init(|| {
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-            && dir.join("assets").is_dir()
-        {
-            return dir.to_path_buf();
-        }
-        manifest_dir()
-    })
-}
-
-fn asset_path(relative: &str) -> PathBuf {
-    asset_base_dir().join(relative)
-}
-
-fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .map(PathBuf::from)
-        .filter(|path| path.exists())
-}
-
-fn first_existing(candidates: impl IntoIterator<Item = Option<PathBuf>>) -> Option<PathBuf> {
-    candidates.into_iter().flatten().find(|path| path.exists())
 }
 
 fn icon(name: &str, size_px: f32) -> impl IntoElement {
@@ -381,252 +353,6 @@ fn save_proactive_seen_to_disk(seen: &std::collections::HashSet<String>) {
             let _ = std::fs::write(path, json);
         }
     }
-}
-
-#[derive(Clone, Debug)]
-struct AttachedMedia {
-    filename: String,
-    mime_type: String,
-    data_base64: String,
-    preview: Arc<gpui::Image>,
-    /// Caminho relativo a `data_dir()` onde o arquivo foi gravado, se já persistido.
-    stored_path: Option<String>,
-}
-
-impl AttachedMedia {
-    fn from_bytes(filename: String, mime_type: &str, bytes: Vec<u8>) -> Self {
-        let format = match mime_type {
-            "image/jpeg" | "image/jpg" => gpui::ImageFormat::Jpeg,
-            "image/webp" => gpui::ImageFormat::Webp,
-            "image/gif" => gpui::ImageFormat::Gif,
-            "image/bmp" => gpui::ImageFormat::Bmp,
-            _ => gpui::ImageFormat::Png,
-        };
-        let data_base64 = api::base64_encode(&bytes);
-        let preview = Arc::new(gpui::Image::from_bytes(format, bytes));
-        Self {
-            filename,
-            mime_type: mime_type.into(),
-            data_base64,
-            preview,
-            stored_path: None,
-        }
-    }
-}
-
-fn is_dead_accent_char(c: char) -> bool {
-    matches!(c, '´' | '`' | '^' | '~' | '¨')
-}
-
-fn compose_dead_accent(accent: char, base: char) -> Option<char> {
-    match (accent, base) {
-        ('´', 'a') => Some('á'),
-        ('´', 'e') => Some('é'),
-        ('´', 'i') => Some('í'),
-        ('´', 'o') => Some('ó'),
-        ('´', 'u') => Some('ú'),
-        ('´', 'y') => Some('ý'),
-        ('´', 'c') => Some('ç'),
-        ('´', 'A') => Some('Á'),
-        ('´', 'E') => Some('É'),
-        ('´', 'I') => Some('Í'),
-        ('´', 'O') => Some('Ó'),
-        ('´', 'U') => Some('Ú'),
-        ('´', 'Y') => Some('Ý'),
-        ('´', 'C') => Some('Ç'),
-        ('`', 'a') => Some('à'),
-        ('`', 'e') => Some('è'),
-        ('`', 'i') => Some('ì'),
-        ('`', 'o') => Some('ò'),
-        ('`', 'u') => Some('ù'),
-        ('`', 'A') => Some('À'),
-        ('`', 'E') => Some('È'),
-        ('`', 'I') => Some('Ì'),
-        ('`', 'O') => Some('Ò'),
-        ('`', 'U') => Some('Ù'),
-        ('^', 'a') => Some('â'),
-        ('^', 'e') => Some('ê'),
-        ('^', 'i') => Some('î'),
-        ('^', 'o') => Some('ô'),
-        ('^', 'u') => Some('û'),
-        ('^', 'A') => Some('Â'),
-        ('^', 'E') => Some('Ê'),
-        ('^', 'I') => Some('Î'),
-        ('^', 'O') => Some('Ô'),
-        ('^', 'U') => Some('Û'),
-        ('~', 'a') => Some('ã'),
-        ('~', 'o') => Some('õ'),
-        ('~', 'n') => Some('ñ'),
-        ('~', 'A') => Some('Ã'),
-        ('~', 'O') => Some('Õ'),
-        ('~', 'N') => Some('Ñ'),
-        ('¨', 'a') => Some('ä'),
-        ('¨', 'e') => Some('ë'),
-        ('¨', 'i') => Some('ï'),
-        ('¨', 'o') => Some('ö'),
-        ('¨', 'u') => Some('ü'),
-        ('¨', 'y') => Some('ÿ'),
-        ('¨', 'A') => Some('Ä'),
-        ('¨', 'E') => Some('Ë'),
-        ('¨', 'I') => Some('Ï'),
-        ('¨', 'O') => Some('Ö'),
-        ('¨', 'U') => Some('Ü'),
-        _ => None,
-    }
-}
-
-fn resolve_key_char_with_dead_key(
-    pending_dead_key: &mut Option<char>,
-    ch: &str,
-) -> Option<String> {
-    let mut chars = ch.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return None,
-    };
-
-    if chars.next().is_none() {
-        if let Some(dead) = pending_dead_key.take() {
-            if first == dead {
-                return Some(dead.to_string());
-            } else if let Some(composed) = compose_dead_accent(dead, first) {
-                return Some(composed.to_string());
-            } else if !first.is_ascii() {
-                return Some(first.to_string());
-            } else if first == ' ' {
-                return Some(dead.to_string());
-            } else {
-                let mut s = String::with_capacity(8);
-                s.push(dead);
-                s.push(first);
-                return Some(s);
-            }
-        }
-
-        if is_dead_accent_char(first) {
-            *pending_dead_key = Some(first);
-            return None;
-        }
-
-        return Some(first.to_string());
-    }
-
-    let mut out = String::new();
-    if let Some(dead) = pending_dead_key.take() {
-        if !ch.starts_with(dead) {
-            out.push(dead);
-        }
-    }
-    out.push_str(ch);
-    Some(out)
-}
-
-#[cfg(test)]
-fn push_key_char_with_dead_key(
-    input_text: &mut String,
-    pending_dead_key: &mut Option<char>,
-    ch: &str,
-) {
-    if let Some(inserted) = resolve_key_char_with_dead_key(pending_dead_key, ch) {
-        input_text.push_str(&inserted);
-    }
-}
-
-#[derive(Clone, Debug)]
-struct TextSpanToken {
-    start_char_idx: usize,
-    text: String,
-    is_whitespace: bool,
-}
-
-fn tokenize_text_spans(text: &str) -> Vec<TextSpanToken> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut start_idx = 0;
-    let mut in_ws = false;
-
-    for (idx, ch) in text.chars().enumerate() {
-        let is_ws = ch.is_whitespace();
-        if current.is_empty() {
-            in_ws = is_ws;
-            start_idx = idx;
-            current.push(ch);
-        } else if is_ws == in_ws {
-            current.push(ch);
-        } else {
-            tokens.push(TextSpanToken {
-                start_char_idx: start_idx,
-                text: current,
-                is_whitespace: in_ws,
-            });
-            current = String::new();
-            start_idx = idx;
-            in_ws = is_ws;
-            current.push(ch);
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(TextSpanToken {
-            start_char_idx: start_idx,
-            text: current,
-            is_whitespace: in_ws,
-        });
-    }
-    tokens
-}
-
-fn normalize_utterance_key(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
-}
-
-fn is_duplicate_utterance(
-    last_commit: &mut Option<(String, Instant)>,
-    text: &str,
-    now: Instant,
-) -> bool {
-    let key = normalize_utterance_key(text);
-    if key.is_empty() {
-        return true;
-    }
-    if let Some((prev_key, prev_at)) = last_commit {
-        if *prev_key == key && now.saturating_duration_since(*prev_at) < Duration::from_secs(5) {
-            return true;
-        }
-    }
-    *last_commit = Some((key, now));
-    false
-}
-
-/// Sanitiza o texto de fala da Usami para a interface de diálogo,
-/// garantindo que tags técnicas (`[intimate_shy]`, `[blush]`, etc.)
-/// e sobras de animações não vazem no balão de fala da Visual Novel.
-fn sanitize_speech_text(text: &str) -> String {
-    let mut cleaned = String::new();
-    let mut in_bracket = false;
-    for ch in text.chars() {
-        if ch == '[' {
-            in_bracket = true;
-            continue;
-        }
-        if ch == ']' {
-            in_bracket = false;
-            continue;
-        }
-        if !in_bracket {
-            cleaned.push(ch);
-        }
-    }
-    if let Some(pos) = cleaned.find("-prefab_") {
-        if let Some(start) =
-            cleaned[..pos].rfind(|c: char| c.is_ascii_digit() || c == ' ' || c == ',')
-        {
-            cleaned.truncate(start);
-        }
-    }
-    cleaned.trim().to_string()
 }
 
 struct UsamiApp {
@@ -11534,11 +11260,10 @@ mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
-        ProactivityConfig, asset_path, farewell_can_close, first_existing, is_duplicate_utterance,
-        manifest_dir, mood_preset_options, mood_visual, normalize_utterance_key,
-        push_key_char_with_dead_key, relative_when_at, vn_history_tag,
+        ProactivityConfig, farewell_can_close, mood_preset_options, mood_visual,
+        relative_when_at, vn_history_tag,
     };
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     #[test]
     fn history_time_and_tags_reflect_the_core_log() {
@@ -11566,71 +11291,6 @@ mod tests {
     }
 
     #[test]
-    fn dead_key_accent_does_not_duplicate_when_os_sends_precomposed_vowel() {
-        let mut text = String::from("olha voce a");
-        let mut pending = None;
-
-        // No GPUI Windows, pressionar '´' envia Some("´") e pressionar 'i' em seguida
-        // envia Some("í") já composto pelo kernel (ToUnicode flag 1<<2).
-        push_key_char_with_dead_key(&mut text, &mut pending, "´");
-        assert_eq!(text, "olha voce a");
-        assert_eq!(pending, Some('´'));
-
-        push_key_char_with_dead_key(&mut text, &mut pending, "í");
-        assert_eq!(text, "olha voce aí");
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn dead_key_accent_composes_when_os_sends_raw_ascii_vowel() {
-        let mut text = String::new();
-        let mut pending = None;
-
-        push_key_char_with_dead_key(&mut text, &mut pending, "~");
-        push_key_char_with_dead_key(&mut text, &mut pending, "a");
-        push_key_char_with_dead_key(&mut text, &mut pending, "o");
-        assert_eq!(text, "ão");
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn dead_key_accent_preserves_accent_before_non_composable_consonant() {
-        let mut text = String::new();
-        let mut pending = None;
-
-        push_key_char_with_dead_key(&mut text, &mut pending, "´");
-        push_key_char_with_dead_key(&mut text, &mut pending, "x");
-        assert_eq!(text, "´x");
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn icon_paths_resolve_from_crate_dir() {
-        let path = asset_path("assets/icons/chat.svg");
-        assert!(path.is_absolute());
-        assert!(path.starts_with(manifest_dir()));
-        assert!(path.exists(), "ícone esperado em {}", path.display());
-    }
-
-    #[test]
-    fn first_existing_skips_missing_candidates() {
-        let dir =
-            std::env::temp_dir().join(format!("usami-desktop-path-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("cria diretório temporário");
-        let missing = dir.join("missing.png");
-        let present = dir.join("present.png");
-        std::fs::write(&present, b"x").expect("cria arquivo de teste");
-
-        assert_eq!(
-            first_existing([Some(missing.clone()), Some(present.clone())]),
-            Some(present)
-        );
-        assert_eq!(first_existing([Some(missing), None]), None);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn proactivity_config_serializes_and_defaults_enabled() {
         let json = r#"{"enabled":false}"#;
         let cfg: ProactivityConfig = serde_json::from_str(json).unwrap();
@@ -11641,32 +11301,6 @@ mod tests {
 
         let serialized = serde_json::to_string(&cfg).unwrap();
         assert!(serialized.contains(r#""enabled":false"#));
-    }
-
-    #[test]
-    fn duplicate_utterance_within_five_seconds_is_dropped() {
-        let mut last = None;
-        let t0 = Instant::now();
-        assert!(!is_duplicate_utterance(&mut last, "Oi, tudo bem?", t0));
-        assert_eq!(normalize_utterance_key("Oi, tudo bem?"), "oitudobem");
-        // Mesmas palavras sem pontuação 3s depois -> descartado
-        assert!(is_duplicate_utterance(
-            &mut last,
-            "oi tudo bem",
-            t0 + Duration::from_secs(3)
-        ));
-        // Palavras diferentes -> aceito
-        assert!(!is_duplicate_utterance(
-            &mut last,
-            "Oi, tudo bem sim!",
-            t0 + Duration::from_secs(3)
-        ));
-        // Mesmas palavras 6s depois -> aceito novamente
-        assert!(!is_duplicate_utterance(
-            &mut last,
-            "oi tudo bem sim",
-            t0 + Duration::from_secs(9)
-        ));
     }
 
     #[test]

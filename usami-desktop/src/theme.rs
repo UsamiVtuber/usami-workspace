@@ -91,8 +91,6 @@ pub struct Palette {
     pub line: Rgba,
     /// `--line-strong` (22%).
     pub line_strong: Rgba,
-    /// `--line-glow` (35%).
-    pub line_glow: Rgba,
     /// `--muted` (66%).
     pub muted: Rgba,
     /// `--faint` (55%).
@@ -103,10 +101,6 @@ pub struct Palette {
     pub icon_bg_hover: Rgba,
     pub icon_bg_active: Rgba,
     pub status_bg: Rgba,
-    pub bubble_bg: Rgba,
-    pub chat_bg: Rgba,
-    pub chat_turn_bg: Rgba,
-    pub chat_user_border: Rgba,
     pub overlay_top: Rgba,
     pub overlay_bottom: Rgba,
     pub companion_overlay: Rgba,
@@ -148,7 +142,6 @@ impl Palette {
             err: rgb(0xff6b7a),
             line: rgba(0xf6eaf31f),
             line_strong: rgba(0xf6eaf338),
-            line_glow: rgba(0xf052b559),
             muted: rgba(0xf6eaf3a8),
             faint: rgba(0xf6eaf38c),
 
@@ -157,10 +150,6 @@ impl Palette {
             icon_bg_hover: rgba(0xf052b538),
             icon_bg_active: rgba(0xf052b559),
             status_bg: rgba(0x100819d1),
-            bubble_bg: rgba(0x100819d9),
-            chat_bg: rgba(0x100819d1),
-            chat_turn_bg: rgba(0x2a1540d9),
-            chat_user_border: rgba(0xf5c3e140),
             overlay_top: rgba(0x1008198c),
             overlay_bottom: rgba(0x100819b8),
             companion_overlay: rgba(0x1008199e),
@@ -220,7 +209,6 @@ pub struct Typography {
     pub h3: f32,
     pub input: f32,
     pub bubble: f32,
-    pub empty_title: f32,
 }
 
 impl Typography {
@@ -232,7 +220,6 @@ impl Typography {
             h3: 13.5,
             input: 14.5,
             bubble: 16.0,
-            empty_title: 20.0,
         }
     }
 }
@@ -273,8 +260,6 @@ pub struct Radii {
     pub sm: f32,
     pub md: f32,
     pub lg: f32,
-    pub xl: f32,
-    pub sheet: f32,
     pub composer: f32,
 }
 
@@ -284,8 +269,6 @@ impl Radii {
             sm: 9.0,
             md: 12.0,
             lg: 16.0,
-            xl: 20.0,
-            sheet: 26.0,
             composer: 28.0,
         }
     }
@@ -295,11 +278,8 @@ impl Radii {
 pub struct Shadows {
     pub composer: Vec<BoxShadow>,
     pub composer_focus: Vec<BoxShadow>,
-    pub bubble: Vec<BoxShadow>,
-    pub panel: Vec<BoxShadow>,
     pub pill: Vec<BoxShadow>,
     pub drawer: Vec<BoxShadow>,
-    pub sheet: Vec<BoxShadow>,
     pub send: Vec<BoxShadow>,
     pub vn_modal: Vec<BoxShadow>,
     pub vn_card: Vec<BoxShadow>,
@@ -308,7 +288,6 @@ pub struct Shadows {
 impl Shadows {
     fn official(palette: &Palette) -> Self {
         let pink = palette.primary;
-        let accent = palette.accent;
         let black = rgb(0x000000);
         Self {
             composer: vec![
@@ -319,20 +298,8 @@ impl Shadows {
                 shadow_of(black, 0.6, 0.0, 16.0, 45.0),
                 shadow_of(pink, 0.2, 0.0, 0.0, 20.0),
             ],
-            bubble: vec![
-                shadow_of(black, 0.55, 0.0, 20.0, 50.0),
-                shadow_of(pink, 0.14, 0.0, 0.0, 30.0),
-            ],
-            panel: vec![
-                shadow_of(black, 0.7, 0.0, 24.0, 60.0),
-                shadow_of(pink, 0.12, 0.0, 0.0, 25.0),
-            ],
             pill: vec![shadow_of(black, 0.35, 0.0, 8.0, 24.0)],
             drawer: vec![shadow_of(black, 0.75, -20.0, 0.0, 70.0)],
-            sheet: vec![
-                shadow_of(black, 0.6, 0.0, 30.0, 80.0),
-                shadow_of(accent, 0.22, 0.0, 0.0, 40.0),
-            ],
             send: vec![shadow_of(pink, 0.4, 0.0, 0.0, 14.0)],
             vn_modal: vec![
                 shadow_of(black, 0.75, 0.0, 32.0, 90.0),
@@ -393,17 +360,8 @@ impl Theme {
         Self::gradient(135.0, self.color.accent, self.color.lavender)
     }
 
-    pub fn bond_sheet_bg(&self) -> Background {
-        Self::gradient(160.0, rgba(0x2a1540f0), rgba(0x100819f5))
-    }
-
     pub fn stage_overlay(&self) -> Background {
         Self::gradient(180.0, self.color.overlay_top, self.color.overlay_bottom)
-    }
-
-    /// `linear-gradient(90deg, transparent 30%, rgba(16,8,25,.55) 70%)`
-    pub fn bond_scrim_bg(&self) -> Background {
-        Self::gradient(90.0, rgba(0x10081900), rgba(0x1008198c))
     }
 
     /// Fundo com gradiente ametista profundo característico de Visual Novel de Romance

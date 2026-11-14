@@ -137,3 +137,4 @@ pub(crate) fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<Chat
         media,
     })
 }
+

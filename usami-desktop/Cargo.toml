@@ -27,3 +27,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[profile.dev]
+# Reduz o tempo de link de 10+ minutos para ~15 segundos no Windows
+# e o consumo de RAM do link.exe de 4 GB para ~300 MB, mantendo
+# o rastreamento de arquivo e linha (file:line) em panics.
+debug = 1

@@ -15,6 +15,7 @@ mod memory_personality;
 mod bond;
 mod proactive;
 mod input_editor;
+mod lifecycle;
 mod views;
 mod voice;
 mod text_input;
@@ -39,29 +40,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-fn window_minimized_or_hidden() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        presence::app_is_minimized_or_hidden()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
-const CLOSE_FAREWELL_MIN: Duration = Duration::from_millis(1200);
-const CLOSE_FAREWELL_MAX: Duration = Duration::from_secs(10);
-
-/// A janela só sai depois da despedida: mínimo legível, áudio terminado e avatar
-/// sem falar — ou o teto rígido, para nunca travar o fechamento.
-fn farewell_can_close(elapsed: Duration, audio_done: bool, speaking: bool) -> bool {
-    (elapsed >= CLOSE_FAREWELL_MIN && audio_done && !speaking) || elapsed >= CLOSE_FAREWELL_MAX
-}
 
 struct UsamiApp {
     focus_handle: FocusHandle,
@@ -566,7 +548,7 @@ impl UsamiApp {
     /// Sobe bandeja, atalho global e toggles. O HWND só existe depois de
     /// `open_window`, então isto roda uma vez na abertura da janela.
     #[cfg(target_os = "windows")]
-    fn attach_presence(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn attach_presence(&mut self, window: &Window, cx: &mut Context<Self>) {
         presence::start(window);
         self.presence_subscription = Some(cx.on_window_closed(|_| presence::shutdown()));
     }
@@ -613,280 +595,12 @@ impl UsamiApp {
         storage::save_conversation(&stored_turns(&self.chat_history));
     }
 
-    fn persist_prefs(&mut self) {
+    pub(crate) fn persist_prefs(&mut self) {
         self.prefs.muted = self.is_muted;
         storage::save_prefs(&self.prefs);
         self.last_prefs_save = Instant::now();
     }
 
-    /// Observa foco e geometria da janela: o foco alimenta o estado ausente e a
-    /// geometria é lembrada entre sessões (a gravação é adiada para não escrever
-    /// um JSON a cada pixel arrastado).
-    fn attach_window_observers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let bounds_subscription = cx.observe_window_bounds(window, |view, window, cx| {
-            let bounds = window.bounds();
-            view.prefs.window = Some(storage::WindowPrefs {
-                x: f32::from(bounds.origin.x),
-                y: f32::from(bounds.origin.y),
-                width: f32::from(bounds.size.width),
-                height: f32::from(bounds.size.height),
-            });
-            if view.last_prefs_save.elapsed() >= Duration::from_secs(2) {
-                view.persist_prefs();
-            }
-            let maximized = window.is_maximized();
-            if maximized != view.was_maximized {
-                view.was_maximized = maximized;
-                if maximized
-                    && !view.is_away
-                    && view.last_maximize_line.elapsed() >= Duration::from_secs(900)
-                {
-                    view.last_maximize_line = Instant::now();
-                    view.show_local_line(
-                        "Tela grande, hein? Vou fingir que não percebi que você quis me ver maior.",
-                        "tsundere",
-                        cx,
-                    );
-                }
-            }
-        });
-        let activation_subscription = cx.observe_window_activation(window, |view, window, cx| {
-            view.window_focused = window.is_window_active();
-            view.refresh_away_state(cx);
-        });
-        self.window_subscriptions.push(bounds_subscription);
-        self.window_subscriptions.push(activation_subscription);
-
-        // Fechar (X, Alt+F4 ou "Sair" da bandeja) pede a despedida antes de
-        // sair; o próprio app conclui o fechamento quando ela termina.
-        let close_view = cx.weak_entity();
-        window.on_window_should_close(cx, move |_window, cx| {
-            close_view
-                .update(cx, |this, cx| this.request_close(cx))
-                .unwrap_or(true)
-        });
-        // Sem um resize inicial o observador não dispara; guardar a geometria
-        // atual já garante que o fechamento salve a janela do primeiro uso.
-        let bounds = window.bounds();
-        self.prefs.window = Some(storage::WindowPrefs {
-            x: f32::from(bounds.origin.x),
-            y: f32::from(bounds.origin.y),
-            width: f32::from(bounds.size.width),
-            height: f32::from(bounds.size.height),
-        });
-        self.window_focused = window.is_window_active();
-        self.was_maximized = window.is_maximized();
-    }
-
-    fn default_status(&self) -> SharedString {
-        if self.is_calling {
-            "SUA VEZ".into()
-        } else if self.is_companion_mode {
-            "MODO COMPANION".into()
-        } else {
-            "COM VOCÊ".into()
-        }
-    }
-
-    /// Ausência é imediata: minimizar, esconder ou perder o foco já marca
-    /// AUSENTE. Chamada e modo companhia são exceções — nessas horas o app pode
-    /// ficar em segundo plano sem que ela "sinta" a ausência.
-    fn refresh_away_state(&mut self, cx: &mut Context<Self>) {
-        let exempt = self.is_calling || self.sleep_companion_started_at.is_some();
-        let away = !exempt && (window_minimized_or_hidden() || !self.window_focused);
-        if away == self.is_away {
-            return;
-        }
-        self.is_away = away;
-        if away {
-            self.away_since = Some(Instant::now());
-            self.status_text = "AUSENTE".into();
-            // Eventos já buscados não devem falar quando ela voltar: o próximo
-            // poll, com activity=away, consome e marca como pulados.
-            self.proactive_queue.clear();
-        } else {
-            let away_for = self
-                .away_since
-                .take()
-                .map(|since| since.elapsed())
-                .unwrap_or_default();
-            self.status_text = self.default_status();
-            self.show_return_greeting(away_for, cx);
-        }
-        cx.notify();
-    }
-
-    fn show_return_greeting(&mut self, away_for: Duration, cx: &mut Context<Self>) {
-        if away_for < Duration::from_secs(60)
-            || self.last_return_greeting.elapsed() < Duration::from_secs(300)
-            || self.is_busy
-            || self.vrm_controller.is_speaking()
-        {
-            return;
-        }
-        let line = if away_for >= Duration::from_secs(30 * 60) {
-            "Você ficou fora bastante tempo... eu fiquei aqui, sabia? Fico feliz que voltou."
-        } else if away_for >= Duration::from_secs(5 * 60) {
-            "Onde você foi? Não é como se eu estivesse esperando... mas pronto, você voltou."
-        } else {
-            "Você voltou rapidinho. Eu nem tive tempo de sentir sua falta."
-        };
-        self.last_return_greeting = Instant::now();
-        self.show_local_line(line, "tsundere", cx);
-    }
-
-    /// Fala curta da própria Usami (sem backend): entrada no histórico, balão e
-    /// emoção. Usada pelas despedidas/boas-vindas e pelas provocações de inatividade.
-    fn show_local_line(
-        &mut self,
-        text: &'static str,
-        emotion: &'static str,
-        cx: &mut Context<Self>,
-    ) {
-        self.last_reply = text.into();
-        self.last_emotion = emotion.into();
-        self.show_bubble = true;
-        self.vrm_controller
-            .set_emotion_with_options(emotion, 4.0, false);
-        self.push_history(ChatMessage {
-            sender: Sender::Usami,
-            text: text.to_string(),
-            emotion: Some(emotion.to_string()),
-            tool_badge: None,
-            time_str: Some(current_phone_time()),
-            media: None,
-        });
-        self.poke(cx);
-        cx.notify();
-    }
-
-    /// Primeira tentativa de fechar segura a janela para a despedida; a segunda
-    /// (ou depois de liberado) deixa sair na hora — quem insiste consegue.
-    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.close_allowed || self.farewell_started_at.is_some() {
-            self.close_allowed = true;
-            return true;
-        }
-        self.begin_farewell(cx);
-        false
-    }
-
-    fn begin_farewell(&mut self, cx: &mut Context<Self>) {
-        const LINE: &str = "Hmph... já vai embora? T-tá bom, vai... mas não demora pra voltar, tá?! Ainda tenho umas coisas pra te contar.";
-        self.farewell_started_at = Some(Instant::now());
-        self.show_local_line(LINE, "tsundere", cx);
-
-        if self.is_muted {
-            self.farewell_audio_done.store(true, Ordering::SeqCst);
-            return;
-        }
-        let Some(player) = self.audio_player.clone() else {
-            self.farewell_audio_done.store(true, Ordering::SeqCst);
-            return;
-        };
-
-        let api = Arc::clone(&self.api_client);
-        let vrm_ctrl = self.vrm_controller.clone();
-        let done = Arc::clone(&self.farewell_audio_done);
-        crate::api::tokio_runtime().spawn(async move {
-            match api.stream_tts(LINE, "tsundere").await {
-                Ok(crate::api::TtsStream::Pcm {
-                    sample_rate,
-                    mut response,
-                }) => {
-                    let mouth = vrm_ctrl.clone();
-                    let mut sink = player.play_pcm_stream(sample_rate, move |level| {
-                        mouth.set_speaking(true, level);
-                    });
-                    let mut started = false;
-                    loop {
-                        match response.chunk().await {
-                            Ok(Some(chunk)) => {
-                                if sink.push_i16_le(&chunk) && !started {
-                                    started = true;
-                                    vrm_ctrl.begin_speech_stream();
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(error) => {
-                                eprintln!("[Despedida TTS] stream interrompido: {error}");
-                                break;
-                            }
-                        }
-                    }
-                    let tail = sink.finish();
-                    if started {
-                        let deadline = Instant::now() + Duration::from_secs(15);
-                        while !tail.is_drained() && Instant::now() < deadline {
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                        }
-                        vrm_ctrl.end_speech_stream();
-                    }
-                }
-                Ok(crate::api::TtsStream::Audio(bytes)) => {
-                    vrm_ctrl.speak(LINE, Some(bytes.clone()));
-                    if let Err(error) = player.play_wav(bytes) {
-                        eprintln!("[Despedida TTS] falha ao tocar áudio: {error}");
-                    }
-                }
-                Err(error) => eprintln!("[Despedida TTS] falha: {error:?}"),
-            }
-            done.store(true, Ordering::SeqCst);
-        });
-    }
-
-    fn tick_close_request(&mut self, cx: &mut Context<Self>) {
-        let Some(started) = self.farewell_started_at else {
-            return;
-        };
-        let audio_done = self.farewell_audio_done.load(Ordering::SeqCst);
-        if !farewell_can_close(
-            started.elapsed(),
-            audio_done,
-            self.vrm_controller.is_speaking(),
-        ) {
-            return;
-        }
-        self.close_allowed = true;
-        if let Some(handle) = cx.windows().first().copied() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-        }
-    }
-
-    /// Sem interação e sem fala há alguns minutos, ela chama atenção em vez de
-    /// ficar em silêncio para sempre. Só roda com a janela em primeiro plano:
-    /// com o app ausente quem fala é a despedida/boas-vindas.
-    fn maybe_run_idle_prods(&mut self, cx: &mut Context<Self>) {
-        if self.is_away
-            || self.is_calling
-            || self.sleep_companion_started_at.is_some()
-            || self.is_busy
-            || self.vrm_controller.is_speaking()
-        {
-            return;
-        }
-        const PRODS: [(u64, &str); 3] = [
-            (
-                210,
-                "Ei... você tá aí? Pode ficar quieto, mas eu prefiro quando você fala comigo.",
-            ),
-            (
-                420,
-                "Hmph. Se você não tem nada pra dizer, eu também não vou ficar puxando assunto.",
-            ),
-            (600, "Já faz um tempinho... tá tudo bem aí?"),
-        ];
-        let idle = self.last_user_activity.elapsed().as_secs();
-        let Some((_, line)) = PRODS
-            .get(self.idle_prods as usize)
-            .copied()
-            .filter(|(threshold, _)| idle >= *threshold)
-        else {
-            return;
-        };
-        self.idle_prods += 1;
-        self.show_local_line(line, "tsundere", cx);
-    }
 
 
     fn attach_file_prompt(&mut self, cx: &mut Context<Self>) {
@@ -4119,25 +3833,5 @@ fn main() {
         )
         .unwrap();
     });
-}
-
-#[cfg(test)]
-mod tests {
-    // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
-    // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
-    use super::{
-        farewell_can_close,
-    };
-    use std::time::Duration;
-
-    #[test]
-    fn farewell_holds_close_until_audio_ends_or_timeout() {
-        use super::{CLOSE_FAREWELL_MAX, CLOSE_FAREWELL_MIN};
-        assert!(!farewell_can_close(Duration::ZERO, false, false));
-        assert!(!farewell_can_close(CLOSE_FAREWELL_MIN, false, false));
-        assert!(!farewell_can_close(CLOSE_FAREWELL_MIN, true, true));
-        assert!(farewell_can_close(CLOSE_FAREWELL_MIN, true, false));
-        assert!(farewell_can_close(CLOSE_FAREWELL_MAX, false, true));
-    }
 }
 

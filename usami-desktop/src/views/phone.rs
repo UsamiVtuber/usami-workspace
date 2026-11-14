@@ -489,7 +489,7 @@ impl UsamiApp {
                                                 ),
                                         )
                                     })
-                                    .children(turns.into_iter().map(|msg| {
+                                    .children(turns.clone().into_iter().map(|msg| {
                                         let is_user = msg.sender == Sender::User;
                                         let time = msg.time_str.as_deref().unwrap_or("agora");
 
@@ -922,6 +922,7 @@ impl UsamiApp {
                                 // Grupo 1: Notificações & Proatividade
                                 .child(
                                     div()
+                                        .id("btn-settings-proactive")
                                         .p(px(12.0))
                                         .rounded(px(16.0))
                                         .bg(gpui::rgba(0x182229ff))
@@ -931,7 +932,7 @@ impl UsamiApp {
                                         .hover(|s| s.bg(gpui::rgba(0x1f2c34ff)))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.poke(cx);
-                                            this.set_proactive_enabled(!this.proactive_enabled);
+                                            this.set_proactive_enabled(!this.proactive_enabled, cx);
                                             cx.notify();
                                         }))
                                         .flex()
@@ -991,6 +992,7 @@ impl UsamiApp {
                                 // Grupo 2: Voz & Microfone
                                 .child(
                                     div()
+                                        .id("btn-settings-audio")
                                         .p(px(12.0))
                                         .rounded(px(16.0))
                                         .bg(gpui::rgba(0x182229ff))
@@ -1123,6 +1125,7 @@ impl UsamiApp {
                                 // Grupo 4: Central de Vínculo VN & Diário
                                 .child(
                                     div()
+                                        .id("btn-settings-bond")
                                         .p(px(12.0))
                                         .rounded(px(16.0))
                                         .bg(gpui::rgba(0x182229ff))

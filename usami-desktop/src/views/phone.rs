@@ -7,11 +7,11 @@
 //! animação suave de digitação e barra de mensagem com alternância de microfone/envio.
 //! Além disso, inclui a tela de Configurações nativa do WhatsApp no próprio aparelho.
 
-use crate::model::{current_phone_time, ActiveDrawer, Sender};
+use crate::UsamiApp;
+use crate::model::{ActiveDrawer, Sender, current_phone_time};
 use crate::theme;
 use crate::ui::widgets::icon;
 use crate::views::vn_bond::{mood_visual, render_lego_portrait};
-use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::time::Duration;
@@ -40,10 +40,7 @@ impl UsamiApp {
         );
 
         let active_tool = self.active_tool.clone();
-        let activity_phase = self
-            .chat_activity
-            .as_ref()
-            .and_then(|a| a.phase.clone());
+        let activity_phase = self.chat_activity.as_ref().and_then(|a| a.phase.clone());
 
         let typing_label: String = if !is_busy {
             String::new()
@@ -65,6 +62,7 @@ impl UsamiApp {
         let hud_prev_slot = self.prev_portrait_image.clone();
         let turns = self.chat_history.clone();
         let phone_scroll = self.phone_scroll.clone();
+        let phone_settings_scroll = self.phone_settings_scroll.clone();
         let no_turns = turns.is_empty();
 
         let status_subtitle: SharedString = if is_busy {
@@ -140,6 +138,7 @@ impl UsamiApp {
                     // ── 1. BARRA DE STATUS + DYNAMIC ISLAND ──
                     .child(
                         div()
+                            .relative()
                             .w_full()
                             .h(px(34.0))
                             .px(px(18.0))
@@ -149,15 +148,18 @@ impl UsamiApp {
                             // Horário real local à esquerda
                             .child(
                                 div()
-                                    .min_w(px(48.0))
+                                    .min_w(px(54.0))
                                     .text_size(px(12.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(gpui::rgba(0xf0f2f5ff))
                                     .child(current_phone_time()),
                             )
-                            // Dynamic Island elegante com câmera frontal e sensor
+                            // Dynamic Island elegante centralizada matematicamente na tela interna (385px de largura)
                             .child(
                                 div()
+                                    .absolute()
+                                    .top(px(7.0))
+                                    .left(px((385.0 - 104.0) / 2.0))
                                     .w(px(104.0))
                                     .h(px(20.0))
                                     .rounded_full()
@@ -185,7 +187,7 @@ impl UsamiApp {
                             // Indicadores 5G, Wi-Fi e Bateria verde à direita
                             .child(
                                 div()
-                                    .min_w(px(48.0))
+                                    .min_w(px(54.0))
                                     .flex()
                                     .items_center()
                                     .justify_end()
@@ -850,8 +852,10 @@ impl UsamiApp {
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .p(px(14.0))
+                                .pb(px(36.0))
                                 .bg(gpui::rgba(0x0b141aff))
                                 .overflow_y_scroll()
+                                .track_scroll(&phone_settings_scroll)
                                 .flex()
                                 .flex_col()
                                 .gap(px(14.0))
@@ -1204,31 +1208,20 @@ impl UsamiApp {
                                 ),
                         )
                     })
-                    // ── 4. PLACA DE ARCO INFERIOR (CANTOS CURVOS DA TELA OLED) ──
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .bottom_0()
-                            .w_full()
-                            .h(px(90.0))
-                            .rounded_bl(px(44.0))
-                            .rounded_br(px(44.0))
-                            .bg(gpui::linear_gradient(
-                                180.0,
-                                gpui::linear_color_stop(gpui::rgba(0x1f2c34ff), 0.5),
-                                gpui::linear_color_stop(gpui::rgba(0x0c1317ff), 1.0),
-                            )),
-                    )
-                    // ── 5. HOME INDICATOR BAR (BASE DO SMARTPHONE) ──
+                    // ── 4. HOME INDICATOR BAR (BASE DO SMARTPHONE) ──
                     .child(
                         div()
                             .w_full()
-                            .h(px(40.0))
+                            .h(px(18.0))
+                            .flex_shrink_0()
                             .flex()
-                            .items_end()
+                            .items_center()
                             .justify_center()
-                            .pb(px(7.0))
+                            .bg(if is_settings_view {
+                                gpui::rgba(0x0b141aff)
+                            } else {
+                                gpui::rgba(0x1f2c34ff)
+                            })
                             .child(
                                 div()
                                     .w(px(108.0))

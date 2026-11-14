@@ -93,6 +93,7 @@ struct UsamiApp {
     active_drawer: ActiveDrawer,
     /// Rolagem do chat do smartphone; abrir o painel salta para a última mensagem.
     phone_scroll: ScrollHandle,
+    phone_settings_scroll: ScrollHandle,
     phone_view_settings: bool,
     settings_advanced_open: bool,
     bond_tab: BondTab,
@@ -461,6 +462,7 @@ impl UsamiApp {
             close_subscription,
             active_drawer: ActiveDrawer::None,
             phone_scroll: ScrollHandle::new(),
+            phone_settings_scroll: ScrollHandle::new(),
             phone_view_settings: false,
             settings_advanced_open: false,
             bond_tab: BondTab::Home,

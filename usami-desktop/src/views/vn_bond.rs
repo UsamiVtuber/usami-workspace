@@ -1,10 +1,10 @@
 //! Central de Vínculo, Afeto e Diário no estilo Visual Novel de Romance ("Midnight Romance").
 
-use crate::api;
 use crate::UsamiApp;
+use crate::api;
 use crate::model::{ActiveDrawer, BondTab};
-use crate::ui::widgets::icon;
 use crate::theme;
+use crate::ui::widgets::icon;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::sync::{Arc, Mutex};
@@ -80,12 +80,7 @@ pub(crate) fn render_vn_tab_btn(
         )
         // Ornamento no estado ativo
         .when(is_active, |el| {
-            el.child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(c.pearl)
-                    .child("✦"),
-            )
+            el.child(div().text_size(px(10.0)).text_color(c.pearl).child("✦"))
         })
 }
 
@@ -111,7 +106,9 @@ pub(crate) fn format_unlocked_at(iso: &str) -> String {
     let date = iso.get(..10).unwrap_or(iso);
     let mut parts = date.split('-');
     match (parts.next(), parts.next(), parts.next()) {
-        (Some(year), Some(month), Some(day)) => format!("{day}/{month}/{}", &year[..year.len().min(4)]),
+        (Some(year), Some(month), Some(day)) => {
+            format!("{day}/{month}/{}", &year[..year.len().min(4)])
+        }
         _ => date.to_string(),
     }
 }
@@ -278,25 +275,21 @@ pub(crate) fn render_vn_tab_home(
                                 .child("Experiência"),
                         )
                         .child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .items_end()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(c.bond_track)
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(relative(exp_pct.clamp(0, 100) as f32 / 100.0))
-                                                .rounded_full()
-                                                .bg(t.vn_exp_fill_bg()),
-                                        ),
-                                ),
+                            div().flex().flex_1().items_end().child(
+                                div()
+                                    .w_full()
+                                    .h(px(6.0))
+                                    .rounded_full()
+                                    .bg(c.bond_track)
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(relative(exp_pct.clamp(0, 100) as f32 / 100.0))
+                                            .rounded_full()
+                                            .bg(t.vn_exp_fill_bg()),
+                                    ),
+                            ),
                         )
                         .child(
                             div()
@@ -608,7 +601,11 @@ pub(crate) fn relative_when_at(at_ms: i64, now_ms: i64) -> String {
     }
 }
 
-pub(crate) fn render_vn_history_item(icon: String, title: String, time: String) -> impl IntoElement {
+pub(crate) fn render_vn_history_item(
+    icon: String,
+    title: String,
+    time: String,
+) -> impl IntoElement {
     let t = theme::theme();
     div()
         .flex()
@@ -637,7 +634,6 @@ pub(crate) fn render_vn_history_item(icon: String, title: String, time: String) 
                 .child(time),
         )
 }
-
 
 /// Capítulo "Álbum de Memórias": lembranças derivadas de marcos reais do
 /// vínculo (primeiro momento, risada, voz, chamada) + resumos diários já
@@ -693,7 +689,8 @@ pub(crate) fn render_vn_tab_memories(
             memories.push((
                 "[PRÓXIMO]",
                 format!("Nv. {next} — {}", b.summary.name),
-                "Continue dividindo momentos com a Usami para desbloquear este capítulo.".to_string(),
+                "Continue dividindo momentos com a Usami para desbloquear este capítulo."
+                    .to_string(),
                 false,
                 String::new(),
             ));
@@ -805,7 +802,11 @@ pub(crate) fn render_vn_large_memory(
                     div()
                         .text_size(px(10.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(if is_unlocked { theme::Palette::vn_pink_soft() } else { t.color.muted })
+                        .text_color(if is_unlocked {
+                            theme::Palette::vn_pink_soft()
+                        } else {
+                            t.color.muted
+                        })
                         .child(if is_unlocked { tag } else { "[?]" }),
                 ),
         )
@@ -863,19 +864,19 @@ pub(crate) fn render_vn_tab_bonds(
     t: &theme::Theme,
 ) -> impl IntoElement {
     let c = t.color;
-    let (carinho, humor, companhia, carinho_pct, humor_pct, companhia_pct, level_name) =
-        match bond {
-            Some(b) => (
-                b.intimacy.carinho,
-                b.intimacy.humor,
-                b.intimacy.companhia,
-                b.meters.carinho.progress,
-                b.meters.humor.progress,
-                b.meters.companhia.progress,
-                b.summary.name.clone(),
-            ),
-            None => (0, 0, 0, 0.0, 0.0, 0.0, "—".to_string()),
-        };
+    let (carinho, humor, companhia, carinho_pct, humor_pct, companhia_pct, level_name) = match bond
+    {
+        Some(b) => (
+            b.intimacy.carinho,
+            b.intimacy.humor,
+            b.intimacy.companhia,
+            b.meters.carinho.progress,
+            b.meters.humor.progress,
+            b.meters.companhia.progress,
+            b.summary.name.clone(),
+        ),
+        None => (0, 0, 0, 0.0, 0.0, 0.0, "—".to_string()),
+    };
     let meters: [(String, u32, f32); 3] = [
         ("Carinho".to_string(), carinho, carinho_pct),
         ("Humor".to_string(), humor, humor_pct),
@@ -959,12 +960,7 @@ pub(crate) fn render_vn_tab_bonds(
                                 .flex()
                                 .justify_between()
                                 .items_center()
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(c.pearl)
-                                        .child(label),
-                                )
+                                .child(div().text_size(px(11.0)).text_color(c.pearl).child(label))
                                 .child(
                                     div()
                                         .text_size(px(10.5))
@@ -1033,9 +1029,7 @@ pub(crate) fn render_vn_tab_bonds(
                         .children(
                             history
                                 .into_iter()
-                                .map(|(tag, title, when)| {
-                                    render_vn_history_item(tag, title, when)
-                                }),
+                                .map(|(tag, title, when)| render_vn_history_item(tag, title, when)),
                         ),
                 ),
         )
@@ -1105,18 +1099,11 @@ pub(crate) fn render_vn_tab_achievements(
                 .gap(px(10.0))
                 .overflow_y_scroll()
                 .when(achievements.is_empty(), |col| {
-                    col.child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(c.muted)
-                            .child("As conquistas aparecem quando o servidor local estiver disponível."),
-                    )
+                    col.child(div().text_size(px(11.0)).text_color(c.muted).child(
+                        "As conquistas aparecem quando o servidor local estiver disponível.",
+                    ))
                 })
-                .children(
-                    achievements
-                        .iter()
-                        .map(render_vn_achievement_badge),
-                ),
+                .children(achievements.iter().map(render_vn_achievement_badge)),
         )
 }
 
@@ -1158,8 +1145,16 @@ pub(crate) fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElem
                     div()
                         .text_size(px(13.0))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(if unlocked { t.color.pearl } else { t.color.muted })
-                        .child(if unlocked { achievement_glyph(&a.icon) } else { "✧" }),
+                        .text_color(if unlocked {
+                            t.color.pearl
+                        } else {
+                            t.color.muted
+                        })
+                        .child(if unlocked {
+                            achievement_glyph(&a.icon)
+                        } else {
+                            "✧"
+                        }),
                 ),
         )
         .child(
@@ -1595,8 +1590,6 @@ pub(crate) fn render_mood_meter_row(
         )
 }
 
-
-
 impl UsamiApp {
     pub(crate) fn render_vn_tab_mood(
         &self,
@@ -1660,16 +1653,14 @@ impl UsamiApp {
                     .bg(t.vn_card_bg())
                     .border_1()
                     .border_color(theme::Palette::vn_card_border())
-                    .child(
-                        render_lego_portrait(
-                            132.0,
-                            66.0,
-                            vis.accent,
-                            portrait_img,
-                            prev_slot,
-                            vis.glyph,
-                        ),
-                    )
+                    .child(render_lego_portrait(
+                        132.0,
+                        66.0,
+                        vis.accent,
+                        portrait_img,
+                        prev_slot,
+                        vis.glyph,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -1722,8 +1713,18 @@ impl UsamiApp {
                                     .flex()
                                     .flex_col()
                                     .gap(px(6.0))
-                                    .child(render_mood_meter_row("Bom Humor", valence, vis.accent, t))
-                                    .child(render_mood_meter_row("Energia", energy, theme::Palette::vn_gold(), t))
+                                    .child(render_mood_meter_row(
+                                        "Bom Humor",
+                                        valence,
+                                        vis.accent,
+                                        t,
+                                    ))
+                                    .child(render_mood_meter_row(
+                                        "Energia",
+                                        energy,
+                                        theme::Palette::vn_gold(),
+                                        t,
+                                    ))
                                     .child(render_mood_meter_row("Carinho", warmth, c.accent, t)),
                             ),
                     ),
@@ -1742,47 +1743,39 @@ impl UsamiApp {
                             .text_color(theme::Palette::vn_pink_soft())
                             .child("TESTAR EXPRESSÃO NO AVATAR"),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(6.0))
-                            .children(mood_preset_options().iter().map(|preset| {
-                                let selected = active_emotion == preset.emotion;
-                                let p_vis = mood_visual(preset.id);
-                                let emo = preset.emotion;
-                                let reason = preset.reason;
-                                div()
-                                    .id(SharedString::from(format!("mood-preset-{}", preset.id)))
-                                    .cursor_pointer()
-                                    .px(px(10.0))
-                                    .py(px(5.0))
-                                    .rounded_full()
-                                    .text_size(px(11.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(c.pearl)
-                                    .bg(if selected {
-                                        rgba(0xf052b638)
-                                    } else {
-                                        rgba(0x22123d88)
-                                    })
-                                    .border_1()
-                                    .border_color(if selected {
-                                        p_vis.accent
-                                    } else {
-                                        c.line_strong
-                                    })
-                                    .hover(|style| {
-                                        style
-                                            .bg(c.icon_bg_hover)
-                                            .border_color(p_vis.accent)
-                                    })
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        this.trigger_mood_preview(emo, reason, cx);
-                                    }))
-                                    .child(format!("{} {}", p_vis.glyph, preset.label))
-                            })),
-                    ),
+                    .child(div().flex().flex_wrap().gap(px(6.0)).children(
+                        mood_preset_options().iter().map(|preset| {
+                            let selected = active_emotion == preset.emotion;
+                            let p_vis = mood_visual(preset.id);
+                            let emo = preset.emotion;
+                            let reason = preset.reason;
+                            div()
+                                .id(SharedString::from(format!("mood-preset-{}", preset.id)))
+                                .cursor_pointer()
+                                .px(px(10.0))
+                                .py(px(5.0))
+                                .rounded_full()
+                                .text_size(px(11.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(c.pearl)
+                                .bg(if selected {
+                                    rgba(0xf052b638)
+                                } else {
+                                    rgba(0x22123d88)
+                                })
+                                .border_1()
+                                .border_color(if selected {
+                                    p_vis.accent
+                                } else {
+                                    c.line_strong
+                                })
+                                .hover(|style| style.bg(c.icon_bg_hover).border_color(p_vis.accent))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.trigger_mood_preview(emo, reason, cx);
+                                }))
+                                .child(format!("{} {}", p_vis.glyph, preset.label))
+                        }),
+                    )),
             )
             // Linha do tempo rolável do humor
             .child(
@@ -1812,7 +1805,9 @@ impl UsamiApp {
                                 .border_color(c.line)
                                 .text_size(px(11.5))
                                 .text_color(c.muted)
-                                .child("As mudanças de humor aparecem aqui conforme vocês conversam."),
+                                .child(
+                                    "As mudanças de humor aparecem aqui conforme vocês conversam.",
+                                ),
                         )
                     })
                     .children(timeline.iter().map(|entry| {
@@ -1890,17 +1885,17 @@ impl UsamiApp {
                 .unwrap_or_else(|| self.last_emotion.as_ref()),
         );
 
-                let (bond_exp_curr, bond_exp_target, bond_exp_needed, bond_level_title, bond_is_max) =
-                    match bond.as_ref() {
-                        Some(b) => (
-                            b.summary.xp,
-                            b.summary.next.unwrap_or(b.summary.xp),
-                            b.summary.remaining,
-                            b.summary.name.clone(),
-                            b.summary.max,
-                        ),
-                        None => (0, 0, 0, "—".to_string(), false),
-                    };
+        let (bond_exp_curr, bond_exp_target, bond_exp_needed, bond_level_title, bond_is_max) =
+            match bond.as_ref() {
+                Some(b) => (
+                    b.summary.xp,
+                    b.summary.next.unwrap_or(b.summary.xp),
+                    b.summary.remaining,
+                    b.summary.name.clone(),
+                    b.summary.max,
+                ),
+                None => (0, 0, 0, "—".to_string(), false),
+            };
         div()
 .id("vn-scrim-overlay")
                         .occlude()

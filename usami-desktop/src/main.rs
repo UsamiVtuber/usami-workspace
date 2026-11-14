@@ -3,12 +3,14 @@ pub mod api;
 mod assets;
 pub mod audio;
 mod media;
+mod model;
 #[cfg(target_os = "windows")]
 mod presence;
 pub mod recorder;
 mod storage;
 mod speech;
 mod theme;
+mod ui;
 mod text_input;
 
 use crate::agent_center_model::{
@@ -22,149 +24,17 @@ use crate::assets::{asset_base_dir, asset_path, env_path, first_existing};
 use crate::api::UsamiApiClient;
 use crate::audio::AudioPlayer;
 use crate::media::AttachedMedia;
+use crate::model::{chat_message_from_stored, current_phone_time, format_tool_badge, stored_turns, ActiveDrawer, BondTab, ChatMessage, Sender, SettingsTab};
+use crate::ui::widgets::{icon, settings_code, settings_danger_button, settings_dl_row, settings_h3, settings_hint, settings_list_item, settings_p};
 use crate::speech::{is_duplicate_utterance, sanitize_speech_text};
 use crate::text_input::{resolve_key_char_with_dead_key, tokenize_text_spans};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ActiveDrawer {
-    None,
-    Chat,
-    Bond,
-    Settings,
-    Vrma,
-    Skills,
-}
-
-/// Abas do painel de configurações (mesma ordem do web).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SettingsTab {
-    Chat,
-    Voice,
-    Avatar,
-    Memory,
-    Personality,
-    About,
-}
-
-/// Capítulos do menu estilo Visual Novel ("Midnight Romance").
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BondTab {
-    Home,
-    Diary,
-    Memories,
-    Bonds,
-    Achievements,
-    Mood,
-    Profile,
-    Settings,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Sender {
-    User,
-    Usami,
-}
-
-#[derive(Clone)]
-struct ChatMessage {
-    sender: Sender,
-    text: String,
-    emotion: Option<String>,
-    tool_badge: Option<String>,
-    time_str: Option<String>,
-    media: Option<AttachedMedia>,
-}
-
-fn current_phone_time() -> String {
-    let now = std::time::SystemTime::now();
-    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let total_secs = duration.as_secs();
-    let local_secs = total_secs.saturating_sub(3 * 3600);
-    let hours = (local_secs / 3600) % 24;
-    let mins = (local_secs % 3600) / 60;
-    format!("{:02}:{:02}", hours, mins)
-}
-
-fn format_tool_badge(agent_turn: Option<&api::AgentTurnSummary>) -> Option<String> {
-    let turn = agent_turn?;
-    let status_suffix = match turn.status.as_deref() {
-        Some("executed") => "✓",
-        Some("awaiting_confirmation") => "⏳",
-        _ => "✗",
-    };
-    if turn.tools.len() > 1 {
-        let joined = turn.tools.join(" + ");
-        Some(format!("{joined} {status_suffix}"))
-    } else if let Some(tool) = turn.tool.as_deref() {
-        Some(format!("{tool} {status_suffix}"))
-    } else {
-        Some("sem skill".into())
-    }
-}
-
-fn stored_turns(turns: &[ChatMessage]) -> Vec<storage::StoredTurn> {
-    turns
-        .iter()
-        .map(|message| storage::StoredTurn {
-            sender: match message.sender {
-                Sender::User => "user".into(),
-                Sender::Usami => "usami".into(),
-            },
-            text: message.text.clone(),
-            emotion: message.emotion.clone(),
-            media: message.media.as_ref().map(|m| storage::StoredMedia {
-                filename: m.filename.clone(),
-                mime_type: m.mime_type.clone(),
-                path: m.stored_path.clone().unwrap_or_default(),
-            }),
-        })
-        .collect()
-}
-
-fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<ChatMessage> {
-    let sender = match turn.sender.as_str() {
-        "user" => Sender::User,
-        "usami" => Sender::Usami,
-        _ => return None,
-    };
-    if turn.text.is_empty() {
-        return None;
-    }
-    let media = turn.media.as_ref().and_then(|stored| {
-        let bytes = std::fs::read(storage::media_path(&stored.path)).ok()?;
-        let format = match stored.mime_type.as_str() {
-            "image/jpeg" | "image/jpg" => gpui::ImageFormat::Jpeg,
-            "image/webp" => gpui::ImageFormat::Webp,
-            "image/gif" => gpui::ImageFormat::Gif,
-            "image/bmp" => gpui::ImageFormat::Bmp,
-            _ => gpui::ImageFormat::Png,
-        };
-        let preview = Arc::new(gpui::Image::from_bytes(format, bytes.clone()));
-        Some(AttachedMedia {
-            filename: stored.filename.clone(),
-            mime_type: stored.mime_type.clone(),
-            data_base64: api::base64_encode(&bytes),
-            preview,
-            stored_path: Some(stored.path.clone()),
-        })
-    });
-    Some(ChatMessage {
-        sender,
-        text: turn.text,
-        emotion: turn.emotion,
-        tool_badge: None,
-        time_str: Some(current_phone_time()),
-        media,
-    })
-}
 
 fn window_minimized_or_hidden() -> bool {
     #[cfg(target_os = "windows")]
@@ -184,175 +54,6 @@ const CLOSE_FAREWELL_MAX: Duration = Duration::from_secs(10);
 /// sem falar — ou o teto rígido, para nunca travar o fechamento.
 fn farewell_can_close(elapsed: Duration, audio_done: bool, speaking: bool) -> bool {
     (elapsed >= CLOSE_FAREWELL_MIN && audio_done && !speaking) || elapsed >= CLOSE_FAREWELL_MAX
-}
-
-fn icon(name: &str, size_px: f32) -> impl IntoElement {
-    img(asset_path(&format!("assets/icons/{name}.svg")))
-        .size(px(size_px))
-        .flex_shrink_0()
-}
-
-// ── Peças do painel de configurações (mesmos estilos de `h3`, `p`, `.settings-hint`,
-// `code`, `.rig-actions` e `.upload` do web) ──
-
-fn settings_h3(label: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .mt(px(t.space.s6))
-        .mb(px(t.space.s2))
-        .text_size(px(t.text.h3))
-        .font_family(theme::FONT_DISPLAY)
-        .font_weight(FontWeight::BOLD)
-        .text_color(t.color.primary)
-        .child(label)
-}
-
-fn settings_p(text: impl Into<SharedString>) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .mt(px(t.space.s1_5))
-        .mb(px(t.space.s3))
-        .text_size(px(t.text.md))
-        .line_height(px(21.0))
-        .text_color(t.color.muted)
-        .child(text.into())
-}
-
-fn settings_hint(text: impl Into<SharedString>) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .mt(px(t.space.s1))
-        .text_size(px(t.text.xs))
-        .line_height(px(16.5))
-        .text_color(t.color.muted)
-        .child(text.into())
-}
-
-fn settings_code(text: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .px(px(t.space.s1_5))
-        .py(px(2.0))
-        .rounded(px(4.0))
-        .bg(t.color.surface_soft)
-        .font_family("Consolas")
-        .text_size(px(t.text.xs))
-        .text_color(t.color.pearl)
-        .child(text)
-}
-
-fn settings_danger_button(label: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .px(px(15.0))
-        .py(px(9.0))
-        .rounded(px(t.radius.sm))
-        .bg(t.color.danger_muted_bg)
-        .border_1()
-        .border_color(t.color.danger_muted_border)
-        .text_size(px(t.text.sm))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(t.color.danger_muted)
-        .opacity(0.4)
-        .child(label)
-}
-
-fn settings_dl_row(key: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .flex()
-        .justify_between()
-        .items_center()
-        .py(px(9.0))
-        .border_b_1()
-        .border_color(t.color.line)
-        .text_size(px(t.text.sm))
-        .child(div().text_color(t.color.muted).child(key))
-        .child(div().text_color(t.color.pearl).child(value.into()))
-}
-
-// Item de lista do web (`aside ul`): marcador e texto na cor do painel.
-fn settings_list_item(text: &'static str) -> impl IntoElement {
-    let t = theme::theme();
-    div()
-        .flex()
-        .items_start()
-        .gap(px(t.space.s2))
-        .mb(px(t.space.s1))
-        .text_size(px(t.text.md))
-        .line_height(px(21.0))
-        .text_color(t.color.pearl)
-        .child("•")
-        .child(div().flex_1().child(text))
-}
-
-fn proactivity_config_path() -> Option<PathBuf> {
-    std::env::var("APPDATA").ok().map(|appdata| {
-        let dir = PathBuf::from(appdata).join("Usami");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("proactivity_config.json")
-    })
-}
-
-#[derive(Serialize, Deserialize)]
-struct ProactivityConfig {
-    #[serde(default = "default_true")]
-    enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn load_proactive_config_from_disk() -> bool {
-    if let Some(path) = proactivity_config_path() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Ok(cfg) = serde_json::from_str::<ProactivityConfig>(&content) {
-                return cfg.enabled;
-            }
-        }
-    }
-    true
-}
-
-fn save_proactive_config_to_disk(enabled: bool) {
-    if let Some(path) = proactivity_config_path() {
-        let cfg = ProactivityConfig { enabled };
-        if let Ok(json) = serde_json::to_string(&cfg) {
-            let _ = std::fs::write(path, json);
-        }
-    }
-}
-
-fn proactivity_seen_path() -> Option<PathBuf> {
-    std::env::var("APPDATA").ok().map(|appdata| {
-        let dir = PathBuf::from(appdata).join("Usami");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("proactivity_seen.json")
-    })
-}
-
-fn load_proactive_seen_from_disk() -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    if let Some(path) = proactivity_seen_path() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Ok(list) = serde_json::from_str::<Vec<String>>(&content) {
-                for id in list {
-                    set.insert(id);
-                }
-            }
-        }
-    }
-    set
-}
-
-fn save_proactive_seen_to_disk(seen: &std::collections::HashSet<String>) {
-    if let Some(path) = proactivity_seen_path() {
-        let list: Vec<&String> = seen.iter().take(200).collect();
-        if let Ok(json) = serde_json::to_string(&list) {
-            let _ = std::fs::write(path, json);
-        }
-    }
 }
 
 struct UsamiApp {
@@ -807,8 +508,8 @@ impl UsamiApp {
             personality_loading: false,
             personality_error: None,
             personality_status: None,
-            proactive_enabled: load_proactive_config_from_disk(),
-            proactive_seen: load_proactive_seen_from_disk(),
+            proactive_enabled: storage::load_proactive_config(),
+            proactive_seen: storage::load_proactive_seen(),
             proactive_queue: Vec::new(),
             last_proactive_speech: Instant::now() - Duration::from_secs(300),
             last_voice_ended: Instant::now() - Duration::from_secs(300),
@@ -2167,7 +1868,7 @@ impl UsamiApp {
         let event = self.proactive_queue.remove(0);
         if let Some(dedupe_key) = &event.dedupe_key {
             self.proactive_seen.insert(dedupe_key.clone());
-            save_proactive_seen_to_disk(&self.proactive_seen);
+            storage::save_proactive_seen(&self.proactive_seen);
         }
 
         let emotion = event.emotion.clone().unwrap_or_else(|| "tsundere".into());
@@ -2290,7 +1991,7 @@ impl UsamiApp {
 
     fn set_proactive_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.proactive_enabled = enabled;
-        save_proactive_config_to_disk(enabled);
+        storage::save_proactive_config(enabled);
         if !enabled {
             self.proactive_queue.clear();
         }
@@ -11260,7 +10961,7 @@ mod tests {
     // `use gpui::*` no topo do crate traz o atributo `test` do GPUI; importar
     // só os helpers evita que `#[test]` resolva para ele e entre em recursão.
     use super::{
-        ProactivityConfig, farewell_can_close, mood_preset_options, mood_visual,
+        farewell_can_close, mood_preset_options, mood_visual,
         relative_when_at, vn_history_tag,
     };
     use std::time::Duration;
@@ -11288,19 +10989,6 @@ mod tests {
         assert!(!farewell_can_close(CLOSE_FAREWELL_MIN, true, true));
         assert!(farewell_can_close(CLOSE_FAREWELL_MIN, true, false));
         assert!(farewell_can_close(CLOSE_FAREWELL_MAX, false, true));
-    }
-
-    #[test]
-    fn proactivity_config_serializes_and_defaults_enabled() {
-        let json = r#"{"enabled":false}"#;
-        let cfg: ProactivityConfig = serde_json::from_str(json).unwrap();
-        assert!(!cfg.enabled);
-
-        let default_cfg: ProactivityConfig = serde_json::from_str("{}").unwrap();
-        assert!(default_cfg.enabled);
-
-        let serialized = serde_json::to_string(&cfg).unwrap();
-        assert!(serialized.contains(r#""enabled":false"#));
     }
 
     #[test]

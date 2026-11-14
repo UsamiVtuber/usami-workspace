@@ -318,6 +318,57 @@ pub fn mark_session_clean() {
     write_json(&path, &session);
 }
 
+// ── Proatividade (persistência de configuração e eventos vistos) ──
+
+fn proactivity_config_path() -> PathBuf {
+    data_dir().join("proactivity_config.json")
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProactivityConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn load_proactive_config() -> bool {
+    let path = proactivity_config_path();
+    if let Some(cfg) = read_json::<ProactivityConfig>(&path) {
+        return cfg.enabled;
+    }
+    true
+}
+
+pub fn save_proactive_config(enabled: bool) {
+    let path = proactivity_config_path();
+    let cfg = ProactivityConfig { enabled };
+    write_json(&path, &cfg);
+}
+
+fn proactivity_seen_path() -> PathBuf {
+    data_dir().join("proactivity_seen.json")
+}
+
+pub fn load_proactive_seen() -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let path = proactivity_seen_path();
+    if let Some(list) = read_json::<Vec<String>>(&path) {
+        for id in list {
+            set.insert(id);
+        }
+    }
+    set
+}
+
+pub fn save_proactive_seen(seen: &std::collections::HashSet<String>) {
+    let path = proactivity_seen_path();
+    let list: Vec<&String> = seen.iter().take(200).collect();
+    write_json(&path, &list);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +465,18 @@ mod tests {
             ..sane
         };
         assert!(!not_finite.is_sane());
+    }
+
+    #[test]
+    fn proactivity_config_serializes_and_defaults_enabled() {
+        let json = r#"{"enabled":false}"#;
+        let cfg: ProactivityConfig = serde_json::from_str(json).unwrap();
+        assert!(!cfg.enabled);
+
+        let default_cfg: ProactivityConfig = serde_json::from_str("{}").unwrap();
+        assert!(default_cfg.enabled);
+
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        assert!(serialized.contains(r#""enabled":false"#));
     }
 }

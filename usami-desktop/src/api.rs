@@ -128,6 +128,10 @@ pub struct ChatMessageRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub sleep_companion_active: Option<bool>,
+    #[serde(rename = "skipAgent", skip_serializing_if = "Option::is_none")]
+    pub skip_agent: Option<bool>,
+    #[serde(rename = "fastTier", skip_serializing_if = "Option::is_none")]
+    pub fast_tier: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1038,6 +1042,15 @@ impl UsamiApiClient {
         message: &str,
         sleep_companion_active: bool,
     ) -> Result<ChatResponse, String> {
+        self.send_chat_with_options(message, sleep_companion_active, false).await
+    }
+
+    pub async fn send_chat_with_options(
+        &self,
+        message: &str,
+        sleep_companion_active: bool,
+        skip_agent: bool,
+    ) -> Result<ChatResponse, String> {
         let capabilities = serde_json::json!({
             "format": "VRM",
             // Nomes reais de clipe no gpui-vrm e aceitos por GESTURE_NAMES no
@@ -1045,9 +1058,11 @@ impl UsamiApiClient {
             "gestures": ["tilt", "idle", "wave", "angry", "blush", "jump", "sad", "sleepy", "surprised", "clapping", "clap", "nod", "talking", "goodbye"],
             "expressions": [
                 "happy", "angry", "sad", "relaxed", "surprised",
-                "01-prefab_happy01", "02-prefab_happy02", "08-prefab_angry02", "12-prefab_sad01",
-                "13-prefab_sad02", "15-prefab_awkward01", "16-prefab_awkward02", "19-prefab_doubt",
-                "20-prefab_startled", "21-prefab_emoji"
+                "01-prefab_happy01", "02-prefab_happy02", "03-prefab_happy03", "04-prefab_happy04",
+                "05-prefab_happy05", "06-prefab_happy06", "07-prefab_angry01", "08-prefab_angry02",
+                "10-prefab_angry04", "11-prefab_angry05", "12-prefab_sad01", "13-prefab_sad02",
+                "14-prefab_sad03", "15-prefab_awkward01", "16-prefab_awkward02", "17-prefab_awkward03",
+                "18-prefab_awkward04", "19-prefab_doubt", "20-prefab_startled", "21-prefab_emoji"
             ],
             "sequences": true
         });
@@ -1057,6 +1072,8 @@ impl UsamiApiClient {
             capabilities: Some(capabilities),
             wake_up_jolt: None,
             sleep_companion_active: Some(sleep_companion_active),
+            skip_agent: if skip_agent { Some(true) } else { None },
+            fast_tier: if skip_agent { Some(true) } else { None },
         };
 
         let client = self.client.clone();

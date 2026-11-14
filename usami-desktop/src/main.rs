@@ -1,5 +1,6 @@
 pub mod agent_center_model;
 pub mod api;
+pub mod lol;
 mod assets;
 pub mod audio;
 mod media;
@@ -178,12 +179,30 @@ struct UsamiApp {
     agent_briefing: Option<api::DailyBriefingData>,
     agent_briefing_loading: bool,
     agent_briefing_error: Option<SharedString>,
+    lol_handle: Option<lol::LolCompanionHandle>,
+    lol_overlay_active: bool,
+    lol_manual_overlay: bool,
+    lol_click_through: bool,
+    lol_in_match: bool,
+    lol_loading: bool,
+    lol_champion: Option<String>,
+    lol_role: lol::types::PlayerRole,
+    lol_patch: Option<String>,
+    lol_game_time: f64,
+    lol_kda: (i32, i32, i32),
+    lol_cs: i32,
+    lol_last_expression: lol::types::LolExpression,
+    lol_status: SharedString,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
 }
 
 impl Drop for UsamiApp {
     fn drop(&mut self) {
+        if let Some(ref handle) = self.lol_handle {
+            handle.shutdown();
+        }
+        lol::overlay_win32::apply_overlay_styles(false, false);
         // Mantém as assinaturas de janela vivas até o app encerrar.
         self.close_subscription.take();
         #[cfg(target_os = "windows")]
@@ -414,6 +433,26 @@ impl UsamiApp {
 
         vrm_controller.set_portrait_enabled(true);
 
+        let api_client = Arc::new(UsamiApiClient::from_env());
+        let (lol_handle, mut lol_endpoint) =
+            lol::start(Arc::clone(&api_client), vrm_controller.clone());
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                while let Some(cmd) = lol_endpoint.ui_rx.recv().await {
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, cx| {
+                                view.apply_lol_command(cmd, cx);
+                            });
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
+
         Self {
             focus_handle: cx.focus_handle(),
             input_text: String::new(),
@@ -475,7 +514,7 @@ impl UsamiApp {
             bond_level: 1,
             bond_exp_pct: 0,
             bg_asset_path,
-            api_client: Arc::new(UsamiApiClient::from_env()),
+            api_client,
             audio_player: player,
             vrm_controller,
             vrm_view,
@@ -536,6 +575,20 @@ impl UsamiApp {
             agent_briefing: None,
             agent_briefing_loading: false,
             agent_briefing_error: None,
+            lol_handle: Some(lol_handle),
+            lol_overlay_active: false,
+            lol_manual_overlay: false,
+            lol_click_through: true,
+            lol_in_match: false,
+            lol_loading: false,
+            lol_champion: None,
+            lol_role: lol::types::PlayerRole::Unknown,
+            lol_patch: None,
+            lol_game_time: 0.0,
+            lol_kda: (0, 0, 0),
+            lol_cs: 0,
+            lol_last_expression: lol::types::LolExpression::Neutral,
+            lol_status: "Aguardando LoL".into(),
             #[cfg(target_os = "windows")]
             presence_subscription: None,
         }
@@ -1050,12 +1103,179 @@ impl UsamiApp {
 
 
 
+    pub(crate) fn apply_lol_command(
+        &mut self,
+        cmd: lol::ipc::LolUiCommand,
+        cx: &mut Context<Self>,
+    ) {
+        match cmd {
+            lol::ipc::LolUiCommand::MatchStateChanged {
+                in_match,
+                loading,
+                champion,
+                role,
+                patch,
+                game_time,
+                kda,
+                cs,
+            } => {
+                let was_active = self.lol_overlay_active;
+                self.lol_in_match = in_match;
+                self.lol_loading = loading;
+                self.lol_champion = champion;
+                self.lol_role = role;
+                if patch.is_some() {
+                    self.lol_patch = patch;
+                }
+                self.lol_game_time = game_time;
+                self.lol_kda = kda;
+                self.lol_cs = cs;
+
+                let should_overlay = in_match || loading || self.lol_manual_overlay;
+                self.mic_gate.set_gamer_mode(in_match || loading || self.lol_manual_overlay);
+                if should_overlay != was_active {
+                    self.lol_overlay_active = should_overlay;
+                    if should_overlay {
+                        self.active_drawer = ActiveDrawer::None;
+                        self.lol_click_through = true;
+                        if !self.is_listening {
+                            self.start_listening(cx);
+                        }
+                    } else if !self.is_calling && self.is_listening {
+                        self.stop_listening();
+                        self.mic_gate.set_gamer_mode(false);
+                    }
+                    lol::overlay_win32::apply_overlay_styles(
+                        self.lol_overlay_active,
+                        self.lol_click_through,
+                    );
+                }
+                cx.notify();
+            }
+            lol::ipc::LolUiCommand::CompanionSpeak {
+                fala,
+                expressao,
+                prioridade: _,
+                event_tag: _,
+            } => {
+                let clean = sanitize_speech_text(&fala);
+                self.last_reply = clean.clone().into();
+                self.lol_last_expression = expressao;
+                let vrm_emotion = expressao.to_vrm_emotion();
+                self.last_emotion = vrm_emotion.into();
+                self.show_bubble = true;
+                self.vrm_controller
+                    .set_emotion_with_options(vrm_emotion, 6.0, false);
+                self.play_lol_tts(&clean);
+                cx.notify();
+            }
+            lol::ipc::LolUiCommand::PollerStatus(status) => {
+                self.lol_status = status.into();
+                cx.notify();
+            }
+            lol::ipc::LolUiCommand::ToggleClickThrough => {
+                if self.lol_in_match || self.lol_loading {
+                    self.lol_click_through = !self.lol_click_through;
+                    self.lol_overlay_active = true;
+                } else {
+                    self.lol_manual_overlay = !self.lol_manual_overlay;
+                    self.lol_overlay_active = self.lol_manual_overlay;
+                    self.mic_gate.set_gamer_mode(self.lol_manual_overlay || self.lol_in_match || self.lol_loading);
+                    self.lol_click_through = true;
+                    if self.lol_overlay_active {
+                        self.active_drawer = ActiveDrawer::None;
+                        if !self.is_listening {
+                            self.start_listening(cx);
+                        }
+                    } else if !self.is_calling && self.is_listening {
+                        self.stop_listening();
+                        self.mic_gate.set_gamer_mode(false);
+                    }
+                }
+                lol::overlay_win32::apply_overlay_styles(
+                    self.lol_overlay_active,
+                    self.lol_click_through,
+                );
+                cx.notify();
+            }
+        }
+    }
+
+    fn play_lol_tts(&self, tts_text: &str) {
+        if self.is_muted || tts_text.trim().is_empty() {
+            return;
+        }
+        let Some(player) = self.audio_player.clone() else {
+            self.vrm_controller.speak(tts_text, None);
+            return;
+        };
+        let api_tts = Arc::clone(&self.api_client);
+        let vrm_ctrl = self.vrm_controller.clone();
+        let text = tts_text.to_string();
+        crate::api::tokio_runtime().spawn(async move {
+            let playback = async {
+                match api_tts.stream_tts(&text, "tsundere").await {
+                    Ok(crate::api::TtsStream::Pcm {
+                        sample_rate,
+                        mut response,
+                    }) => {
+                        let mouth = vrm_ctrl.clone();
+                        let mut sink = player.play_pcm_stream(sample_rate, move |level| {
+                            mouth.set_speaking(true, level);
+                        });
+                        let mut started = false;
+                        while let Ok(Some(chunk)) = response.chunk().await {
+                            if sink.push_i16_le(&chunk) && !started {
+                                started = true;
+                                vrm_ctrl.begin_speech_stream();
+                            }
+                        }
+                        let tail = sink.finish();
+                        while !tail.is_drained() {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        vrm_ctrl.end_speech_stream();
+                    }
+                    Ok(crate::api::TtsStream::Audio(bytes)) => {
+                        vrm_ctrl.speak(&text, Some(bytes.clone()));
+                        if let Err(error) = player.play_wav(bytes) {
+                            eprintln!("[Usami.GG TTS] falha ao tocar áudio: {error}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("[Usami.GG TTS] streaming indisponível ({error}); só legenda");
+                        vrm_ctrl.speak(&text, None);
+                    }
+                }
+            };
+
+            if tokio::time::timeout(Duration::from_secs(12), playback).await.is_err() {
+                vrm_ctrl.end_speech_stream();
+                vrm_ctrl.set_speaking(false, 0.0);
+            }
+        });
+    }
+
 }
 
 impl Render for UsamiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme::theme();
         let c = t.color;
+
+        if self.lol_overlay_active {
+            return div()
+                .relative()
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(rgba(0x00000000))
+                .text_color(c.pearl)
+                .font_family(theme::FONT_BODY)
+                .child(self.render_lol_overlay(cx))
+                .into_any_element();
+        }
+
         let viewport_h = window.viewport_size().height;
         let is_idle = self.is_ui_idle;
         let active_drawer = self.active_drawer;
@@ -1096,6 +1316,7 @@ impl Render for UsamiApp {
             .when(active_drawer == ActiveDrawer::Bond, |parent| {
                 parent.child(self.render_vn_bond_overlay(cx))
             })
+            .into_any_element()
     }
 }
 
@@ -1119,6 +1340,7 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_background: WindowBackgroundAppearance::Transparent,
                 titlebar: Some(TitlebarOptions {
                     title: Some("Usami".into()),
                     appears_transparent: false,

@@ -49,6 +49,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const HOTKEY_ID: i32 = 1;
+const HOTKEY_LOL_OVERLAY_ID: i32 = 2;
+const VK_L_KEY: u32 = 0x4C;
 const TRAY_UID: u32 = 1;
 const WINDOW_CLASS: &str = "UsamiPresenceWindow";
 const WINDOW_TITLE: &str = "Usami Presence";
@@ -168,6 +170,14 @@ fn run(app: isize, ready: Sender<Result<Ready, String>>) {
             VK_U as u32,
         )
     } != 0;
+    let _lol_hotkey = unsafe {
+        RegisterHotKey(
+            hidden,
+            HOTKEY_LOL_OVERLAY_ID,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            VK_L_KEY,
+        )
+    } != 0;
 
     unsafe {
         TASKBAR_CREATED.store(
@@ -238,6 +248,16 @@ fn window_hwnd(window: &Window) -> Option<HWND> {
 
 fn app_window() -> HWND {
     APP_WINDOW.load(Ordering::SeqCst) as HWND
+}
+
+/// Expõe o HWND da janela principal para o módulo de overlay click-through.
+pub(crate) fn app_hwnd() -> Option<HWND> {
+    let hwnd = app_window();
+    if hwnd.is_null() {
+        None
+    } else {
+        Some(hwnd)
+    }
 }
 
 /// `true` quando a janela principal está minimizada ou escondida na bandeja.
@@ -311,10 +331,15 @@ unsafe extern "system" fn window_proc(
             unsafe { toggle_window(app_window()) };
             0
         }
+        WM_HOTKEY if wparam as i32 == HOTKEY_LOL_OVERLAY_ID => {
+            crate::lol::notify_hotkey_toggle_click_through();
+            0
+        }
         WM_CLOSE => {
             unsafe {
                 remove_tray_icon(hwnd);
                 UnregisterHotKey(hwnd, HOTKEY_ID);
+                UnregisterHotKey(hwnd, HOTKEY_LOL_OVERLAY_ID);
                 DestroyWindow(hwnd);
             }
             0

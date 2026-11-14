@@ -28,6 +28,9 @@ const PARTIAL_MIN_MS: usize = 600;
 pub struct MicGate {
     user: AtomicBool,
     agent: AtomicBool,
+    gamer_mode: AtomicBool,
+    ptt_required: AtomicBool,
+    ptt_down: AtomicBool,
 }
 
 impl MicGate {
@@ -36,6 +39,9 @@ impl MicGate {
             // Começa fechado: só abre quando a escuta do modo chamada é ligada.
             user: AtomicBool::new(true),
             agent: AtomicBool::new(false),
+            gamer_mode: AtomicBool::new(false),
+            ptt_required: AtomicBool::new(false),
+            ptt_down: AtomicBool::new(false),
         }
     }
 
@@ -47,8 +53,41 @@ impl MicGate {
         self.agent.store(suspend, Ordering::Relaxed);
     }
 
+    pub fn set_gamer_mode(&self, enabled: bool) {
+        self.gamer_mode.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_gamer_mode(&self) -> bool {
+        self.gamer_mode.load(Ordering::Relaxed)
+    }
+
+    pub fn set_ptt_required(&self, required: bool) {
+        self.ptt_required.store(required, Ordering::Relaxed);
+    }
+
+    pub fn is_ptt_required(&self) -> bool {
+        self.ptt_required.load(Ordering::Relaxed)
+    }
+
+    pub fn set_ptt_down(&self, down: bool) {
+        self.ptt_down.store(down, Ordering::Relaxed);
+    }
+
+    pub fn is_ptt_down(&self) -> bool {
+        self.ptt_down.load(Ordering::Relaxed)
+    }
+
     pub fn suspended(&self) -> bool {
-        self.user.load(Ordering::Relaxed) || self.agent.load(Ordering::Relaxed)
+        if self.user.load(Ordering::Relaxed) || self.agent.load(Ordering::Relaxed) {
+            return true;
+        }
+        if self.gamer_mode.load(Ordering::Relaxed)
+            && self.ptt_required.load(Ordering::Relaxed)
+            && !self.ptt_down.load(Ordering::Relaxed)
+        {
+            return true;
+        }
+        false
     }
 }
 
@@ -181,6 +220,23 @@ fn capture_until_stopped(
     let mut pending: Vec<i16> = Vec::with_capacity(frame_len * 4);
     while !stop.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(40));
+
+        #[cfg(target_os = "windows")]
+        if gate.is_gamer_mode() {
+            let ptt_down = unsafe {
+                use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                    GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
+                };
+                let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
+                let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
+                let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
+                v_down || x1_down || x2_down
+            };
+            gate.set_ptt_down(ptt_down);
+        }
+
+        vad.set_mode(gate.is_gamer_mode(), gate.is_ptt_down());
+
         if let Ok(mut queued) = queue.lock() {
             pending.extend(queued.drain(..));
         }
@@ -319,6 +375,7 @@ struct VadChunk {
 /// pré-roll para não cortar o início da frase. Recebe quadros de 20 ms e devolve
 /// uma fala completa quando o silêncio passa de ~900 ms.
 struct Vad {
+    sample_rate: u32,
     preroll_cap: usize,
     start_frames: usize,
     silence_frames: usize,
@@ -330,12 +387,15 @@ struct Vad {
     preroll: VecDeque<i16>,
     state: VadState,
     turn: u64,
+    gamer_mode: bool,
+    ptt_active: bool,
 }
 
 impl Vad {
     fn new(sample_rate: u32) -> Self {
         let samples = |ms: usize| (sample_rate as usize * ms / 1000).max(1);
         Self {
+            sample_rate,
             preroll_cap: samples(PREROLL_MS),
             start_frames: START_FRAMES,
             silence_frames: SILENCE_FRAMES,
@@ -347,6 +407,37 @@ impl Vad {
             preroll: VecDeque::new(),
             state: VadState::Idle { loud_frames: 0 },
             turn: 0,
+            gamer_mode: false,
+            ptt_active: false,
+        }
+    }
+
+    fn set_mode(&mut self, gamer_mode: bool, ptt_active: bool) {
+        if self.gamer_mode == gamer_mode && self.ptt_active == ptt_active {
+            return;
+        }
+        self.gamer_mode = gamer_mode;
+        self.ptt_active = ptt_active;
+        let samples = |ms: usize| (self.sample_rate as usize * ms / 1000).max(1);
+        if self.gamer_mode && !self.ptt_active {
+            // Gamer VAD Shield (Open Mic no jogo):
+            // 4 quadros (80ms) consecutivos para abrir fala (cliques mecânicos de mouse duram ~20-35ms)
+            self.start_frames = 4;
+            // 600 ms de silêncio para encerramento ágil
+            self.silence_frames = 30;
+            // 400 ms de fala mínima para captar com conforto perguntas como "Usami", "Rylai", "Ajuda"
+            self.min_samples = samples(400);
+        } else if self.ptt_active {
+            // Push-to-Talk ativo (segurando V ou botão lateral do mouse):
+            // Sensibilidade instantânea até para sussurros
+            self.start_frames = 2; // 40 ms
+            self.silence_frames = 25; // 500 ms
+            self.min_samples = samples(300); // 300 ms
+        } else {
+            // Modo normal de conversa fora do jogo
+            self.start_frames = START_FRAMES;
+            self.silence_frames = SILENCE_FRAMES;
+            self.min_samples = samples(MIN_UTTERANCE_MS);
         }
     }
 
@@ -440,11 +531,25 @@ impl Vad {
     }
 
     fn start_threshold(&self) -> f32 {
-        (self.noise_floor * 2.5).clamp(0.008, 0.08)
+        if self.gamer_mode && !self.ptt_active {
+            // Calibrado para fala humana natural de headset/microfone (RMS ~0.015..0.040)
+            // sem deixar que ruído elétrico baixo (< 0.010) dispare
+            (self.noise_floor * 2.8).clamp(0.012, 0.08)
+        } else if self.ptt_active {
+            (self.noise_floor * 1.8).clamp(0.006, 0.05)
+        } else {
+            (self.noise_floor * 2.5).clamp(0.008, 0.08)
+        }
     }
 
     fn continue_threshold(&self) -> f32 {
-        (self.noise_floor * 1.5).clamp(0.005, 0.06)
+        if self.gamer_mode && !self.ptt_active {
+            (self.noise_floor * 1.8).clamp(0.008, 0.06)
+        } else if self.ptt_active {
+            (self.noise_floor * 1.2).clamp(0.004, 0.04)
+        } else {
+            (self.noise_floor * 1.5).clamp(0.005, 0.06)
+        }
     }
 }
 
@@ -601,5 +706,32 @@ mod tests {
         assert!(gate.suspended());
         gate.set_agent(false);
         assert!(!gate.suspended());
+
+        // Gamer mode com PTT requerido
+        gate.set_gamer_mode(true);
+        gate.set_ptt_required(true);
+        assert!(gate.suspended()); // suspenso porque PTT não está pressionado
+        gate.set_ptt_down(true);
+        assert!(!gate.suspended()); // liberado quando PTT é pressionado
+        gate.set_ptt_down(false);
+        assert!(gate.suspended());
+    }
+
+    #[test]
+    fn vad_gamer_mode_filters_short_clicks_and_requires_longer_speech() {
+        let mut vad = Vad::new(RATE);
+        vad.set_mode(true, false); // modo gamer sem PTT (Gamer VAD Shield)
+
+        // Cliques mecânicos rápidos de mouse duram ~35ms (1 a 2 quadros). No modo gamer,
+        // start_frames é 4 (80ms), então 2 quadros são completamente ignorados.
+        assert!(feed(&mut vad, &speech_frame(), 2).is_none());
+        assert!(feed(&mut vad, &silence_frame(), 30).is_none());
+
+        // Fala real (mais de 400ms de fala):
+        // 25 quadros de 20ms = 500ms
+        assert!(feed(&mut vad, &speech_frame(), 25).is_none());
+        // 30 quadros de silêncio encerram no modo gamer
+        let utterance = feed(&mut vad, &silence_frame(), 31).expect("silêncio encerra no modo gamer");
+        assert!(utterance.len() >= (RATE as usize * 400 / 1000)); // >= 400ms
     }
 }

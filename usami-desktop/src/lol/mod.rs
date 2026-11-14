@@ -1,0 +1,404 @@
+//! Módulo LoL Gamer Companion (`Usami.GG`).
+//!
+//! Toda a ingestão de dados ocorre de forma 100% passiva via Live Client Data API
+//! (`https://127.0.0.1:2999/liveclientdata/allgamedata`) e APIs oficiais da Riot/DataDragon.
+
+pub mod brain;
+pub mod ddragon;
+pub mod ipc;
+pub mod live_client;
+pub mod overlay_win32;
+pub mod riot_cloud;
+pub mod state_diff;
+pub mod types;
+
+use crate::api::UsamiApiClient;
+use crate::lol::brain::{EventPriorityQueue, build_llm_prompt, parse_companion_reply};
+use crate::lol::ddragon::DataDragonStore;
+use crate::lol::ipc::{LolControlMsg, LolUiCommand, LolUiEndpoint, create_ipc_channels};
+use crate::lol::live_client::{LiveClientPoller, PollerState, advance_state};
+use crate::lol::riot_cloud::RiotCloudClient;
+use crate::lol::state_diff::resolve_active_player;
+use crate::lol::types::{LolEvent, LolExpression, PlayerRole};
+use gpui_vrm::VrmController;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+
+static GLOBAL_UI_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<LolUiCommand>>>> = OnceLock::new();
+
+pub struct LolCompanionHandle {
+    pub ctrl_tx: mpsc::UnboundedSender<LolControlMsg>,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl LolCompanionHandle {
+    pub fn send_control(&self, msg: LolControlMsg) {
+        let _ = self.ctrl_tx.send(msg);
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Chamado pela thread Win32 de `presence.rs` quando o usuário pressiona `Ctrl+Alt+L`.
+pub fn notify_hotkey_toggle_click_through() {
+    let slot = GLOBAL_UI_TX.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = slot.lock() {
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.send(LolUiCommand::ToggleClickThrough);
+        }
+    }
+}
+
+/// Inicia o worker assíncrono do LoL Companion no runtime Tokio compartilhado
+/// e devolve o endpoint de recebimento para a thread de UI do GPUI.
+pub fn start(
+    api_client: Arc<UsamiApiClient>,
+    vrm_controller: VrmController,
+) -> (LolCompanionHandle, LolUiEndpoint) {
+    let (bridge, endpoint) = create_ipc_channels();
+    let slot = GLOBAL_UI_TX.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(bridge.ui_tx.clone());
+    }
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let worker_shutdown = Arc::clone(&shutdown);
+    let ctrl_tx = endpoint.ctrl_tx.clone();
+
+    crate::api::tokio_runtime().spawn(async move {
+        run_worker(bridge, api_client, vrm_controller, worker_shutdown).await;
+    });
+
+    (LolCompanionHandle { ctrl_tx, shutdown }, endpoint)
+}
+
+async fn run_worker(
+    mut bridge: ipc::LolIpcBridge,
+    api_client: Arc<UsamiApiClient>,
+    vrm_controller: VrmController,
+    shutdown: Arc<AtomicBool>,
+) {
+    let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+        "Carregando DataDragon...".into(),
+    ));
+
+    let mut ddragon = match DataDragonStore::load_or_fetch().await {
+        Ok(store) => {
+            let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(format!(
+                "DataDragon v{} pronto",
+                store.patch
+            )));
+            store
+        }
+        Err(err) => {
+            eprintln!("[Usami.GG] DataDragon offline ({err}); usando conhecimento embutido");
+            let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                "DataDragon offline (modo local)".into(),
+            ));
+            DataDragonStore::default()
+        }
+    };
+
+    let poller = match LiveClientPoller::new() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("[Usami.GG] Falha ao iniciar poller HTTP: {err}");
+            return;
+        }
+    };
+
+    let mut riot_cloud = RiotCloudClient::from_env();
+    let mut state = PollerState::default();
+    let mut queue = EventPriorityQueue::default();
+    let mut enabled = true;
+    let mut was_loading = false;
+    let mut was_in_match = false;
+    let mut active_champion = String::new();
+    let mut active_role = PlayerRole::Unknown;
+    let mut active_enemies: Vec<String> = Vec::new();
+    let recent_replies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let is_generating = Arc::new(AtomicBool::new(false));
+    let mut last_kda = (0, 0, 0);
+    let mut last_cs = 0;
+    let mut last_game_time = 0.0;
+
+    while !shutdown.load(Ordering::SeqCst) {
+        let delay = if enabled {
+            state.next_poll_delay()
+        } else {
+            Duration::from_secs(3)
+        };
+
+        tokio::select! {
+            Some(ctrl) = bridge.ctrl_rx.recv() => {
+                match ctrl {
+                    LolControlMsg::SetEnabled(flag) => {
+                        enabled = flag;
+                        if !enabled && (was_in_match || was_loading) {
+                            was_in_match = false;
+                            was_loading = false;
+                            queue.clear();
+                            state = PollerState::default();
+                            let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                                in_match: false,
+                                loading: false,
+                                champion: None,
+                                role: PlayerRole::Unknown,
+                                patch: non_empty(&ddragon.patch),
+                                game_time: 0.0,
+                                kda: (0, 0, 0),
+                                cs: 0,
+                            });
+                        }
+                    }
+                    LolControlMsg::SetRiotApiKey(key) => {
+                        riot_cloud.set_api_key(key);
+                    }
+                    LolControlMsg::RefreshDataDragon => {
+                        if let Ok(updated) = DataDragonStore::load_or_fetch().await {
+                            ddragon = updated;
+                        }
+                    }
+                    LolControlMsg::UserVoice(query) => {
+                        queue.push(
+                            LolEvent::UserVoiceQuery {
+                                query,
+                                champion: active_champion.clone(),
+                                role: active_role,
+                                game_time: last_game_time,
+                            },
+                            Instant::now(),
+                        );
+                    }
+                    LolControlMsg::ManualHint(hint) => {
+                        let prompt = format!(
+                            "[MODO USAMI.GG]\nPedido manual do jogador: {hint}\n\
+                            RESPONDA EM JSON: {{\"fala\": \"...\", \"expressao\": \"smug|angry|disappointed|surprised|neutral\", \"prioridade\": 3}}"
+                        );
+                        let client = Arc::clone(&api_client);
+                        let ui = bridge.ui_tx.clone();
+                        let replies = Arc::clone(&recent_replies);
+                        tokio::spawn(async move {
+                            dispatch_to_llm(&client, &ui, &prompt, 3, LolExpression::Smug, "manual", &replies).await;
+                        });
+                    }
+                }
+            }
+            _ = tokio::time::sleep(delay) => {
+                if !enabled {
+                    continue;
+                }
+
+                let probe = poller.probe().await;
+                let (next_state, maybe_data) = advance_state(state, probe);
+                state = next_state;
+
+                let now = Instant::now();
+
+                match &mut state {
+                    PollerState::LoadingScreen { .. } => {
+                        if !was_loading {
+                            was_loading = true;
+                            let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                                in_match: false,
+                                loading: true,
+                                champion: None,
+                                role: PlayerRole::Unknown,
+                                patch: non_empty(&ddragon.patch),
+                                game_time: 0.0,
+                                kda: (0, 0, 0),
+                                cs: 0,
+                            });
+                            queue.push(LolEvent::MatchLoading { champion: None }, now);
+                        }
+                    }
+                    PollerState::InMatch { snapshot, .. } => {
+                        was_loading = false;
+                        was_in_match = true;
+
+                        if let Some(ref data) = maybe_data {
+                            let events = snapshot.diff(data);
+                            active_role = snapshot.role;
+                            if let Some(me) = resolve_active_player(data) {
+                                active_champion = me.champion_name.clone();
+                                last_kda = (me.scores.kills, me.scores.deaths, me.scores.assists);
+                                last_cs = me.scores.creep_score;
+                                active_enemies = data
+                                    .all_players
+                                    .iter()
+                                    .filter(|p| !p.team.is_empty() && p.team != me.team)
+                                    .map(|p| p.champion_name.clone())
+                                    .filter(|n| !n.is_empty())
+                                    .collect();
+                            }
+                            last_game_time = data.game_data.game_time;
+
+                            let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                                in_match: true,
+                                loading: false,
+                                champion: non_empty(&active_champion),
+                                role: active_role,
+                                patch: non_empty(&ddragon.patch),
+                                game_time: last_game_time,
+                                kda: last_kda,
+                                cs: last_cs,
+                            });
+
+                            for ev in events {
+                                queue.push(ev, now);
+                            }
+                        }
+                    }
+                    PollerState::MatchEnded => {
+                        if was_in_match {
+                            let end_ev = LolEvent::MatchEnded {
+                                champion: active_champion.clone(),
+                                role: active_role,
+                                duration_secs: last_game_time,
+                                kills: last_kda.0,
+                                deaths: last_kda.1,
+                                assists: last_kda.2,
+                            };
+                            let recent_snapshot = recent_replies.lock().map(|r| r.clone()).unwrap_or_default();
+                            let prompt = build_llm_prompt(&end_ev, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
+                            let client = Arc::clone(&api_client);
+                            let ui = bridge.ui_tx.clone();
+                            let replies = Arc::clone(&recent_replies);
+                            tokio::spawn(async move {
+                                dispatch_to_llm(&client, &ui, &prompt, 4, LolExpression::Smug, "match_ended", &replies).await;
+                            });
+                        }
+                        was_in_match = false;
+                        was_loading = false;
+                        queue.clear();
+                        active_champion.clear();
+                        active_enemies.clear();
+                        if let Ok(mut r) = recent_replies.lock() {
+                            r.clear();
+                        }
+                        active_role = PlayerRole::Unknown;
+                        let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                            in_match: false,
+                            loading: false,
+                            champion: None,
+                            role: PlayerRole::Unknown,
+                            patch: non_empty(&ddragon.patch),
+                            game_time: 0.0,
+                            kda: (0, 0, 0),
+                            cs: 0,
+                        });
+                    }
+                    PollerState::GameClosed { .. } => {
+                        if was_loading || was_in_match {
+                            was_loading = false;
+                            was_in_match = false;
+                            queue.clear();
+                            if let Ok(mut r) = recent_replies.lock() {
+                                r.clear();
+                            }
+                            active_role = PlayerRole::Unknown;
+                            let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                                in_match: false,
+                                loading: false,
+                                champion: None,
+                                role: PlayerRole::Unknown,
+                                patch: non_empty(&ddragon.patch),
+                                game_time: 0.0,
+                                kda: (0, 0, 0),
+                                cs: 0,
+                            });
+                        }
+                    }
+                }
+
+                // Processa no máximo 1 evento por ciclo respeitando voz ativa, cooldown e geração
+                if !is_generating.load(Ordering::Relaxed) {
+                    if let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking()) {
+                        let tag = queued.event.cooldown_bucket().to_string();
+                        let fallback_expr = match &queued.event {
+                            LolEvent::UserVoiceQuery { .. } => LolExpression::Neutral,
+                            LolEvent::PlayerDied { .. } => LolExpression::Disappointed,
+                            LolEvent::ChampionKill { .. } | LolEvent::BaronKilled { .. } => LolExpression::Smug,
+                            LolEvent::FirstBlood { .. } => LolExpression::Surprised,
+                            _ => LolExpression::Neutral,
+                        };
+                        let recent_snapshot = recent_replies.lock().map(|r| r.clone()).unwrap_or_default();
+                        let prompt = build_llm_prompt(&queued.event, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
+                        let client = Arc::clone(&api_client);
+                        let ui = bridge.ui_tx.clone();
+                        let replies = Arc::clone(&recent_replies);
+                        let gen_flag = Arc::clone(&is_generating);
+                        gen_flag.store(true, Ordering::Relaxed);
+                        tokio::spawn(async move {
+                            dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
+                            gen_flag.store(false, Ordering::Relaxed);
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+static LAST_CORE_ERROR_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+async fn dispatch_to_llm(
+    api_client: &UsamiApiClient,
+    ui_tx: &mpsc::UnboundedSender<LolUiCommand>,
+    prompt: &str,
+    fallback_priority: u8,
+    fallback_expr: LolExpression,
+    event_tag: &str,
+    recent_replies: &Arc<Mutex<Vec<String>>>,
+) {
+    let call_fut = api_client.send_chat_with_options(prompt, false, true);
+    match tokio::time::timeout(Duration::from_secs(8), call_fut).await {
+        Ok(Ok(res)) => {
+            let reply = parse_companion_reply(&res.reply, fallback_priority, fallback_expr);
+            if reply.fala.trim().is_empty() {
+                // Silenciado (erro operacional ou resposta vazia filtrada para economizar TTS)
+                return;
+            }
+            if let Ok(mut lock) = recent_replies.lock() {
+                if !lock.contains(&reply.fala) {
+                    lock.push(reply.fala.clone());
+                    if lock.len() > 5 {
+                        lock.remove(0);
+                    }
+                }
+            }
+            let _ = ui_tx.send(LolUiCommand::CompanionSpeak {
+                fala: reply.fala,
+                expressao: reply.expressao,
+                prioridade: reply.prioridade,
+                event_tag: event_tag.to_string(),
+            });
+        }
+        Ok(Err(err)) => {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let last = LAST_CORE_ERROR_SECS.load(Ordering::Relaxed);
+            if now_secs.saturating_sub(last) >= 300 {
+                LAST_CORE_ERROR_SECS.store(now_secs, Ordering::Relaxed);
+                eprintln!("[Usami.GG] Falha ao consultar core 8787 ({err})");
+            }
+        }
+        Err(_) => {
+            eprintln!("[Usami.GG] Timeout (8s) aguardando resposta da LLM");
+        }
+    }
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}

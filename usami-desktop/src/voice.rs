@@ -167,7 +167,7 @@ impl UsamiApp {
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
                                         this.update(cx, |view, cx| {
-                                            if !view.is_listening || !view.is_calling {
+                                            if !view.is_listening || (!view.is_calling && !view.lol_overlay_active) {
                                                 return false;
                                             }
                                             view.voice_turn_closed =
@@ -190,7 +190,7 @@ impl UsamiApp {
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
                                         this.update(cx, |view, cx| {
-                                            if !view.is_listening || !view.is_calling {
+                                            if !view.is_listening || (!view.is_calling && !view.lol_overlay_active) {
                                                 return false;
                                             }
                                             match transcript {
@@ -201,6 +201,12 @@ impl UsamiApp {
                                                         &trimmed,
                                                         Instant::now(),
                                                     ) {
+                                                        return true;
+                                                    }
+                                                    if view.lol_overlay_active {
+                                                        if let Some(ref handle) = view.lol_handle {
+                                                            handle.send_control(crate::lol::ipc::LolControlMsg::UserVoice(trimmed));
+                                                        }
                                                         return true;
                                                     }
                                                     view.cursor_char_idx = trimmed.chars().count();

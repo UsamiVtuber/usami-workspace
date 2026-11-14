@@ -1,4 +1,4 @@
-pub mod agent_center;
+pub mod agent_center_model;
 pub mod api;
 pub mod audio;
 #[cfg(target_os = "windows")]
@@ -7,7 +7,7 @@ pub mod recorder;
 mod storage;
 mod theme;
 
-use crate::agent_center::{
+use crate::agent_center_model::{
     AgentCenterTab, ExecFilter, ExecutionTone, SkillFilter, classify_execution_status,
     collect_skill_reasons, format_duration_ms, format_execution_time, format_relevance_pct,
     group_skills_by_state, group_tools_by_namespace, is_local_quiet_hours_now, origin_label,

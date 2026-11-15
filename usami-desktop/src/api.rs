@@ -1079,26 +1079,19 @@ impl UsamiApiClient {
         let client = self.client.clone();
         let url = format!("{}/api/chat", self.base_url);
 
-        let handle = tokio_runtime().spawn(async move {
-            let res = client
-                .post(url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<ChatResponse>()
-                .await
-                .map_err(map_request_error)?;
+        let res = client
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<ChatResponse>()
+            .await
+            .map_err(map_request_error)?;
 
-            Ok::<ChatResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
-        }
+        Ok(res)
     }
 
     /// Lê a atividade ao vivo do turno (`GET /api/chat/activity`).
@@ -1111,23 +1104,16 @@ impl UsamiApiClient {
         let url = format!("{}/api/chat/activity", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                return Err(format!("Atividade indisponível (HTTP {status})."));
-            }
-            res.json::<ChatActivity>().await.map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            return Err(format!("Atividade indisponível (HTTP {status})."));
+        }
+        res.json::<ChatActivity>().await.map_err(map_request_error)
     }
 
     /// Pede o TTS em streaming. Deve ser chamado de dentro de `tokio_runtime`
@@ -1169,33 +1155,26 @@ impl UsamiApiClient {
         let url = format!("{}/api/stt", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let part = reqwest::multipart::Part::bytes(wav)
-                .file_name("mic.wav")
-                .mime_str("audio/wav")
-                .map_err(map_request_error)?;
-            let form = reqwest::multipart::Form::new().part("audio", part);
-            let mut req = client.post(url).multipart(form);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let response = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<SttResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<String, String>(response.text)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let part = reqwest::multipart::Part::bytes(wav)
+            .file_name("mic.wav")
+            .mime_str("audio/wav")
+            .map_err(map_request_error)?;
+        let form = reqwest::multipart::Form::new().part("audio", part);
+        let mut req = client.post(url).multipart(form);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let response = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<SttResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(response.text)
     }
 
     pub async fn get_memory(&self) -> Result<MemoryResponse, String> {
@@ -1203,28 +1182,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/memory", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<MemoryResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<MemoryResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<MemoryResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn forget_memory(
@@ -1236,28 +1208,21 @@ impl UsamiApiClient {
         let token = self.token.clone();
         let payload = payload.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<MemoryForgetResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<MemoryForgetResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&payload);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<MemoryForgetResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn get_bond(&self) -> Result<BondResponse, String> {
@@ -1265,28 +1230,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/bond", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<BondResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<BondResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<BondResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn get_achievements(&self) -> Result<AchievementsResponse, String> {
@@ -1294,28 +1252,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/achievements", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<AchievementsResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<AchievementsResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<AchievementsResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     /// Manda o turno para o core calcular o XP (a regra não vive no cliente).
@@ -1338,28 +1289,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/bond/event", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<BondResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<BondResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&payload);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<BondResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn get_mood(&self) -> Result<MoodResponse, String> {
@@ -1367,28 +1311,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/mood", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<MoodResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<MoodResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<MoodResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn post_mood_event(
@@ -1404,28 +1341,21 @@ impl UsamiApiClient {
             "reason": reason.unwrap_or(""),
         });
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<MoodResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<MoodResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&payload);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<MoodResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn get_personality(&self) -> Result<PersonalityResponse, String> {
@@ -1433,28 +1363,21 @@ impl UsamiApiClient {
         let url = format!("{}/api/personality", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<PersonalityResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<PersonalityResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<PersonalityResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn update_personality(
@@ -1466,28 +1389,21 @@ impl UsamiApiClient {
         let token = self.token.clone();
         let payload = payload.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req
-                .send()
-                .await
-                .map_err(map_request_error)?
-                .error_for_status()
-                .map_err(map_request_error)?
-                .json::<PersonalityResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<PersonalityResponse, String>(res)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&payload);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req
+            .send()
+            .await
+            .map_err(map_request_error)?
+            .error_for_status()
+            .map_err(map_request_error)?
+            .json::<PersonalityResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(res)
     }
 
     pub async fn get_proactive_events(
@@ -1499,34 +1415,27 @@ impl UsamiApiClient {
         let token = self.token.clone();
         let activity = activity.to_string();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client
-                .get(url)
-                .header("x-usami-client", "usami-desktop")
-                .header("x-usami-activity", activity);
+        let mut req = client
+            .get(url)
+            .header("x-usami-client", "usami-desktop")
+            .header("x-usami-activity", activity);
 
-            if let Some(t) = token {
-                req = req.header("x-usami-token", t);
-            }
-
-            let res = req.send().await.map_err(map_request_error)?;
-
-            if !res.status().is_success() {
-                return Err(format!("HTTP {}", res.status()));
-            }
-
-            let data = res
-                .json::<ProactiveEventsResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<ProactiveEventsResponse, String>(data)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        if let Some(t) = token {
+            req = req.header("x-usami-token", t);
         }
+
+        let res = req.send().await.map_err(map_request_error)?;
+
+        if !res.status().is_success() {
+            return Err(format!("HTTP {}", res.status()));
+        }
+
+        let data = res
+            .json::<ProactiveEventsResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(data)
     }
 
     pub async fn ack_proactive_events(
@@ -1540,34 +1449,27 @@ impl UsamiApiClient {
             acks: acks.to_vec(),
         };
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client
-                .post(url)
-                .json(&payload)
-                .header("x-usami-client", "usami-desktop");
+        let mut req = client
+            .post(url)
+            .json(&payload)
+            .header("x-usami-client", "usami-desktop");
 
-            if let Some(t) = token {
-                req = req.header("x-usami-token", t);
-            }
-
-            let res = req.send().await.map_err(map_request_error)?;
-
-            if !res.status().is_success() {
-                return Err(format!("HTTP {}", res.status()));
-            }
-
-            let data = res
-                .json::<ProactiveAckResponse>()
-                .await
-                .map_err(map_request_error)?;
-
-            Ok::<ProactiveAckResponse, String>(data)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        if let Some(t) = token {
+            req = req.header("x-usami-token", t);
         }
+
+        let res = req.send().await.map_err(map_request_error)?;
+
+        if !res.status().is_success() {
+            return Err(format!("HTTP {}", res.status()));
+        }
+
+        let data = res
+            .json::<ProactiveAckResponse>()
+            .await
+            .map_err(map_request_error)?;
+
+        Ok(data)
     }
 
     pub async fn analyze_media(
@@ -1589,41 +1491,34 @@ impl UsamiApiClient {
             capabilities,
         };
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client
-                .post(url)
-                .json(&payload)
-                .header("x-usami-client", "usami-desktop");
+        let mut req = client
+            .post(url)
+            .json(&payload)
+            .header("x-usami-client", "usami-desktop");
 
-            if let Some(t) = token {
-                req = req.header("x-usami-token", t);
-            }
-
-            let res = req
-                .send()
-                .await
-                .map_err(|e| format!("Falha de conexão com a API de análise de mídia: {e}"))?;
-
-            let status = res.status();
-            if !status.is_success() {
-                let err_text = res.text().await.unwrap_or_default();
-                return Err(format!(
-                    "Erro HTTP {status} na análise de mídia: {err_text}"
-                ));
-            }
-
-            let data = res
-                .json::<MediaAnalyzeResponse>()
-                .await
-                .map_err(|e| format!("Resposta inválida da API de mídia: {e}"))?;
-
-            Ok::<MediaAnalyzeResponse, String>(data)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        if let Some(t) = token {
+            req = req.header("x-usami-token", t);
         }
+
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("Falha de conexão com a API de análise de mídia: {e}"))?;
+
+        let status = res.status();
+        if !status.is_success() {
+            let err_text = res.text().await.unwrap_or_default();
+            return Err(format!(
+                "Erro HTTP {status} na análise de mídia: {err_text}"
+            ));
+        }
+
+        let data = res
+            .json::<MediaAnalyzeResponse>()
+            .await
+            .map_err(|e| format!("Resposta inválida da API de mídia: {e}"))?;
+
+        Ok(data)
     }
 
     pub async fn get_agent_skills(&self) -> Result<AgentSkillsResponse, String> {
@@ -1631,30 +1526,23 @@ impl UsamiApiClient {
         let url = format!("{}/api/agent/skills", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
-                }
-                return Err(format!("Falha ao consultar skills (HTTP {status})."));
-            }
-            res.json::<AgentSkillsResponse>()
-                .await
-                .map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                    return Err(msg.to_string());
+                }
+            }
+            return Err(format!("Falha ao consultar skills (HTTP {status})."));
+        }
+        res.json::<AgentSkillsResponse>()
+            .await
+            .map_err(map_request_error)
     }
 
     pub async fn get_agent_executions(
@@ -1665,30 +1553,23 @@ impl UsamiApiClient {
         let url = format!("{}/api/agent/executions?limit={limit}", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
-                }
-                return Err(format!("Falha ao consultar execuções (HTTP {status})."));
-            }
-            res.json::<AgentExecutionsResponse>()
-                .await
-                .map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                    return Err(msg.to_string());
+                }
+            }
+            return Err(format!("Falha ao consultar execuções (HTTP {status})."));
+        }
+        res.json::<AgentExecutionsResponse>()
+            .await
+            .map_err(map_request_error)
     }
 
     pub async fn toggle_skill_enabled(
@@ -1701,30 +1582,23 @@ impl UsamiApiClient {
         let url = format!("{}/api/agent/skills/{skill_id}/{action}", self.base_url);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&serde_json::json!({}));
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
-                }
-                return Err(format!("Falha ao atualizar skill (HTTP {status})."));
-            }
-            res.json::<SkillToggleResponse>()
-                .await
-                .map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&serde_json::json!({}));
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                    return Err(msg.to_string());
+                }
+            }
+            return Err(format!("Falha ao atualizar skill (HTTP {status})."));
+        }
+        res.json::<SkillToggleResponse>()
+            .await
+            .map_err(map_request_error)
     }
 
     async fn send_agent_get<T: serde::de::DeserializeOwned + Send + 'static>(
@@ -1736,28 +1610,21 @@ impl UsamiApiClient {
         let url = format!("{}{}", self.base_url, path);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.get(url);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
-                }
-                return Err(format!("{fallback_err} (HTTP {status})."));
-            }
-            res.json::<T>().await.map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.get(url);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                    return Err(msg.to_string());
+                }
+            }
+            return Err(format!("{fallback_err} (HTTP {status})."));
+        }
+        res.json::<T>().await.map_err(map_request_error)
     }
 
     async fn send_agent_post<T: serde::de::DeserializeOwned + Send + 'static>(
@@ -1770,28 +1637,21 @@ impl UsamiApiClient {
         let url = format!("{}{}", self.base_url, path);
         let token = self.token.clone();
 
-        let handle = tokio_runtime().spawn(async move {
-            let mut req = client.post(url).json(&payload);
-            if let Some(ref t) = token {
-                req = req.header("x-usami-token", t);
-            }
-            let res = req.send().await.map_err(map_request_error)?;
-            let status = res.status();
-            if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
-                }
-                return Err(format!("{fallback_err} (HTTP {status})."));
-            }
-            res.json::<T>().await.map_err(map_request_error)
-        });
-
-        match handle.await {
-            Ok(res) => res,
-            Err(e) => Err(format!("Erro interno na tarefa Tokio: {e}")),
+        let mut req = client.post(url).json(&payload);
+        if let Some(ref t) = token {
+            req = req.header("x-usami-token", t);
         }
+        let res = req.send().await.map_err(map_request_error)?;
+        let status = res.status();
+        if !status.is_success() {
+            if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                    return Err(msg.to_string());
+                }
+            }
+            return Err(format!("{fallback_err} (HTTP {status})."));
+        }
+        res.json::<T>().await.map_err(map_request_error)
     }
 
     pub async fn get_agent_self_tools(&self) -> Result<AgentSelfResponse, String> {

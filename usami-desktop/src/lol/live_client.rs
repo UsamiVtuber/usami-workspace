@@ -1,9 +1,12 @@
 //! Cliente HTTP assíncrono passivo para a Live Client Data API da Riot (porta 2999)
 //! com máquina de estados explícita (GameClosed -> LoadingScreen -> InMatch -> MatchEnded).
 
+use crate::lol::provider::GameProvider;
 use crate::lol::state_diff::GameSnapshot;
 use crate::lol::types::AllGameData;
 use reqwest::StatusCode;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 pub const LIVE_CLIENT_URL: &str = "https://127.0.0.1:2999/liveclientdata/allgamedata";
@@ -107,6 +110,16 @@ impl LiveClientPoller {
             Ok(_) => ProbeResult::Loading,
             Err(_) => ProbeResult::Loading,
         }
+    }
+}
+
+impl GameProvider for LiveClientPoller {
+    fn name(&self) -> &'static str {
+        "league-of-legends"
+    }
+
+    fn poll(&self) -> Pin<Box<dyn Future<Output = ProbeResult> + Send + '_>> {
+        Box::pin(async { self.probe().await })
     }
 }
 

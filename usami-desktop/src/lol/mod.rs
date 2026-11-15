@@ -8,6 +8,7 @@ pub mod ddragon;
 pub mod ipc;
 pub mod live_client;
 pub mod overlay_win32;
+pub mod provider;
 pub mod riot_cloud;
 pub mod state_diff;
 pub mod types;
@@ -17,6 +18,7 @@ use crate::lol::brain::{EventPriorityQueue, build_llm_prompt, parse_companion_re
 use crate::lol::ddragon::DataDragonStore;
 use crate::lol::ipc::{LolControlMsg, LolUiCommand, LolUiEndpoint, create_ipc_channels};
 use crate::lol::live_client::{LiveClientPoller, PollerState, advance_state};
+use crate::lol::provider::{GameProvider, NullProvider};
 use crate::lol::riot_cloud::RiotCloudClient;
 use crate::lol::state_diff::resolve_active_player;
 use crate::lol::types::{LolEvent, LolExpression, PlayerRole};
@@ -24,7 +26,20 @@ use gpui_vrm::VrmController;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
+
+/// Restaura a trava de geração ao ser descartado, mesmo que a tarefa LLM
+/// panique. Evita que o worker fique permanentemente travado e cesse de
+/// disparar eventos de voz/expressão até reiniciar o app.
+struct GeneratingGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for GeneratingGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Relaxed);
+    }
+}
 
 static GLOBAL_UI_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<LolUiCommand>>>> = OnceLock::new();
 
@@ -69,8 +84,16 @@ pub fn start(
     let worker_shutdown = Arc::clone(&shutdown);
     let ctrl_tx = endpoint.ctrl_tx.clone();
 
+    let provider: Arc<dyn GameProvider> = match LiveClientPoller::new() {
+        Ok(poller) => Arc::new(poller),
+        Err(err) => {
+            eprintln!("[Usami.GG] Falha ao iniciar poller HTTP: {err}");
+            Arc::new(NullProvider)
+        }
+    };
+
     crate::api::tokio_runtime().spawn(async move {
-        run_worker(bridge, api_client, vrm_controller, worker_shutdown).await;
+        run_worker(bridge, api_client, vrm_controller, worker_shutdown, provider).await;
     });
 
     (LolCompanionHandle { ctrl_tx, shutdown }, endpoint)
@@ -81,9 +104,10 @@ async fn run_worker(
     api_client: Arc<UsamiApiClient>,
     vrm_controller: VrmController,
     shutdown: Arc<AtomicBool>,
+    provider: Arc<dyn GameProvider>,
 ) {
     let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
-        "Carregando DataDragon...".into(),
+        format!("Provedor {} carregando DataDragon...", provider.name()).into(),
     ));
 
     let mut ddragon = match DataDragonStore::load_or_fetch().await {
@@ -103,13 +127,11 @@ async fn run_worker(
         }
     };
 
-    let poller = match LiveClientPoller::new() {
-        Ok(p) => p,
-        Err(err) => {
-            eprintln!("[Usami.GG] Falha ao iniciar poller HTTP: {err}");
-            return;
-        }
-    };
+    if !provider.is_enabled() {
+        let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+            "Provedor desativado".into(),
+        ));
+    }
 
     let mut riot_cloud = RiotCloudClient::from_env();
     let mut state = PollerState::default();
@@ -120,7 +142,7 @@ async fn run_worker(
     let mut active_champion = String::new();
     let mut active_role = PlayerRole::Unknown;
     let mut active_enemies: Vec<String> = Vec::new();
-    let recent_replies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recent_replies = Arc::new(TokioMutex::new(Vec::<String>::new()));
     let is_generating = Arc::new(AtomicBool::new(false));
     let mut last_kda = (0, 0, 0);
     let mut last_cs = 0;
@@ -193,7 +215,11 @@ async fn run_worker(
                     continue;
                 }
 
-                let probe = poller.probe().await;
+                if !provider.is_enabled() {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    continue;
+                }
+                let probe = provider.poll().await;
                 let (next_state, maybe_data) = advance_state(state, probe);
                 state = next_state;
 
@@ -227,13 +253,18 @@ async fn run_worker(
                                 active_champion = me.champion_name.clone();
                                 last_kda = (me.scores.kills, me.scores.deaths, me.scores.assists);
                                 last_cs = me.scores.creep_score;
-                                active_enemies = data
+                                let new_enemies: Vec<String> = data
                                     .all_players
                                     .iter()
                                     .filter(|p| !p.team.is_empty() && p.team != me.team)
                                     .map(|p| p.champion_name.clone())
                                     .filter(|n| !n.is_empty())
                                     .collect();
+                                // Só realoca o vetor de inimigos quando a composição do time muda;
+                                // na maioria dos ticks o vetor anterior é reutilizado.
+                                if new_enemies != active_enemies {
+                                    active_enemies = new_enemies;
+                                }
                             }
                             last_game_time = data.game_data.game_time;
 
@@ -263,7 +294,7 @@ async fn run_worker(
                                 deaths: last_kda.1,
                                 assists: last_kda.2,
                             };
-                            let recent_snapshot = recent_replies.lock().map(|r| r.clone()).unwrap_or_default();
+                            let recent_snapshot = recent_replies.lock().await.clone();
                             let prompt = build_llm_prompt(&end_ev, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
                             let client = Arc::clone(&api_client);
                             let ui = bridge.ui_tx.clone();
@@ -277,9 +308,7 @@ async fn run_worker(
                         queue.clear();
                         active_champion.clear();
                         active_enemies.clear();
-                        if let Ok(mut r) = recent_replies.lock() {
-                            r.clear();
-                        }
+                        recent_replies.lock().await.clear();
                         active_role = PlayerRole::Unknown;
                         let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
                             in_match: false,
@@ -297,9 +326,7 @@ async fn run_worker(
                             was_loading = false;
                             was_in_match = false;
                             queue.clear();
-                            if let Ok(mut r) = recent_replies.lock() {
-                                r.clear();
-                            }
+                            recent_replies.lock().await.clear();
                             active_role = PlayerRole::Unknown;
                             let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
                                 in_match: false,
@@ -326,16 +353,16 @@ async fn run_worker(
                             LolEvent::FirstBlood { .. } => LolExpression::Surprised,
                             _ => LolExpression::Neutral,
                         };
-                        let recent_snapshot = recent_replies.lock().map(|r| r.clone()).unwrap_or_default();
+                        let recent_snapshot = recent_replies.lock().await.clone();
                         let prompt = build_llm_prompt(&queued.event, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
                         let client = Arc::clone(&api_client);
                         let ui = bridge.ui_tx.clone();
                         let replies = Arc::clone(&recent_replies);
-                        let gen_flag = Arc::clone(&is_generating);
-                        gen_flag.store(true, Ordering::Relaxed);
+                        is_generating.store(true, Ordering::Relaxed);
+                        let guard = GeneratingGuard { flag: Arc::clone(&is_generating) };
                         tokio::spawn(async move {
+                            let _guard = guard;
                             dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
-                            gen_flag.store(false, Ordering::Relaxed);
                         });
                     }
                 }
@@ -353,7 +380,7 @@ async fn dispatch_to_llm(
     fallback_priority: u8,
     fallback_expr: LolExpression,
     event_tag: &str,
-    recent_replies: &Arc<Mutex<Vec<String>>>,
+    recent_replies: &Arc<TokioMutex<Vec<String>>>,
 ) {
     let call_fut = api_client.send_chat_with_options(prompt, false, true);
     match tokio::time::timeout(Duration::from_secs(8), call_fut).await {
@@ -363,12 +390,11 @@ async fn dispatch_to_llm(
                 // Silenciado (erro operacional ou resposta vazia filtrada para economizar TTS)
                 return;
             }
-            if let Ok(mut lock) = recent_replies.lock() {
-                if !lock.contains(&reply.fala) {
-                    lock.push(reply.fala.clone());
-                    if lock.len() > 5 {
-                        lock.remove(0);
-                    }
+            let mut lock = recent_replies.lock().await;
+            if !lock.contains(&reply.fala) {
+                lock.push(reply.fala.clone());
+                if lock.len() > 5 {
+                    lock.remove(0);
                 }
             }
             let _ = ui_tx.send(LolUiCommand::CompanionSpeak {

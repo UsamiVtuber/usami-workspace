@@ -5,6 +5,7 @@ Este workspace reúne projetos diferentes; identifique o componente da tarefa an
 ## Orientação pelo repositório
 
 - `usami/` é o runtime principal da companion e tem Git e instruções próprios. Antes de trabalhar nele, leia [`usami/AGENTS.md`](usami/AGENTS.md), confira o estado desse repositório separadamente e consulte [`usami/docs/architecture.md`](usami/docs/architecture.md). As regras específicas do protótipo e as decisões de produto em `usami/AGENTS.md` continuam valendo.
+- `usami-desktop/` é o cliente desktop (Tauri/Rust). Antes de trabalhar nele, leia [`usami-desktop/docs/KNOWN_ERRORS.md`](usami-desktop/docs/KNOWN_ERRORS.md) para conhecer erros, falhas e correções já registrados e evitar regressões.
 - `infra/n8n-local/` contém a configuração local do n8n/PostgreSQL e os exports de workflows. Consulte seus `README.md` antes de operar ou alterar a stack; o guia de workflows está em [`infra/n8n-local/workflows/README.md`](infra/n8n-local/workflows/README.md).
 - `usami-monitor/` contém um painel FastAPI e frontend estático, destinado ao notebook Linux. Consulte [`usami-monitor/README.md`](usami-monitor/README.md) para implantação e restrições de acesso.
 - `vault/` contém dados locais do Obsidian. Trate seu conteúdo como privado: não faça buscas, leituras em lote, alterações ou exclusões sem necessidade direta para a tarefa. Para integrações, limite gravações às pastas de automação explicitamente documentadas e preserve o restante do vault.

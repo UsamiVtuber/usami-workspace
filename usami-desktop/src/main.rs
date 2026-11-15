@@ -434,24 +434,34 @@ impl UsamiApp {
         vrm_controller.set_portrait_enabled(true);
 
         let api_client = Arc::new(UsamiApiClient::from_env());
-        let (lol_handle, mut lol_endpoint) =
-            lol::start(Arc::clone(&api_client), vrm_controller.clone());
+        let lol_enabled = std::env::var("USAMI_LOL_ENABLED")
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        let (lol_handle, lol_endpoint) = if lol_enabled {
+            let (handle, endpoint) = lol::start(Arc::clone(&api_client), vrm_controller.clone());
+            (Some(handle), Some(endpoint))
+        } else {
+            eprintln!("[Usami.GG] Módulo LoL desativado via USAMI_LOL_ENABLED=false");
+            (None, None)
+        };
 
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let cx = cx.clone();
-            async move {
-                while let Some(cmd) = lol_endpoint.ui_rx.recv().await {
-                    let _ = cx.update(|cx: &mut App| {
-                        if let Some(this) = this.upgrade() {
-                            this.update(cx, |view, cx| {
-                                view.apply_lol_command(cmd, cx);
-                            });
-                        }
-                    });
+        if let Some(mut lol_endpoint) = lol_endpoint {
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    while let Some(cmd) = lol_endpoint.ui_rx.recv().await {
+                        let _ = cx.update(|cx: &mut App| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |view, cx| {
+                                    view.apply_lol_command(cmd, cx);
+                                });
+                            }
+                        });
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -575,7 +585,7 @@ impl UsamiApp {
             agent_briefing: None,
             agent_briefing_loading: false,
             agent_briefing_error: None,
-            lol_handle: Some(lol_handle),
+            lol_handle,
             lol_overlay_active: false,
             lol_manual_overlay: false,
             lol_click_through: true,

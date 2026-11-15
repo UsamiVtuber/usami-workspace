@@ -28,7 +28,7 @@ services:
         condition: service_healthy
     ports:
       # Keep the editor local to this computer. Use a secure tunnel later for public webhooks.
-      - "127.0.0.1:5678:5678"
+      - "0.0.0.0:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres

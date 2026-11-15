@@ -193,6 +193,10 @@ struct UsamiApp {
     lol_cs: i32,
     lol_last_expression: lol::types::LolExpression,
     lol_status: SharedString,
+    /// Ultimo instante em que o overlay foi notificado (re-renderizado). Usado
+    /// para limitar a taxa de frames quando o jogo esta em foco (janela do
+    /// Usami sem foco) e evitar consumir GPU desnecessariamente.
+    last_overlay_notify: Option<Instant>,
     #[cfg(target_os = "windows")]
     presence_subscription: Option<Subscription>,
 }
@@ -398,7 +402,26 @@ impl UsamiApp {
                                     changed = true;
                                 }
                                 if changed {
-                                    cx.notify();
+                                    // FPS adaptado do overlay: quando o overlay
+                                    // do LoL esta ativo mas a janela do Usami nao
+                                    // tem foco (jogo em primeiro plano), limitamos
+                                    // a taxa de re-renderizacao para evitar
+                                    // consumir GPU desnecessariamente em cima do
+                                    // jogo em tela cheia.
+                                    if view.lol_overlay_active && !view.window_focused {
+                                        let now = Instant::now();
+                                        let min_interval = Duration::from_millis(250); // ~4 fps
+                                        let notify = view.last_overlay_notify.map_or(true, |last| {
+                                            now.duration_since(last) >= min_interval
+                                        });
+                                        if notify {
+                                            view.last_overlay_notify = Some(now);
+                                            cx.notify();
+                                        }
+                                    } else {
+                                        view.last_overlay_notify = None;
+                                        cx.notify();
+                                    }
                                 }
 
                                 // Minimizar/esconder não gera evento de foco em
@@ -599,6 +622,7 @@ impl UsamiApp {
             lol_cs: 0,
             lol_last_expression: lol::types::LolExpression::Neutral,
             lol_status: "Aguardando LoL".into(),
+            last_overlay_notify: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
         }

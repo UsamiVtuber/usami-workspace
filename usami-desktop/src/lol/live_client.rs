@@ -231,6 +231,65 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
     }
 }
 
+/// Circuit breaker para o poller da Live Client API.
+///
+/// Depois de `FAILURE_THRESHOLD` falhas consecutivas na porta 2999, o
+/// circuito abre: `should_poll` retorna falso até `retry_after` expirar,
+/// evitando que o worker bata numa API morta. Qualquer semente de sucesso
+/// (`Loading` ou `Active`) fecha o circuito e reseta o contador.
+pub struct CircuitBreaker {
+    failures: u32,
+    retry_after: Option<Instant>,
+}
+
+const FAILURE_THRESHOLD: u32 = 5;
+const INITIAL_BACKOFF: Duration = Duration::from_secs(10);
+
+impl CircuitBreaker {
+    pub fn new() -> Self {
+        Self {
+            failures: 0,
+            retry_after: None,
+        }
+    }
+
+    /// Retorna falso se o circuito estiver aberto e o tempo de retry nao
+    /// expirou. Em caso afirmativo, o caller deve pular o poll deste ciclo.
+    pub fn should_poll(&self, now: Instant) -> bool {
+        match self.retry_after {
+            Some(deadline) if now < deadline => false,
+            _ => true,
+        }
+    }
+
+    /// Registra uma falha na sonda. Abre o circuito quando o limite e
+    /// atingido, com backoff exponencial.
+    pub fn record_failure(&mut self, now: Instant) {
+        self.failures += 1;
+        if self.failures >= FAILURE_THRESHOLD {
+            let backoff = (INITIAL_BACKOFF * 2u32.pow(self.failures.saturating_sub(FAILURE_THRESHOLD)))
+                .min(MAX_BACKOFF);
+            self.retry_after = Some(now + backoff);
+            eprintln!(
+                "[Usami.GG] Circuit breaker aberto apos {} falhas; retry em {:?}",
+                self.failures, backoff
+            );
+        }
+    }
+
+    /// Registra sucesso na sonda: fecha o circuito e reseta o contador.
+    pub fn record_success(&mut self) {
+        self.failures = 0;
+        self.retry_after = None;
+    }
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

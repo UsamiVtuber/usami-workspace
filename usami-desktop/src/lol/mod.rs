@@ -17,7 +17,7 @@ use crate::api::UsamiApiClient;
 use crate::lol::brain::{EventPriorityQueue, build_llm_prompt, parse_companion_reply};
 use crate::lol::ddragon::DataDragonStore;
 use crate::lol::ipc::{LolControlMsg, LolUiCommand, LolUiEndpoint, create_ipc_channels};
-use crate::lol::live_client::{LiveClientPoller, PollerState, advance_state};
+use crate::lol::live_client::{CircuitBreaker, LiveClientPoller, PollerState, ProbeResult, advance_state};
 use crate::lol::provider::{GameProvider, NullProvider};
 use crate::lol::riot_cloud::RiotCloudClient;
 use crate::lol::state_diff::resolve_active_player;
@@ -147,8 +147,11 @@ async fn run_worker(
     let mut last_kda = (0, 0, 0);
     let mut last_cs = 0;
     let mut last_game_time = 0.0;
+    let mut circuit_breaker = CircuitBreaker::new();
+    let mut circuit_was_open = false;
 
     while !shutdown.load(Ordering::SeqCst) {
+        let now = Instant::now();
         let delay = if enabled {
             state.next_poll_delay()
         } else {
@@ -219,7 +222,36 @@ async fn run_worker(
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     continue;
                 }
+
+                let now = Instant::now();
+                let circuit_open = !circuit_breaker.should_poll(now);
+                if circuit_open && !circuit_was_open {
+                    // Modo offline reativo: avisa o usuario uma unica vez e
+                    // segue reagendo a eventos locais (PTT, teclas de atalho)
+                    // sem tocar na rede ate o circuito fechar.
+                    let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                        "LoL indisponivel (modo offline reativo)".into(),
+                    ));
+                    let _ = bridge.ui_tx.send(LolUiCommand::CompanionSpeak {
+                        fala: "Hmph, o League nao esta respondendo. Fico por aqui, mas sem falar com o jogo por enquanto.".into(),
+                        expressao: LolExpression::Disappointed,
+                        prioridade: 4,
+                        event_tag: "lol_offline".into(),
+                    });
+                    circuit_was_open = true;
+                } else if !circuit_open {
+                    circuit_was_open = false;
+                }
+                if circuit_open {
+                    // Circuito aberto: pula o poll deste ciclo e espera o retry.
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
                 let probe = provider.poll().await;
+                match &probe {
+                    ProbeResult::Closed => circuit_breaker.record_failure(now),
+                    _ => circuit_breaker.record_success(),
+                }
                 let (next_state, maybe_data) = advance_state(state, probe);
                 state = next_state;
 

@@ -5,8 +5,8 @@ cruzado). O arquivo executado fica em `~/n8n/docker-compose.yml` no notebook; es
 existe para o histórico e para reconstruir a máquina do zero. Ao editar, atualize os dois
 lados e confirme com diff.
 
-Esta pasta **não** é a stack local do Windows (`../docker-compose.yml`, n8n + PostgreSQL em
-`127.0.0.1:5678`) nem substitui o `README.md` da pasta pai.
+Esta pasta **não** é a stack local do Windows (`../docker-compose.yml`, n8n + PostgreSQL
+publicado em `0.0.0.0:5678`) nem substitui o `README.md` da pasta pai.
 
 ## Operar do Windows
 
@@ -29,10 +29,19 @@ Editor: http://10.42.0.1:5678
    O runner usa `--privileged` porque `sysbox-runc` não funciona em Arch. O painel do
    sandbox só escuta em `127.0.0.1:8080`.
 2. **Mount SMB do vault** — `/mnt/usami-automations` é montado por `usami-n8n-mount.service`
-   com `fstab noauto`. Se estiver desmontado, o container vê a pasta vazia e o workflow do
-   inbox não encontra arquivos: confira `ssh nyarch-docker "mountpoint /mnt/usami-automations"`
-   antes de recriar.
+   com `fstab noauto` e entra no container como `/home/node/vault/Inbox/Automations`. Se
+   estiver desmontado, o container vê a pasta vazia e os workflows que gravam ali (a versão
+   ativa do `Daily Briefing`, via `$env.USAMI_VAULT_PATH`) escrevem no vazio: confira
+   `ssh nyarch-docker "mountpoint /mnt/usami-automations"` antes de recriar. Já
+   `/files/obsidian/usami` (bind de `/dados/obsidian/usami`) é o alvo do workflow de
+   respostas (`Inbox/Responses`) e das automações que gravam em `Inbox/Automations` por
+   esse caminho.
 3. **`~/n8n/.env`** — veja `.env.example`. Os segredos nunca entram neste repositório.
+4. **API da Usami no Windows** — os workflows agendados chamam a API pela rede do link
+   (`http://10.42.0.91:8787/...`, com credencial `Usami Token`). O compose não define
+   `extra_hosts` nem `network_mode: host`, então `127.0.0.1`/`host.docker.internal`
+   apontam para o próprio container. Se a API estiver parada, os nós HTTP falham conforme
+   o `onError` de cada workflow.
 
 ## Travas conhecidas
 

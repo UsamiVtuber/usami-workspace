@@ -7,7 +7,7 @@ workspace como um todo; cada componente tem documentação própria (links no fi
 ## Visão geral
 
 ```
-┌──────────────┐   HTTP 127.0.0.1:8787   ┌───────────────────────┐
+┌──────────────┐   HTTP 0.0.0.0:8787     ┌───────────────────────┐
 │ usami (web)  │ ──────────────────────► │ usami/server.mjs      │
 │ React + 3D   │                         │ API local do core     │
 └──────────────┘                         └──────────┬────────────┘
@@ -22,20 +22,23 @@ workspace como um todo; cada componente tem documentação própria (links no fi
 ```
 
 As duas interfaces (web e desktop) falam com a **mesma API local**; nenhuma
-delas guarda chaves de provedor. O backend lê as credenciais do `.env` e usa o
-n8n como orquestrador dos fluxos de conversa, memória e voz.
+delas guarda chaves de provedor. O backend lê as credenciais do `.env` (ou de
+variáveis de ambiente) e chama os provedores direto; o n8n recebe os eventos do
+chat e executa as automações agendadas (notas no Obsidian, consolidação de
+memória, relatórios).
 
 ## Componentes
 
 | Caminho | O que é | Stack | Versionamento |
 | --- | --- | --- | --- |
-| `usami/` | Runtime principal da companion e API local (`/api/*` na porta 8787). Interface web com avatar 3D/Live2D, chat, TTS, STT, memória, personalidade e vínculo. | React 19 + Vite, Three.js + `@pixiv/three-vrm`, Node (`server.mjs`), Gemini (TTS/STT), OpenRouter/NVIDIA (LLM) | Repo próprio `UsamiVtuber/Usami-Core` (fora deste workspace git) |
-| `usami-desktop/` | App nativo Windows da mesma companion: palco VRM, chat, TTS com lipsync e chamada mãos-livres. | Rust (edition 2024) + GPUI 0.2.2, `gpui-vrm` (WGPU), `cpal`/`rodio`, `reqwest` | Repo de código `usami-workspace`; releases em `UsamiVtuber/usami-desktop` (v0.3.0) |
+| `usami/` | Runtime principal da companion e API local (`/api/*` na porta 8787). Interface web com avatar 3D/Live2D, chat, TTS, STT, memória, personalidade, vínculo e uma página de transmissão (`index-live.html`) para browser source do OBS. | React 19 + Vite, Three.js + `@pixiv/three-vrm`, Node (`server.mjs`), Gemini (TTS/STT), OpenRouter/NVIDIA (LLM) | Repo próprio `UsamiVtuber/Usami-Core` (fora deste workspace git) |
+| `usami-desktop/` | App nativo Windows da mesma companion: palco VRM, chat, TTS com lipsync, chamada mãos-livres, Central de Vínculo, Central do Agente e overlay do League of Legends (Usami.GG). | Rust (edition 2024) + GPUI 0.2.2, `gpui-vrm` (WGPU), `cpal`/`rodio`, `reqwest` | Repo de código `usami-workspace`; releases em `UsamiVtuber/usami-desktop` (v0.5.1) |
 | `gpui-vrm/` | Motor VRM/glTF/VRMA nativo usado pelo desktop (MToon cel-shading, SpringBone, blendshapes, lipsync, look-at). | Rust + WGPU | Crate local (`path` no `Cargo.toml` do desktop); fora deste git |
 | `usami-monitor/` | Painel operacional do notebook Linux que roda o Docker/n8n. | FastAPI + HTML estático (sem build) | Repo próprio `UsamiVtuber/usami-monitor` |
 | `infra/n8n-local/` | Stack Docker do n8n + Postgres 16, exports de workflows e variante `nyarch/` para o notebook. | docker-compose, n8n, PostgreSQL 16, SearXNG (nyarch) | Dentro deste repo; segredos em `.env` local |
+| `infra/observability/` | Langfuse local (traces do chat, spans de memória/ferramentas e gerações de LLM). Roda só no loopback; a telemetria do core é opcional e fica no-op sem as chaves. | docker-compose, Langfuse 2, PostgreSQL 16 | Dentro deste repo; segredos em `.env` local |
 | `assets/` | Material de terceiros: modelos (VRM/GLB/FBX), Cubism SDK, imagens e ideias. Licenças próprias; não redistribuir sem checar. | — | Só 4 imagens versionadas; o restante fica fora do git |
-| `data/` | Dados locais do runtime (ex.: `memory.json`). | — | Fora do git |
+| `usami/data/` | Dados locais do runtime: memória, vínculo, humor, conquistas, propostas e caches. O caminho é `data/` relativo ao diretório de onde a API roda (`usami/data/` via `npm run api`); `USAMI_DATA_DIR` sobrescreve. | — | Fora do git |
 | `vault/` | Vault Obsidian privado (`Usami Obsidian`). | — | Fora do git; conteúdo privado |
 | `dist/` | Artefatos de build/release gerados localmente (staging e zips). | — | Fora do git |
 | `Agents/` | Agentes e skills usados no desenvolvimento do workspace. | — | Fora do git (`Agents/` no `.gitignore`) |
@@ -46,18 +49,21 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
 
 | Porta | Serviço | Exposição |
 | --- | --- | --- |
-| `8787` | API local do core (`usami/server.mjs`) | Somente `127.0.0.1` |
-| `5173` | Vite dev server do web | Local; proxy `/api` para `127.0.0.1:8787` (injeta o token de dev) |
-| `5678` | Editor n8n | `127.0.0.1`; no notebook (`nyarch`) também `10.42.0.1` da rede do cabo |
+| `8787` | API local do core (`usami/server.mjs`) | `0.0.0.0` por padrão (loopback + rede local); `USAMI_API_HOST=127.0.0.1` restringe. `Host`/`Origin` na allowlist; rotas sensíveis exigem `x-usami-token` |
+| `5173` | Vite dev server do web | Local; proxy `/api` para `127.0.0.1:8787` (injeta o token de dev). `npm run dev:lan` publica na rede |
+| `5678` | Editor n8n | Stack local: `0.0.0.0:5678` (visível na LAN). No notebook (`nyarch`): `10.42.0.1` e `127.0.0.1` |
 | `8000` | Usami Monitor (FastAPI) | Somente `127.0.0.1` **no notebook Linux**; acesso por túnel SSH |
-| `5432` | Postgres do compose | Interno do Docker |
+| `3000` | Langfuse (UI e API de ingestão) | Somente `127.0.0.1`; sobe com `infra/observability` |
+| `5432` | Postgres do compose n8n | Interno do Docker |
+| `5433` | Postgres do Langfuse | Somente `127.0.0.1`, para inspeção local |
 
 ## Requisitos
 
 - **Windows 10/11 x64** para o app desktop e o uso do dia a dia.
-- **Node.js + npm** para o core web (`usami/`).
-- **Docker** (Desktop ou Engine) para a stack n8n/Postgres.
-- **Rust** com suporte a **edition 2024** para compilar o desktop.
+- **Node.js 22+** (recomendado 22 ou 24) e npm para o core web (`usami/`).
+- **Docker** (Desktop ou Engine) para as stacks n8n/Postgres e Langfuse.
+- **Rust** estável com suporte a **edition 2024** para compilar o desktop.
+- **Python 3.10+** opcional, para o pipeline de ingestão (`usami/tools/ingest`) e o Whisper local.
 - **Notebook Linux** apenas para o `usami-monitor` e para a variante `nyarch` do n8n.
 
 ## Como rodar
@@ -75,9 +81,11 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
    ```powershell
    cd usami
    npm install
-   npm run api    # API local em 127.0.0.1:8787
+   npm run api    # API em 0.0.0.0:8787 (restrinja com USAMI_API_HOST=127.0.0.1)
    npm run dev    # Vite em paralelo
    ```
+   O front web é desenvolvimento/prototipagem; a página de transmissão para OBS
+   fica em `http://127.0.0.1:5173/index-live.html` (ver `usami/docs/live-streaming.md`).
 
 3. **App desktop**
    ```powershell
@@ -94,51 +102,70 @@ n8n como orquestrador dos fluxos de conversa, memória e voz.
 
 `usami/server.mjs` expõe, entre outros:
 
-- conversa e voz: `/api/chat`, `/api/tts`, `/api/stt`
-- memória e personalidade: `/api/memory`, `/api/memory/forget`, `/api/personality`
-- orquestração: `/api/n8n/command`, `/api/n8n/commands`, `/api/n8n/commands/ack`
-- contexto e aprendizado: `/api/rag/context`, `/api/learning`, `/api/learning/verdict`, `/api/plan`, `/api/technique(s)`
-- mídia e proatividade: `/api/media/analyze`, `/api/proactive/state`, `/api/proactive/trigger`
+- conversa e voz: `/api/chat`, `/api/chat/activity`, `/api/tts`, `/api/stt`
+- memória e personalidade: `/api/memory`, `/api/memory/forget`, `/api/memory/maintenance`, `/api/personality`, `/api/mood`, `/api/mood/event`, `/api/achievements`
+- vínculo e agente: `/api/bond`, `/api/bond/event`, `/api/agent/turn`, `/api/agent/self`, `/api/agent/skills`, `/api/agent/suggestions`, `/api/agent/briefing`, `/api/agent/proposals`, `/api/agent/presence`
+- orquestração: `/api/n8n/command`, `/api/n8n/commands` (`GET`/`DELETE`), `/api/n8n/commands/ack`
+- contexto, aprendizado e planejamento: `/api/rag/context`, `/api/learning`, `/api/learning/verdict`, `/api/plan`, `/api/technique(s)`
+- mídia, proatividade e transmissão: `/api/media/analyze`, `/api/proactive/state`, `/api/proactive/trigger`, `/api/live/*`
+
+Rotas de memória, personagem, agente, STT, mídia e telemetria exigem `x-usami-token`; as demais usam a allowlist de `Host`/`Origin`.
 
 ## Testes
 
 | Componente | Comando | Cobertura |
 | --- | --- | --- |
 | `usami/` | `npm test` | unit, chat/API, technique, planner, ingest (Python) e sites |
-| `usami-desktop/` | `cargo test` | 19 testes: contratos de chat/TTS/STT, WAV do gravador, cadeado do microfone, resolução de assets |
-| `usami-monitor/` | — | sem suíte automatizada; uso restrito a localhost |
+| `usami-desktop/` | `cargo test` | 51 testes: contratos de chat/TTS/STT/mídia/agente, WAV do gravador, cadeado do microfone, despedida, Central do Agente, módulo LoL e resolução de assets |
+| `usami-monitor/` | `python -m pytest tests -q` | guardas do painel (argv sem shell, contenção de caminho, CSRF); no Windows uma asserção de caminho falha pelo separador `\` — rode no notebook Linux |
 
 ## Releases
 
 - **Desktop**: publicação **local**, sem PAT em CI, via `usami-desktop/scripts/release.ps1`
   (usa o `gh` autenticado de quem publica). Canal público:
-  `UsamiVtuber/usami-desktop`. Última versão: **v0.3.0** (Windows x64).
-- O zip **não inclui** arquivos `.vrm`/`.glb`/`.fbx`; modelos são distribuídos à parte.
+  `UsamiVtuber/usami-desktop`. Última versão: **v0.5.1** (Windows x64, ~12,2 MiB,
+  2026-11-11).
+- O zip **não inclui** arquivos `.vrm`/`.glb`/`.fbx`: o script copia
+  `usami-desktop/assets/` como está e hoje essa pasta só tem fundo, fontes e
+  ícones. Confira antes de publicar.
 - **Core** e **monitor** têm repositórios próprios e não são publicados por este
   workspace.
 
 ## Segurança e privacidade
 
 - Nenhuma chave, token ou senha em código, config versionada ou logs. Segredos
-  ficam em arquivos `.env` locais (n8n e core).
-- API, n8n e monitor escutam apenas em `127.0.0.1`; o monitor é acessado por túnel SSH.
+  ficam em arquivos `.env` locais (n8n e core) ou em variáveis de ambiente.
+- A API escuta em `0.0.0.0:8787` por padrão. A borda é a allowlist de `Host` e
+  `Origin` mais o `x-usami-token` nas rotas sensíveis; para voltar ao loopback,
+  defina `USAMI_API_HOST=127.0.0.1`.
+- A stack n8n local publica `0.0.0.0:5678` (visível na LAN); a variante `nyarch`
+  publica só `10.42.0.1` e `127.0.0.1`. O monitor e o Langfuse escutam apenas em
+  `127.0.0.1`; o monitor é acessado por túnel SSH e não tem autenticação própria.
 - O `vault/` é privado: não indexar, copiar ou publicar conteúdo.
-- O app desktop não guarda chaves; ele só fala com a API local.
+- O app desktop não guarda chaves de provedor; ele fala com a API local e, se o
+  módulo LoL estiver ligado, lê a Live Client Data API do jogo e baixa o
+  DataDragon (desligável com `USAMI_LOL_ENABLED=false`).
 
 ## Documentação por componente
 
-- Core: `usami/AGENTS.md` e `usami/docs/architecture.md`
-- Desktop: `usami-desktop/README.md`, `usami-desktop/docs/design-ref/DESIGN_REFERENCE.md`,
+- Core: `usami/README.md`, `usami/AGENTS.md` e `usami/docs/architecture.md`
+  (mapa da USAMI 2.0 em `usami/docs/usami-2.0-architecture-map.md`)
+- Desktop: `usami-desktop/README.md`, `usami-desktop/docs/KNOWN_ERRORS.md`,
+  `usami-desktop/docs/design-ref/DESIGN_REFERENCE.md`,
   `usami-desktop/docs/ui-parity/` e `usami-desktop/docs/CREDITS.md`
-- Infra: `infra/n8n-local/README.md` e `infra/n8n-local/workflows/README.md`
+- Infra: `infra/n8n-local/README.md`, `infra/n8n-local/workflows/README.md` e
+  `infra/observability/README.md`
 - Monitor: `usami-monitor/README.md`
+- Transmissão: `usami/docs/live-streaming.md`
 - Plano de produto em andamento: `KYNDRED_INSPIRED_PLAN.md`
 
-## Estado atual (2026-11-10)
+## Estado atual (2026-11-15)
 
-- Desktop **v0.3.0** publicado, com suporte a presença Win32 (bandeja e atalho global),
-  análise e envio de mídia, integração com eventos proativos e abas de configuração
-  conectadas à API local.
-- Core web segue como referência de comportamento; memória e personalidade são
-  editadas por lá.
-- Monitor e variante `nyarch` operam no notebook Linux, atrás de túnel SSH.
+- Desktop **v0.5.1** publicado: Central de Vínculo, Central do Agente, painel de
+  conversa em formato de celular, overlay Usami.GG para League of Legends, STT
+  parcial na legenda e rotas protegidas por token.
+- Core com turno agêntico (classificador determinístico + ferramentas), memória
+  consolidada, proatividade, bridge para code agents e página de transmissão
+  para OBS (`index-live.html`).
+- Monitor com suíte de testes (pytest) e variante `nyarch` operando no notebook
+  Linux, atrás de túnel SSH.

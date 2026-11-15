@@ -1,7 +1,10 @@
 # n8n local
 
-This stack runs n8n and PostgreSQL on this computer only. Its editor is at
-http://localhost:5678 and is not exposed to the local network.
+This stack runs n8n and PostgreSQL on this computer. Its editor is at
+http://localhost:5678, but the compose publishes the port as `0.0.0.0:5678:5678`:
+anything on the local network can reach the editor. The bind restriction
+(`10.42.0.1`/`127.0.0.1`) exists only in the Nyarch mirror — see
+[`nyarch/README.md`](nyarch/README.md).
 
 A stack que roda no notebook Nyarch (Arch) tem pasta e documentação próprias:
 [`nyarch/`](nyarch/README.md).
@@ -35,8 +38,9 @@ n8n installation is intentionally being erased.
 
 ## Integração Usami ↔ n8n
 
-A Usami e o n8n se comunicam em duas direções, ambas por endereço de laço
-(`127.0.0.1`/`localhost`) ou do link direto entre as máquinas (`10.42.0.1`):
+A Usami e o n8n se comunicam em duas direções, por endereço de laço
+(`127.0.0.1`/`localhost`) ou pelo link direto entre as máquinas: `10.42.0.1` é o
+notebook Nyarch (n8n) e `10.42.0.91` é o Windows (API da Usami):
 
 ### Usami → n8n (respostas e eventos)
 
@@ -45,12 +49,17 @@ fire-and-forget para a URL em `N8N_WEBHOOK_URL` (hoje
 `http://10.42.0.1:5678/webhook/usami-events`, lida do `.env` da raiz pelo
 `server.mjs`; sem a variável o default é `localhost:5678`) com:
 
-- `event` (`usami.response`), `timestamp`, `source` (`nvidia` ou `openrouter`)
+- `event` (`usami.response`), `timestamp`, `source` (`nvidia`, `openrouter`,
+  `gemini` ou `offline`)
 - `userMessage`, `reply`, `gesture`, `actions` (animações com delayMs/trigger)
 - `emotion`: `{ emotion, confidence, intensity, facs, source }` — o rótulo está
   em `emotion.emotion`; o campo vem `null` quando a classificação falha
 - `affinity`: `{ affinity, stage }` — o score está em `affinity.affinity`; o
   objeto todo some quando não há store de memória
+
+Com `N8N_WEBHOOK_SECRET` no `.env` o corpo sai assinado (`X-Usami-Timestamp` +
+`X-Usami-Signature`, HMAC-SHA256 de `<timestamp>.<corpo>`); `N8N_WEBHOOK_OMIT_TEXT=true`
+remove `userMessage`/`reply` do evento.
 
 O workflow **Usami - Receber Respostas** (em `workflows/`) recebe esse webhook
 e grava um Markdown no vault Obsidian em
@@ -58,32 +67,47 @@ e grava um Markdown no vault Obsidian em
 
 Para importar: no editor do n8n, vá em Workflows → Importar e selecione
 `workflows/Usami - Receber Respostas.json`. O webhook ficará disponível em
-`POST http://localhost:5678/webhook/usami-events`.
+`POST http://localhost:5678/webhook/usami-events`. O workflow já está publicado
+e ativo na instância do Nyarch (`bJJ17mDS2I5r4De9`); importar o JSON cria uma
+segunda cópia com outros ids (ver `workflows/README.md`).
 
 ### n8n → Usami (controle de avatar)
 
-A Usami expõe endpoints para o n8n enviar comandos de volta:
+A Usami expõe endpoints para o n8n enviar comandos de volta. A API escuta em
+`0.0.0.0:8787` por padrão (`USAMI_API_HOST`), então o n8n do Nyarch a alcança em
+`http://10.42.0.91:8787`; da própria máquina, `127.0.0.1:8787`. As rotas de fila
+passam pela allowlist de Host/Origin e **sempre exigem `x-usami-token`** — sem
+`USAMI_API_TOKEN` no `.env` elas respondem 503 (fail-closed); com o token
+definido, use a credencial HTTP Header Auth do n8n.
 
-- `POST http://127.0.0.1:8787/api/n8n/command` — enfileira um comando
+- `POST /api/n8n/command` — enfileira um comando
   - `{ "type": "say", "message": "texto" }` — faz a Usami dizer algo
-  - `{ "type": "gesture", "name": "wave" }` — gesto do avatar
+  - `{ "type": "proactive_say", "message": "texto" }` — fala proativa (balão + áudio direto no cliente)
+  - `{ "type": "gesture", "name": "wave" }` — gesto do avatar (nome precisa estar em `GESTURE_NAMES`)
   - `{ "type": "set_expression", "name": "happy", "weight": 1 }` — expressão VRM
   - `{ "type": "set_morph", "name": "a", "value": 0.5 }` — morph target
   - `{ "type": "set_mesh_visible", "name": "cabelo", "visible": false }` — mostra/esconde mesh
-- `GET http://127.0.0.1:8787/api/n8n/commands` — o cliente da Usami consome
-  essa fila a cada 2s e aplica os comandos no avatar localmente.
+  - `{ "type": "play_sequence", "shape": "...", ... }` — sequência a partir de shape paramétrica
+- `GET /api/n8n/commands` — o cliente da Usami consome essa fila a cada 2 s
+  (`x-usami-client` identifica a aba) e aplica os comandos no avatar localmente.
+  O GET **marca como entregue e não reentrega**; o cliente confirma com
+  `POST /api/n8n/commands/ack` (`{ "ids": [...] }`). A fila é em memória, por
+  cliente (máx. 50), e reiniciar a API descarta pendentes.
+- `DELETE /api/n8n/commands` — o cliente descarta a própria fila.
 
 Exemplo de nó HTTP Request no n8n para acionar um gesto:
 - Método: POST
-- URL: `http://127.0.0.1:8787/api/n8n/command`
+- URL: `http://10.42.0.91:8787/api/n8n/command`
+- Credencial: HTTP Header Auth com `x-usami-token`
 - Body JSON: `{ "type": "gesture", "name": "wave" }`
 
 ## Antes de expor externamente
 
-A configuração intencionalmente vincula o n8n a `127.0.0.1`. Antes de tornar
-webhooks acessíveis externamente, troque a senha do banco interno e defina uma
-URL HTTPS pública em `WEBHOOK_URL`; um túnel seguro é preferível a abrir uma
-porta do roteador. Trocar a senha é dois passos: o `postgres:16-alpine` só usa
-`POSTGRES_PASSWORD` ao inicializar um volume vazio, então mude o `.env` **e** rode
-`ALTER USER n8n WITH PASSWORD ...` no banco existente — um sem o outro derruba a
-conexão do n8n.
+O compose local não restringe o bind: o editor fica em `0.0.0.0:5678`, visível
+para a rede local. (O espelho do Nyarch é que publica apenas `10.42.0.1:5678` e
+`127.0.0.1:5678`.) Antes de tornar webhooks acessíveis externamente, troque a
+senha do banco interno e defina uma URL HTTPS pública em `WEBHOOK_URL`; um túnel
+seguro é preferível a abrir uma porta do roteador. Trocar a senha é dois passos:
+o `postgres:16-alpine` só usa `POSTGRES_PASSWORD` ao inicializar um volume vazio,
+então mude o `.env` **e** rode `ALTER USER n8n WITH PASSWORD ...` no banco
+existente — um sem o outro derruba a conexão do n8n.

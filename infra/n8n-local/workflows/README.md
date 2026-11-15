@@ -2,48 +2,56 @@
 
 Exports JSON dos workflows do n8n local (controle de versão). Cada arquivo é o
 export de um workflow; importar no editor do n8n (Workflows → Importar) para usar.
-Nada aqui é publicado/ativado automaticamente — o arquivo `Usami - Revisao de
-Tecnicas (agendado).json` vem com `active: false` de propósito.
+Nada aqui é publicado/ativado automaticamente. Os exports atuais vêm com
+`active: true` — exceto o `Usami - Google Assistant.json`, que vem `false` — (o
+estado da instância quando foram gerados), mas importar não ativa nada: publicar
+é passo manual (ou pelo MCP).
 
 ## Instância autoritativa e URL real
 
 A instância que vale é a do **Nyarch** (`http://10.42.0.1:5678`; é para onde o
 MCP aponta e é o `WEBHOOK_URL` do `nyarch/docker-compose.yml`). A stack local
-deste diretório (`docker-compose.yml`, porta `127.0.0.1:5678`) está **desligada**
-e não recebe nada hoje. Consequências práticas:
+deste diretório (`docker-compose.yml`, publicada em `0.0.0.0:5678`) está
+**desligada** e não recebe nada hoje. Consequências práticas:
 
 - O `usami/server.mjs` resolve `N8N_WEBHOOK_URL` do environment ou do
   `A:/Usami Project/.env` (nada popula `process.env` a partir desse arquivo).
   Sem essa linha no `.env`, o default `http://localhost:5678/...` vence e o
   evento `usami.response` é enviado para lugar nenhum em silêncio.
 - Export versionado ≠ publicado. Confirme na instância (`search_workflows`) antes
-  de confiar num workflow. Estado atual: `Usami - Obsidian Inbox`
-  (`NnWm0PoOh4IBjtQS`) ativo e publicado; `Usami - Receber Respostas`
-  (`bJJ17mDS2I5r4De9`) **publicado e ativo** desde 2026-10-26 (webhook
-  `POST /webhook/usami-events` responde 200);
-  `Usami - Revisao de Tecnicas (agendado)` segue ausente (ver bloqueio abaixo).
+  de confiar num workflow. Estado atual (7 workflows, todos ativos na instância):
+  `Usami - Receber Respostas` (`bJJ17mDS2I5r4De9`), `Usami - Obsidian Inbox`
+  (`NnWm0PoOh4IBjtQS`), `Usami - Revisao de Tecnicas (agendado)`
+  (`9GIG4GClRKAdF51j`), `Usami - Consolidacao Noturna (agendado)`
+  (`qSwMxxa1bBGFkN80`), `Usami - Daily Briefing (agendado)` (`tHNaNVu11bUsNAzN`),
+  `Usami - Relatorio Financeiro (agendado)` (`UpIYAszmGatDaBsW`) e
+  `Usami - Google Assistant` (`2Boo8f2pnVgL5GRi`, que no export ainda vem
+  `active: false`).
 - A publicação é feita por **código SDK** (`validate_workflow` →
   `create_workflow_from_code`), não pelo export JSON. O export de
   `Usami - Receber Respostas` foi regerado a partir do que a instância devolveu,
   então os `id`/`webhookId`/UUIDs de nó dele são os reais; importar aquele JSON
   criaria uma segunda cópia com outros ids.
 
-## Bloqueio do "Revisao de Tecnicas" nesta instância
+## "Revisao de Tecnicas" na instância do Nyarch
 
-O nó HTTP do export chama `GET http://127.0.0.1:8787/api/techniques`, escrito
-para a stack local do Windows. Na stack do Nyarch isso é o próprio container
-(como `usami/server.mjs:1807` escuta em `127.0.0.1:8787` **somente no loopback
-do Windows**), e o compose do Nyarch não define `extra_hosts` nem
-`network_mode: host` — então `host.docker.internal` também não resolve. A
-Windows está em `10.42.0.91` no mesmo link. Publicar esse workflow como está
-produziria nota de falha todo dia às 04:00. Precisa de uma decisão de exposição
-(bind não-loopback da API, túnel SSH reverso + `extra_hosts`, ou rodá-lo na
-stack local do Windows) antes de importar.
+O bloqueio antigo (nó chamando `127.0.0.1:8787`, que dentro do container é ele
+mesmo) está resolvido: o export e a instância ativa (`9GIG4GClRKAdF51j`) chamam
+`GET http://10.42.0.91:8787/api/techniques`, ou seja, a API da Usami no Windows
+pela rede do link — o compose do Nyarch não tem `extra_hosts` nem
+`network_mode: host`. Isso só funciona porque a API escuta em `0.0.0.0:8787` por
+padrão (`USAMI_API_HOST` em `usami/server.mjs`); com a API parada ou presa no
+loopback, o workflow falha todo dia às 04:00 com "API da Usami indisponivel".
+O horário também coincide com o da `Consolidacao Noturna` (04:00).
 
-Regra de ouro: **o n8n não move o avatar.** Estes workflows só fazem tarefas
-assíncronas/agendadas de casa (receber evento, listar/consolidar, escrever nota).
-Nenhum deles emite comando de movimento, controla osso/frame-loop nem chama
-`/api/n8n/command`. No máximo produzem tarefa/revisão para uma PESSOA executar.
+Regra de ouro: **o n8n não move o avatar diretamente.** Estes workflows só fazem
+tarefas assíncronas/agendadas de casa (receber evento, listar/consolidar, escrever
+nota) e, no máximo, **enfileiram** um comando para o cliente aplicar; nenhum
+controla osso/frame-loop. Dois deles (`Daily Briefing` e `Relatorio Financeiro`)
+têm nó HTTP em `POST /api/n8n/command` com credencial `Usami Token`, mas enviam
+`{ text, gesture }` enquanto o contrato atual exige `type`
+(`say`/`proactive_say`/...): hoje a API responde 400 e nada entra na fila.
+Aprovar técnica (proposta → validada) continua sendo decisão de uma PESSOA.
 
 Regra de escrita no vault: automações só gravam nas pastas de automação
 documentadas. Em `vault/.../Usami/Inbox/Automations/` mora um `README.md` com a
@@ -64,7 +72,7 @@ apenas pelo workflow de respostas, conforme já estabelecido.
   - Evidência decisiva, sem escrever nada: sonda read-only (`Usami - Sonda Permissao de Arquivos`, `NLs9mCXGphBz3X59`, execução 11) — `read` de `/files/obsidian/usami/Inbox/Automations/*.md`, a pasta das gravações de sucesso de 24/10, devolve o mesmo `Access to the file is not allowed.`. As gravações antigas são pré-recreate de 25/10 (o espelho desta stack entrou no git em 25/10, commit `7496140`), então a restrição provavelmente chegou junto com aquele recreate.
   - **Reparo (aplicado em 2026-10-27 pelo operador no host):** `N8N_RESTRICT_FILE_ACCESS_TO: /files/obsidian/usami;/home/node/vault/Inbox/Automations` em `~/n8n/docker-compose.yml` e `docker compose up -d`. O espelho versionado deste repositório está corrigido com o mesmo valor.
   - **Risco operacional (fechado em 2026-10-27):** a imagem estava em `latest`, então qualquer recreate trocava o binário do n8n em silêncio — inclusive o comportamento de path. O espelho está pinado em `docker.n8n.io/n8nio/n8n:2.44.6` (commit `ef80de0`); qualquer upgrade daqui pra frente é decisão explícita.
-- **Sonda de permissão:** `Usami - Sonda Permissao de Arquivos` (`NLs9mCXGphBz3X59`) existe só para diagnóstico, com `operation: read` em três caminhos do vault e `onError: continueRegularOutput` — não escreve nem apaga nada. Já cumpriu o papel (execs 11/12/14); pode ser arquivada quando o `Responses` não for mais assunto.
+- **Sonda de permissão:** `Usami - Sonda Permissao de Arquivos` (`NLs9mCXGphBz3X59`) **não aparece na instância** (a busca por "Sonda" devolve 0 resultados e ela não está entre os 7 workflows ativos). Era só diagnóstico, com `operation: read` em três caminhos do vault e `onError: continueRegularOutput`; cumpriu o papel (execs 11/12/14) e não deve ser usada como referência.
 - **Rotas para criar/ajustar a pasta, e o que falha:** `n8n-nodes-base.executeCommand` **não existe nesta instância** (`validate_workflow`: `Unrecognized node type`; `search_nodes`: sem resultado) — o nó está desabilitado no deploy, então não há shell pelo n8n. `ssh` para `10.42.0.1` está com conexão recusada em 22/2222/22022 (5678 responde: host de pé, sshd não). Restou o caminho de fora (host/`docker exec`).
 - **Estado na instância do Nyarch:** o workflow está **ativo** (`bJJ17mDS2I5r4De9`), então cada `POST /api/chat` da Usami já gera nota em `Inbox/Responses/`. O envio é fire-and-forget: se o n8n estiver fora, o chat não sente e a nota simplesmente não nasce.
 - **Vault local:** o vault de verdade é `A:/Usami Project/vault/Usami Obsidian/Usami` (tem `.obsidian/`); `A:/Usami Obsidian` não existe. A pasta `Inbox/Responses/` já foi criada no vault real.
@@ -76,22 +84,22 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 - **Idempotência:** um arquivo por evento via timestamp + slug.
 
 ## Usami - Revisao de Tecnicas (agendado)
-- **Gatilho:** Schedule Trigger diário às **04:00** (fuso `America/Sao_Paulo`, no `settings.timezone`). Nada de intervalo curto.
+- **Gatilho:** Schedule Trigger diário às **04:00** (`triggerAtHour: 4`; o fuso efetivo é o `GENERIC_TIMEZONE: America/Sao_Paulo` do compose — a instância não define `settings.timezone`). Nada de intervalo curto.
 - **Nós:** Schedule → HTTP Request → Code (filtrar/montar nota) → If (API respondeu?) → [falha] Stop and Error · [sucesso] Convert to File → Read/Write File → NoOp.
-- **HTTP Request:** `GET http://127.0.0.1:8787/api/techniques` com header `Origin: http://127.0.0.1:5173` (esse valor está na allowlist `DEFAULT_ALLOWED_ORIGINS` de `usami/server.mjs`; a rota devolve 403 sem origem permitida). Timeout curto de **5000 ms** e `retryOnFail` com **`maxTries: 2`** (1 retry no máximo), para não martelar um servidor que está fora. `continueOnFail: true` — o erro vira um item com `error`, tratado de forma explícita pelo nó Code.
+- **HTTP Request:** `GET http://10.42.0.91:8787/api/techniques` (a API da Usami no Windows, via link) com header `Origin: http://127.0.0.1:5173` (esse valor está na allowlist `DEFAULT_ALLOWED_ORIGINS` de `usami/server.mjs`; a rota devolve 403 sem origem permitida). Sem credencial: os dois GETs de leitura (`/api/techniques`, `/api/technique?id`) ficam só com a borda de origem. Timeout curto de **5000 ms** e `retryOnFail` com **`maxTries: 2`** (1 retry no máximo), para não martelar um servidor que está fora. `continueOnFail: true` — o erro vira um item com `error`, tratado de forma explícita pelo nó Code.
 - **Leitura da resposta:** o item de `GET /api/techniques` traz `{id, name, status, confidence, motions, sources}` (via `summarizeTechnique`); a lista **não** expõe `summary`/`tags`/`createdAt` — esses campos só aparecem no detalhe `GET /api/technique?id=...`. Por isso o filtro usa `status`, `confidence` e `sources`.
 - **Filtro de revisão humana:** `status === 'proposta'` **e** `confidence < 0.8` (limiar explícito `THRESHOLD` no nó Code) **e** `sources` não-vazio. Só isso vai para a nota.
-- **Escreve em:** `Inbox/Automations/technique-review-<AAAA-MM-DD>.md` (caminho do container `/home/node/vault/Inbox/Automations/`, mesmo da stack local). A nota lista o que espera aprovação e traz a instrução explícita de que a aprovação (proposta → validada) é feita por **PESSOA** na API da Usami — o workflow nunca chama endpoint de escrita nem altera status, e não contém comando de movimento.
+- **Escreve em:** `Inbox/Automations/technique-review-<AAAA-MM-DD>.md`, no caminho do container `/files/obsidian/usami/Inbox/Automations/` (bind `/dados/obsidian/usami` do Nyarch). A nota lista o que espera aprovação e traz a instrução explícita de que a aprovação (proposta → validada) é feita por **PESSOA** na API da Usami — o workflow nunca chama endpoint de escrita nem altera status, e não contém comando de movimento.
 - **Idempotência (mecanismo exato):** chave determinística de lote = **data local `AAAA-MM-DD`** no nome do arquivo, então rodar duas vezes no mesmo dia **sobrescreve a mesma nota** (sem nota nova/duplicada). Dentro do lote, dedupe por **`id|status`** com um `Set`: a mesma técnica não é listada duas vezes. O conteúdo é um snapshot recalculado da API a cada execução; ignorando `generated_at`, duas execuções no mesmo dia produzem corpo idêntico.
 - **Se a API estiver fora:** o HTTP Request falha (retry único esgotado) e o item com `error` faz o If mandar para o nó **Stop and Error** com mensagem `API da Usami indisponivel: ... Nenhuma nota gravada.`. O workflow falha de forma visível e **não grava nota parcial** (o ramo de escrita não é alcançado). Idem se a resposta vier em formato inesperado (sem `techniques` nem `total`).
-- **Custo/segurança:** só localhost, sem credencial, sem serviço externo, sem node que envie dados para fora da máquina. Não abre nem expõe porta.
+- **Custo/segurança:** só a rede do link (`10.42.0.0/24`), sem credencial, sem serviço externo, sem node que envie dados para fora da máquina. Não abre nem expõe porta.
 
 ## Validação registrada
 - Tipos e parâmetros dos nós conferidos com o MCP do n8n em modo leitura (`get_node_types`, versão estática): `scheduleTrigger` (rule.interval `field:days`, `triggerAtHour`), `httpRequest` v4 (`headerParameters`, `options.timeout`, `retryOnFail`/`maxTries`/`continueOnFail` como propriedades do nó), `if` v2, `convertToFile` (`toText`), `readWriteFile` (`write`), `stopAndError`, `noOp`.
 - `validate_workflow` do MCP exige código no formato n8n Workflow SDK, não o export JSON versionado; por isso não foi usado contra este arquivo. A lógica do nó Code foi exercitada localmente (Node) para sucesso, falha de API e idempotência.
 
 ## Usami - Google Assistant (desacoplamento Fase 1)
-- **Arquivo:** `Usami - Google Assistant.json`.
+- **Arquivo:** `Usami - Google Assistant.json` (no export vem `active: false`; na instância do Nyarch está **ativo**, `2Boo8f2pnVgL5GRi`).
 - **Gatilho:** Webhook `POST /webhook/usami-google`.
 - **Papel:** Centraliza as integrações com Google Workspace (Gmail e Google Calendar) gerenciando OAuth2 nativamente no n8n.
 - **Entrada:** `{ action: 'list_emails' | 'list_events', params: { query, maxResults, timeMin } }`.
@@ -102,21 +110,24 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 - **Arquivo:** `Usami - Daily Briefing (agendado).json`.
 - **Gatilho:** Schedule Trigger diário às **07:30** (`America/Sao_Paulo`).
 - **Nós:** Schedule → HTTP Request (Open-Meteo Clima) → Code (Formatar Nota de Briefing) → Convert to File → Read/Write File (`Inbox/Automations/briefing-AAAA-MM-DD.md`) → HTTP Request (`POST /api/n8n/command`).
-- **Papel:** Gera o resumo matinal no Obsidian com dados de clima e foco do dia antes do usuário abrir o app, e enfileira uma saudação com gesto de aceno (`wave`) na fila da Usami para entrega quando o avatar carregar.
+- **Papel:** Gera o resumo matinal no Obsidian com dados de clima e foco do dia antes do usuário abrir o app e tenta enfileirar uma saudação com gesto de aceno (`wave`).
+- **Atenção (verificado no export e na instância):** o nó final envia `{ text, gesture }` para `http://10.42.0.91:8787/api/n8n/command` com credencial `Usami Token`, mas o contrato da fila exige `type` — a API responde 400 e nada é enfileirado. A versão **ativa** na instância (`8be67225-...`) ainda difere do export/draft: grava em `$env.USAMI_VAULT_PATH/Inbox/Automations` (mesma pasta do mount SMB) e chama `127.0.0.1:8787`, que dentro do container não é a API da Usami.
 - **Segurança:** Apenas usa a API pública e aberta do Open-Meteo (zero chave/custo) e grava estritamente em `Inbox/Automations/`.
 
 ## Usami - Consolidacao Noturna (agendado - Fase 4)
 - **Arquivo:** `Usami - Consolidacao Noturna (agendado).json`.
-- **Gatilho:** Schedule Trigger diário às **04:00** (`America/Sao_Paulo`).
-- **Nós:** Schedule → HTTP Request (`POST /api/memory/maintenance`) → If (`ok === true`) → NoOp / Stop and Error.
+- **Gatilho:** Schedule Trigger diário às **04:00** (`America/Sao_Paulo`), mesmo horário do `Revisao de Tecnicas`.
+- **Nós:** Schedule → HTTP Request (`POST http://10.42.0.91:8787/api/memory/maintenance`) → If (`ok === true`) → NoOp / Stop and Error.
 - **Papel:** Executa em segundo plano a sumarização dos dias anteriores, consolidação de fatos duráveis na memória, refresh do índice FTS5 e contagem/manutenção do LanceDB local, aliviando o loop do chat de tarefas de I/O pesado.
-- **Segurança:** Protegido por `x-usami-token` e allowlist de Host/Origin.
+- **Segurança:** Protegido por `x-usami-token` (credencial `Usami Token` no n8n) e allowlist de Host/Origin.
+- **Observação:** na instância os nós têm sufixo `1` nos nomes (`Disparo Noturno (04:00)1` etc.); o export usa os nomes sem sufixo.
 
 ## Usami - Relatorio Financeiro (agendado - Fase 3)
 - **Arquivo:** `Usami - Relatorio Financeiro (agendado).json`.
 - **Gatilho:** Schedule Trigger diário às **08:00** (`America/Sao_Paulo`).
-- **Nós:** Schedule → HTTP Request (`POST /api/agent/tools/finance.transactions`) → Code (Processar Extrato e Alertas) → Convert to File → Read/Write File (`Inbox/Automations/financas-AAAA-MM.md`) → HTTP Request (`POST /api/n8n/command`).
-- **Papel:** Consulta transações e saldos do Open Finance (Pluggy / Belvo) em modo somente leitura via API de ferramentas da Usami, consolida em relatório mensal no Obsidian e dispara aviso com gesto `surprised` se identificar gastos anormais (> R$ 500) ou atualização normal com gesto `nod`.
+- **Nós:** Schedule → HTTP Request (`POST http://10.42.0.91:8787/api/agent/tools/finance.transactions`, credencial `Usami Token`) → Code (Processar Extrato e Alertas) → Convert to File → Read/Write File (`/files/obsidian/usami/Inbox/Automations/financas-AAAA-MM.md`) → HTTP Request (`POST /api/n8n/command`).
+- **Papel:** Consulta transações e saldos do Open Finance (Pluggy / Belvo) em modo somente leitura via API de ferramentas da Usami, consolida em relatório mensal no Obsidian e tenta avisar com gesto `surprised` se alguma transação de saída passar de R$ 500 ou com gesto `nod` na atualização normal.
+- **Atenção:** o nó final envia o mesmo corpo inválido do briefing (`{ text, gesture }` sem `type`), então a API responde 400 e o aviso não entra na fila.
 - **Segurança:** Somente leitura, token protegido e escrita exclusiva em `Inbox/Automations/`.
 
 

@@ -74,6 +74,32 @@ Formato de cada entrada:
 - **Status:** resolvido (risco aceito pelo usuário)
 - **Referências:** project-postgres-secret-exposure.md
 
+### KE-005 — Artefatos visuais nas bordas/cantos do smartphone (GPUI overflow_hidden não recorta)
+- **Data:** 2026-11-15
+- **Componente:** usami-desktop (src/views/phone.rs)
+- **Erro / falha:** O chassis do smartphone (externo: `rounded(48px)`, padding `3.5px`) e a tela interna OLED (`rounded(44px)`, `overflow_hidden`) geram desalinhamento visual nos cantos — aparece "rebarba" ou linha fina do background do chassis vazando pelos cantos da tela interna, pois `overflow_hidden` no GPUI 0.2.2 não recorta cantos arredondados corretamente (quirk conhecido, ver KE-002).
+- **Sintoma:** nos 4 cantos do aparelho, vê-se uma linha/fina do titânio escuro (`0x111317`) escapando por baixo dos cantos da tela OLED (`0x1f2c34`), quebrando a ilusão de tela curva perfeita dentro do chassi.
+- **Causa raiz:** diferença entre `rounded(48px)` do chassis externo e `rounded(44px)` da tela interna com `padding(3.5px)` → raio efetivo interno = 48 - 3.5 = 44.5px, mas tela usa 44px (diferença de 0.5px). Somado ao bug do GPUI onde `overflow_hidden` não aplica clipping nos cantos arredondados, o conteúdo filho vaza.
+- **Tentado e não funcionou:** 
+  - Apenas confiar no `overflow_hidden` da tela interna (não recorta cantos no GPUI 0.2.2).
+  - Aumentar padding do chassis para 4px (quebra proporções do Dynamic Island e status bar).
+  - Remover `overflow_hidden` da tela interna (piora drasticamente).
+- **Correção que funcionou (passo a passo do fix anterior):**
+  1. Capturar screenshot do celular renderizado.
+  2. Abrir em editor de imagem e inverter cores / aplicar "contraste negativo" (ex: `Colors → Invert` ou curve adjustment) para realçar bordas escuras sobre fundo claro.
+  3. Medir em pixels a largura da "rebarba" vazando em cada canto (tipicamente 1-2px).
+  4. Ajustar o `rounded` da tela interna para `px(44.5)` (ou `px(45)` se GPUI não aceita float) compensando o padding de 3.5px do chassis: `raio_interno = raio_externo - padding = 48 - 3.5 = 44.5`.
+  5. Alternativamente, se GPUI só aceita inteiros: manter `rounded(44px)` na tela e reduzir padding do chassis para `px(4.0)` (alinha raio efetivo a 44px).
+  6. **Fix adicional (2026-11-15):** como `overflow_hidden` não recorta cantos no GPUI 0.2.2, os filhos diretos de `phone-screen` que ocupam largura total (status bar, header, input bar, home indicator) renderizam seus backgrounds retangulares fora dos cantos arredondados da tela. Solução: adicionar `rounded_tl/tr(44.5)` no filho do topo (status bar) e `rounded_bl/br(44.5)` nos filhos da base (input bar, home indicator bar).
+  7. Validar visualmente: recapturar, inverter cores, confirmar que não há vazamento nos 4 cantos.
+- **Como evitar / reproduzir:** 
+  - Sempre que alterar `rounded`, `padding` ou `border` do chassis/tela do smartphone, recalcular: `raio_interno_ideal = raio_externo - padding`.
+  - Testar com screenshot + inversão de cores antes de commitar.
+  - Não confiar apenas em `overflow_hidden` para clipping de cantos no GPUI 0.2.2.
+  - Filhos diretos de `phone-screen` que tocam as bordas devem ter `rounded_*` correspondentes nos cantos que tocam.
+- **Status:** resolvido (requer revalidação a cada alteração de layout do phone)
+- **Referências:** KE-002 (quirks GPUI), commit 711299f (removeu placa de arco inferior que mascarava o problema)
+
 ---
 
 **Como adicionar uma nova entrada:** copie o bloco acima, preencha com o próximo número KE disponível, descreva sintoma, causa raiz, tentativas fracassadas, correção que funcionou e referências (commit/PR/issue). Mantenha em pt-BR.

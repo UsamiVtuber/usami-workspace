@@ -132,7 +132,7 @@ impl UsamiApp {
                     .min_h(px(0.0))
                     .flex()
                     .flex_col()
-                    .rounded(px(44.0))
+                    .rounded(px(44.5))
                     .overflow_hidden()
                     .bg(gpui::rgba(0x1f2c34ff))
                     // ── 1. BARRA DE STATUS + DYNAMIC ISLAND ──
@@ -145,6 +145,8 @@ impl UsamiApp {
                             .flex()
                             .items_center()
                             .justify_between()
+                            .rounded_tl(px(44.5))
+                            .rounded_tr(px(44.5))
                             // Horário real local à esquerda
                             .child(
                                 div()
@@ -742,6 +744,8 @@ impl UsamiApp {
                                     .flex()
                                     .items_end()
                                     .gap(px(6.0))
+                                    .rounded_bl(px(44.5))
+                                    .rounded_br(px(44.5))
                                     .child(
                                         div()
                                             .flex_shrink_0()
@@ -839,7 +843,7 @@ impl UsamiApp {
                                             .child(if can_send {
                                                 icon("send", 15.0).into_any_element()
                                             } else {
-                                                icon("pulse", 16.0).into_any_element()
+                                                icon("pulse_white", 16.0).into_any_element()
                                             }),
                                     ),
                             )
@@ -1211,8 +1215,9 @@ impl UsamiApp {
                     // ── 4. HOME INDICATOR BAR (BASE DO SMARTPHONE) ──
                     .child(
                         div()
-                            .w_full()
-                            .h(px(18.0))
+                            .w(px(340.0))
+                            .mx_auto()
+                            .h(px(10.0))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -1222,10 +1227,12 @@ impl UsamiApp {
                             } else {
                                 gpui::rgba(0x1f2c34ff)
                             })
+                            .rounded_bl(px(44.5))
+                            .rounded_br(px(44.5))
                             .child(
                                 div()
-                                    .w(px(108.0))
-                                    .h(px(3.5))
+                                    .w(px(72.0))
+                                    .h(px(2.5))
                                     .rounded_full()
                                     .bg(gpui::rgba(0xffffff44)),
                             ),

@@ -421,6 +421,7 @@ async fn dispatch_to_llm(
         let client = OllamaClient::default();
         match tokio::time::timeout(Duration::from_secs(30), client.chat(prompt)).await {
             Ok(Ok(text)) if !text.trim().is_empty() => Some(text),
+            Ok(Ok(_)) => None,
             Ok(Err(err)) => {
                 eprintln!("[Usami.GG] Ollama falhou ({err}); tentando backend 8787.");
                 None

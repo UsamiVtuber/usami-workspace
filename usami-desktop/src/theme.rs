@@ -1,9 +1,10 @@
-//! Tokens visuais do Usami Desktop — direção de arte "Midnight Romance".
+//! Tokens visuais do Usami Desktop — direção de arte "Velvet Bunny" (Visual Novel).
 //!
-//! Paleta oficial do redesign (2026-11-11): fundo `#100819`, superfície
-//! `#20102F`, rosa de destaque `#F052B5`, rosa claro `#F5C3E1`, lavanda
-//! `#A77ABF`, texto `#F6EAF3`. Nenhum widget deve declarar cor, tamanho de
-//! fonte, raio ou sombra solto — tudo passa por `theme()`.
+//! Paleta oficial inspirada na modelo da Usami: cinza carvão profundo `#141316`,
+//! superfície grafite `#1E1C22`, vermelho bordô `#A82440`, rosa claro `#F5D0D8`,
+//! prata `#C8CAD4`, branco rosado `#F9F2F4` e detalhes em verde esmeralda `#10B981`.
+//! Nenhum widget deve declarar cor, tamanho de fonte, raio ou sombra solto —
+//! tudo passa por `theme()`.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -131,69 +132,91 @@ pub struct Palette {
 impl Palette {
     pub fn official() -> Self {
         Self {
-            deep: rgb(0x100819),
-            panel: rgb(0x20102f),
-            primary: rgb(0xf5c3e1),
-            lavender: rgb(0xa77abf),
-            pearl: rgb(0xf6eaf3),
-            accent: rgb(0xf052b5),
-            ok: rgb(0x3ecf8e),
+            deep: rgb(0x141316),
+            panel: rgb(0x1e1c22),
+            primary: rgb(0xf5d0d8),
+            lavender: rgb(0xc8cad4),
+            pearl: rgb(0xf9f2f4),
+            accent: rgb(0xa82440),
+            ok: rgb(0x10b981),
             warn: rgb(0xf5c451),
-            err: rgb(0xff6b7a),
-            line: rgba(0xf6eaf31f),
-            line_strong: rgba(0xf6eaf338),
-            muted: rgba(0xf6eaf3a8),
-            faint: rgba(0xf6eaf38c),
+            err: rgb(0xe11d48),
+            line: rgba(0xc8cad424),
+            line_strong: rgba(0xc8cad44d),
+            muted: rgba(0xf9f2f4a8),
+            faint: rgba(0xf9f2f47a),
 
-            composer_bg: rgba(0x100819b8),
-            icon_bg: rgba(0x20102fc7),
-            icon_bg_hover: rgba(0xf052b538),
-            icon_bg_active: rgba(0xf052b559),
-            status_bg: rgba(0x100819d1),
-            overlay_top: rgba(0x1008198c),
-            overlay_bottom: rgba(0x100819b8),
-            companion_overlay: rgba(0x1008199e),
-            surface_soft: rgba(0xf6eaf314),
-            accent_tint: rgba(0xf052b540),
-            danger_muted_bg: rgba(0xff8a961f),
-            danger_muted_border: rgba(0xff8a9640),
-            danger_muted: rgb(0xff8a96),
-            success_border: rgba(0x3ecf8e80),
-            call_bg: rgba(0xf6eaf30d),
-            call_bg_hover: rgba(0xf6eaf31f),
-            accent_border: rgba(0xf052b580),
-            card_bg: rgba(0x2a1540bf),
-            bond_border: rgba(0xf5c3e173),
-            err_dark: rgb(0xd1485a),
-            bond_track: rgba(0xf6eaf326),
+            composer_bg: rgba(0x141316cc),
+            icon_bg: rgba(0x1e1c22d9),
+            icon_bg_hover: rgba(0xa8244042),
+            icon_bg_active: rgba(0xa824406b),
+            status_bg: rgba(0x141316d9),
+            overlay_top: rgba(0x14131685),
+            overlay_bottom: rgba(0x141316b8),
+            companion_overlay: rgba(0x141316a6),
+            surface_soft: rgba(0xc8cad414),
+            accent_tint: rgba(0xa8244040),
+            danger_muted_bg: rgba(0xe11d4822),
+            danger_muted_border: rgba(0xe11d4855),
+            danger_muted: rgb(0xfda4af),
+            success_border: rgba(0x10b98180),
+            call_bg: rgba(0xc8cad40f),
+            call_bg_hover: rgba(0xc8cad424),
+            accent_border: rgba(0xf5d0d873),
+            card_bg: rgba(0x27242ceb),
+            bond_border: rgba(0xc8cad459),
+            err_dark: rgb(0x8e1b33),
+            bond_track: rgba(0xc8cad426),
         }
     }
 
-    /// Cores exclusivas para o estilo Visual Novel de Romance
+    /// Vermelho bordô vibrante (fitas e destaques principais)
     pub fn vn_pink_neon() -> Rgba {
-        rgb(0xf052b5)
+        rgb(0xa82440)
     }
 
+    /// Rosa claro sakura (brilhos, rubor e textos suaves)
     pub fn vn_pink_soft() -> Rgba {
-        rgb(0xf5c3e1)
+        rgb(0xf5d0d8)
     }
 
-    /// Lavanda clareada para gradientes e brilhos.
+    /// Prata luminosa para contornos e ornamentos
     pub fn vn_purple_glow() -> Rgba {
-        rgb(0xc49dd4)
+        rgb(0xc8cad4)
     }
 
-    /// Lavanda intermediária (par de gradiente do rosa principal).
+    /// Bordô profundo para gradientes
     pub fn vn_lavender_bright() -> Rgba {
-        rgb(0xb78cd1)
+        rgb(0x8e1b33)
     }
 
     pub fn vn_card_border() -> Rgba {
-        rgba(0xf5c3e14d)
+        rgba(0xc8cad438)
     }
 
     pub fn vn_border_bright() -> Rgba {
-        rgba(0xf052b680)
+        rgba(0xf5d0d880)
+    }
+
+    /// Verde esmeralda (joia central da Usami — detalhes pontuais)
+    pub fn emerald() -> Rgba {
+        rgb(0x10b981)
+    }
+
+    pub fn emerald_soft() -> Rgba {
+        rgba(0x10b98126)
+    }
+
+    pub fn emerald_border() -> Rgba {
+        rgba(0x10b98170)
+    }
+
+    pub fn silver() -> Rgba {
+        rgb(0xc8cad4)
+    }
+
+    pub fn silver_bright() -> Rgba {
+        rgb(0xe5e7f0)
     }
 
     pub fn vn_gold() -> Rgba {
@@ -347,46 +370,46 @@ impl Theme {
         )
     }
 
-    /// `linear-gradient(135deg, rgba(240,82,181,.45), rgba(245,195,225,.3))`
+    /// `linear-gradient(135deg, rgba(168,36,64,.55), rgba(245,208,216,.3))`
     pub fn bond_pill_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0xf052b573), rgba(0xf5c3e14d))
+        Self::gradient(135.0, rgba(0xa824408c), rgba(0xf5d0d84d))
     }
 
     pub fn bond_pill_hover(&self) -> Background {
-        Self::gradient(135.0, rgba(0xf052b5a6), rgba(0xf5c3e173))
+        Self::gradient(135.0, rgba(0xa82440bf), rgba(0xf5d0d873))
     }
 
     pub fn send_bg(&self) -> Background {
-        Self::gradient(135.0, self.color.accent, self.color.lavender)
+        Self::gradient(135.0, self.color.accent, self.color.err_dark)
     }
 
     pub fn stage_overlay(&self) -> Background {
         Self::gradient(180.0, self.color.overlay_top, self.color.overlay_bottom)
     }
 
-    /// Fundo com gradiente ametista profundo característico de Visual Novel de Romance
+    /// Fundo cinza grafite profundo característico do tema Velvet Bunny
     pub fn vn_modal_bg(&self) -> Background {
-        Self::gradient(145.0, rgba(0x2a1540f8), rgba(0x100819fa))
+        Self::gradient(145.0, rgba(0x221f26f8), rgba(0x141316fa))
     }
 
     pub fn vn_sidebar_bg(&self) -> Background {
-        Self::gradient(180.0, rgba(0x1d0e2ee6), rgba(0x12071cee))
+        Self::gradient(180.0, rgba(0x1b191ff2), rgba(0x121114f5))
     }
 
     pub fn vn_card_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0x2a1540e0), rgba(0x1c0d2cdc))
+        Self::gradient(135.0, rgba(0x2a2630e8), rgba(0x1d1b22e6))
     }
 
     pub fn vn_tab_active_bg(&self) -> Background {
-        Self::gradient(90.0, Palette::vn_pink_neon(), Palette::vn_lavender_bright())
+        Self::gradient(90.0, rgb(0x8e1b33), rgb(0xb8324f))
     }
 
     pub fn vn_heart_badge_bg(&self) -> Background {
-        Self::gradient(135.0, rgba(0xf052b5f0), rgba(0xa77abff0))
+        Self::gradient(135.0, rgba(0x8e1b33f5), rgba(0xc23b5af0))
     }
 
     pub fn vn_exp_fill_bg(&self) -> Background {
-        Self::gradient(90.0, Palette::vn_pink_neon(), Palette::vn_lavender_bright())
+        Self::gradient(90.0, rgb(0xa82440), rgb(0xf5d0d8))
     }
 }
 

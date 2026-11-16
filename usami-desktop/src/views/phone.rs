@@ -118,7 +118,7 @@ impl UsamiApp {
                     spread_radius: px(0.0),
                 },
                 BoxShadow {
-                    color: gpui::rgba(0x25d36618).into(),
+                    color: gpui::rgba(0x10b98118).into(),
                     offset: point(px(0.0), px(0.0)),
                     blur_radius: px(28.0),
                     spread_radius: px(0.0),
@@ -134,7 +134,7 @@ impl UsamiApp {
                     .flex_col()
                     .rounded(px(44.5))
                     .overflow_hidden()
-                    .bg(gpui::rgba(0x1f2c34ff))
+                    .bg(gpui::rgba(0x1e1c22ff))
                     // ── 1. BARRA DE STATUS + DYNAMIC ISLAND ──
                     .child(
                         div()
@@ -232,7 +232,7 @@ impl UsamiApp {
                                                             .w_full()
                                                             .h_full()
                                                             .rounded(px(1.0))
-                                                            .bg(gpui::rgba(0x25d366ff)),
+                                                            .bg(gpui::rgba(0x10b981ff)),
                                                     ),
                                             ),
                                     ),
@@ -262,8 +262,8 @@ impl UsamiApp {
                                             .px(px(4.0))
                                             .text_size(px(22.0))
                                             .font_weight(FontWeight::BOLD)
-                                            .text_color(gpui::rgba(0x00a884ff))
-                                            .hover(|s| s.text_color(gpui::rgba(0x25d366ff)))
+                                            .text_color(gpui::rgba(0xf5d0d8ff))
+                                            .hover(|s| s.text_color(gpui::rgba(0x10b981ff)))
                                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                                 if this.phone_view_settings {
                                                     this.phone_view_settings = false;
@@ -295,9 +295,9 @@ impl UsamiApp {
                                                         .right(px(0.0))
                                                         .size(px(10.0))
                                                         .rounded_full()
-                                                        .bg(gpui::rgba(0x25d366ff))
+                                                        .bg(gpui::rgba(0x10b981ff))
                                                         .border_1()
-                                                        .border_color(gpui::rgba(0x1f2c34ff)),
+                                                        .border_color(gpui::rgba(0x1e1c22ff)),
                                                 ),
                                         )
                                         .child(
@@ -321,7 +321,7 @@ impl UsamiApp {
                                                             div()
                                                                 .text_size(px(11.0))
                                                                 .font_weight(FontWeight::BOLD)
-                                                                .text_color(gpui::rgba(0x25d366ff))
+                                                                .text_color(gpui::rgba(0x10b981ff))
                                                                 .child("✓"),
                                                         ),
                                                 )
@@ -329,9 +329,9 @@ impl UsamiApp {
                                                     div()
                                                         .text_size(px(10.5))
                                                         .text_color(if is_busy {
-                                                            gpui::rgba(0x25d366ff)
+                                                            gpui::rgba(0x10b981ff)
                                                         } else {
-                                                            gpui::rgba(0x8696a0ff)
+                                                            gpui::rgba(0xc8cad4ff)
                                                         })
                                                         .child(status_subtitle),
                                                 ),
@@ -402,7 +402,7 @@ impl UsamiApp {
                                             .cursor_pointer()
                                             .p(px(7.0))
                                             .rounded_full()
-                                            .text_color(gpui::rgba(0x8696a0ff))
+                                            .text_color(gpui::rgba(0xc8cad4ff))
                                             .hover(|s| {
                                                 s.bg(gpui::rgba(0x2a3942ff))
                                                     .text_color(gpui::rgba(0xe9edefff))
@@ -425,7 +425,7 @@ impl UsamiApp {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .p(px(10.0))
-                                    .bg(gpui::rgba(0x0b141aff))
+                                    .bg(gpui::rgba(0x141316ff))
                                     .overflow_y_scroll()
                                     .track_scroll(&phone_scroll)
                                     .flex()
@@ -446,7 +446,7 @@ impl UsamiApp {
                                                     .py(px(3.5))
                                                     .text_size(px(10.0))
                                                     .font_weight(FontWeight::BOLD)
-                                                    .text_color(gpui::rgba(0x8696a0ff))
+                                                    .text_color(gpui::rgba(0xc8cad4ff))
                                                     .child("HOJE"),
                                             ),
                                     )
@@ -488,7 +488,7 @@ impl UsamiApp {
                                                     div()
                                                         .mt(px(4.0))
                                                         .text_size(px(11.0))
-                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                        .text_color(gpui::rgba(0xc8cad4ff))
                                                         .child("Envie uma mensagem ou foto para a Usami."),
                                                 ),
                                         )
@@ -512,7 +512,7 @@ impl UsamiApp {
                                                         .rounded_bl(px(12.0))
                                                         .rounded_br(px(12.0))
                                                         .rounded_tr(px(2.0))
-                                                        .bg(gpui::rgba(0x005c4bff))
+                                                        .bg(gpui::rgba(0x5e1526ff))
                                                         .shadow(vec![BoxShadow {
                                                             color: gpui::rgba(0x00000030).into(),
                                                             offset: point(px(0.0), px(1.0)),
@@ -549,7 +549,7 @@ impl UsamiApp {
                                                                     .items_center()
                                                                     .gap(px(8.0))
                                                                     .text_size(px(11.0))
-                                                                    .text_color(gpui::rgba(0x8696a0ff))
+                                                                    .text_color(gpui::rgba(0xc8cad4ff))
                                                                     .child("📄")
                                                                     .child(media.filename.clone())
                                                             }
@@ -599,7 +599,7 @@ impl UsamiApp {
                                                         .rounded_br(px(12.0))
                                                         .rounded_bl(px(12.0))
                                                         .rounded_tl(px(2.0))
-                                                        .bg(gpui::rgba(0x202c33ff))
+                                                        .bg(gpui::rgba(0x27242cff))
                                                         .shadow(vec![BoxShadow {
                                                             color: gpui::rgba(0x00000030).into(),
                                                             offset: point(px(0.0), px(1.0)),
@@ -611,7 +611,7 @@ impl UsamiApp {
                                                                 .mb(px(2.5))
                                                                 .text_size(px(9.8))
                                                                 .font_weight(FontWeight::BOLD)
-                                                                .text_color(gpui::rgba(0x25d366ff))
+                                                                .text_color(gpui::rgba(0x10b981ff))
                                                                 .child(header),
                                                         )
                                                         .child(
@@ -629,7 +629,7 @@ impl UsamiApp {
                                                                 .child(
                                                                     div()
                                                                         .text_size(px(9.5))
-                                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                                        .text_color(gpui::rgba(0xc8cad4ff))
                                                                         .child(time.to_string()),
                                                                 ),
                                                         ),
@@ -651,7 +651,7 @@ impl UsamiApp {
                                                         .rounded_br(px(12.0))
                                                         .rounded_bl(px(12.0))
                                                         .rounded_tl(px(2.0))
-                                                        .bg(gpui::rgba(0x202c33ff))
+                                                        .bg(gpui::rgba(0x27242cff))
                                                         .child(
                                                             div()
                                                                 .flex()
@@ -661,7 +661,7 @@ impl UsamiApp {
                                                                     div()
                                                                         .size(px(6.0))
                                                                         .rounded_full()
-                                                                        .bg(gpui::rgba(0x25d366ff))
+                                                                        .bg(gpui::rgba(0x10b981ff))
                                                                         .with_animation(
                                                                             ("wa-typing", idx),
                                                                             Animation::new(Duration::from_millis(1000)).repeat(),
@@ -677,7 +677,7 @@ impl UsamiApp {
                                                                         div()
                                                                             .ml(px(3.0))
                                                                             .text_size(px(11.0))
-                                                                            .text_color(gpui::rgba(0x8696a0ff))
+                                                                            .text_color(gpui::rgba(0xc8cad4ff))
                                                                             .child(typing_label.clone()),
                                                                     )
                                                                 }),
@@ -690,7 +690,7 @@ impl UsamiApp {
                             .when_some(attached_media.as_ref(), |parent, media| {
                                 parent.child(
                                     div()
-                                        .bg(gpui::rgba(0x1f2c34ff))
+                                        .bg(gpui::rgba(0x1e1c22ff))
                                         .px(px(10.0))
                                         .pt(px(6.0))
                                         .flex()
@@ -704,7 +704,7 @@ impl UsamiApp {
                                                 .overflow_hidden()
                                                 .bg(gpui::rgba(0x0b1419ff))
                                                 .border_1()
-                                                .border_color(gpui::rgba(0x25d366ff))
+                                                .border_color(gpui::rgba(0x10b981ff))
                                                 .child(
                                                     img(media.preview.clone())
                                                         .size_full()
@@ -736,7 +736,7 @@ impl UsamiApp {
                             // Barra de entrada do WhatsApp
                             .child(
                                 div()
-                                    .bg(gpui::rgba(0x1f2c34ff))
+                                    .bg(gpui::rgba(0x1e1c22ff))
                                     .px(px(8.0))
                                     .pt(px(6.0))
                                     .pb(px(8.0))
@@ -785,7 +785,7 @@ impl UsamiApp {
                                                     .text_size(px(12.0))
                                                     .line_height(px(16.0))
                                                     .text_color(if input_text.is_empty() {
-                                                        gpui::rgba(0x8696a0ff)
+                                                        gpui::rgba(0xc8cad4ff)
                                                     } else {
                                                         gpui::rgba(0xe9edefff)
                                                     })
@@ -803,9 +803,9 @@ impl UsamiApp {
                                                     .ml(px(6.0))
                                                     .p(px(2.0))
                                                     .text_color(if has_media {
-                                                        gpui::rgba(0x25d366ff)
+                                                        gpui::rgba(0x10b981ff)
                                                     } else {
-                                                        gpui::rgba(0x8696a0ff)
+                                                        gpui::rgba(0xc8cad4ff)
                                                     })
                                                     .hover(|s| s.text_color(gpui::rgba(0xe9edefff)))
                                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -824,10 +824,10 @@ impl UsamiApp {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .bg(gpui::rgba(0x25d366ff))
+                                            .bg(gpui::rgba(0x10b981ff))
                                             .text_color(gpui::rgba(0xffffffff))
                                             .shadow(vec![BoxShadow {
-                                                color: gpui::rgba(0x25d36640).into(),
+                                                color: gpui::rgba(0x10b98140).into(),
                                                 offset: point(px(0.0), px(2.0)),
                                                 blur_radius: px(6.0),
                                                 spread_radius: px(0.0),
@@ -857,7 +857,7 @@ impl UsamiApp {
                                 .min_h(px(0.0))
                                 .p(px(14.0))
                                 .pb(px(36.0))
-                                .bg(gpui::rgba(0x0b141aff))
+                                .bg(gpui::rgba(0x141316ff))
                                 .overflow_y_scroll()
                                 .track_scroll(&phone_settings_scroll)
                                 .flex()
@@ -908,21 +908,21 @@ impl UsamiApp {
                                                             div()
                                                                 .text_size(px(12.0))
                                                                 .font_weight(FontWeight::BOLD)
-                                                                .text_color(gpui::rgba(0x25d366ff))
+                                                                .text_color(gpui::rgba(0x10b981ff))
                                                                 .child("✓"),
                                                         ),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(px(11.0))
-                                                        .text_color(gpui::rgba(0x25d366ff))
+                                                        .text_color(gpui::rgba(0x10b981ff))
                                                         .font_weight(FontWeight::BOLD)
                                                         .child(format!("♥ Nv. {bond_level} · {bond_title} ({bond_xp} XP)")),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(px(10.5))
-                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                        .text_color(gpui::rgba(0xc8cad4ff))
                                                         .child("Disponível ♡ · Tsundere Companion"),
                                                 ),
                                         ),
@@ -937,7 +937,7 @@ impl UsamiApp {
                                         .border_1()
                                         .border_color(gpui::rgba(0x24323cff))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(gpui::rgba(0x1f2c34ff)))
+                                        .hover(|s| s.bg(gpui::rgba(0x1e1c22ff)))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.poke(cx);
                                             this.set_proactive_enabled(!this.proactive_enabled, cx);
@@ -966,7 +966,7 @@ impl UsamiApp {
                                                         .child(
                                                             div()
                                                                 .text_size(px(10.0))
-                                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                                .text_color(gpui::rgba(0xc8cad4ff))
                                                                 .child(if proactive_enabled {
                                                                     "Ativada · Ela puxa assunto espontaneamente"
                                                                 } else {
@@ -981,7 +981,7 @@ impl UsamiApp {
                                                 .h(px(20.0))
                                                 .rounded_full()
                                                 .bg(if proactive_enabled {
-                                                    gpui::rgba(0x25d366ff)
+                                                    gpui::rgba(0x10b981ff)
                                                 } else {
                                                     gpui::rgba(0x374248ff)
                                                 })
@@ -1007,7 +1007,7 @@ impl UsamiApp {
                                         .border_1()
                                         .border_color(gpui::rgba(0x24323cff))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(gpui::rgba(0x1f2c34ff)))
+                                        .hover(|s| s.bg(gpui::rgba(0x1e1c22ff)))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.touch_ui(cx);
                                             this.is_muted = !this.is_muted;
@@ -1038,7 +1038,7 @@ impl UsamiApp {
                                                         .child(
                                                             div()
                                                                 .text_size(px(10.0))
-                                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                                .text_color(gpui::rgba(0xc8cad4ff))
                                                                 .child(if is_muted {
                                                                     "Microfone mudo"
                                                                 } else {
@@ -1053,7 +1053,7 @@ impl UsamiApp {
                                                 .h(px(20.0))
                                                 .rounded_full()
                                                 .bg(if !is_muted {
-                                                    gpui::rgba(0x25d366ff)
+                                                    gpui::rgba(0x10b981ff)
                                                 } else {
                                                     gpui::rgba(0x374248ff)
                                                 })
@@ -1100,7 +1100,7 @@ impl UsamiApp {
                                                         .child(
                                                             div()
                                                                 .text_size(px(10.0))
-                                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                                .text_color(gpui::rgba(0xc8cad4ff))
                                                                 .child(format!("{} mensagens armazenadas", turns.len())),
                                                         ),
                                                 ),
@@ -1140,7 +1140,7 @@ impl UsamiApp {
                                         .border_1()
                                         .border_color(gpui::rgba(0x24323cff))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(gpui::rgba(0x1f2c34ff)))
+                                        .hover(|s| s.bg(gpui::rgba(0x1e1c22ff)))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.toggle_drawer(ActiveDrawer::Bond, cx);
                                         }))
@@ -1167,7 +1167,7 @@ impl UsamiApp {
                                                         .child(
                                                             div()
                                                                 .text_size(px(10.0))
-                                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                                .text_color(gpui::rgba(0xc8cad4ff))
                                                                 .child("Abrir memórias, conquistas e afinidade"),
                                                         ),
                                                 ),
@@ -1175,7 +1175,7 @@ impl UsamiApp {
                                         .child(
                                             div()
                                                 .text_size(px(16.0))
-                                                .text_color(gpui::rgba(0x8696a0ff))
+                                                .text_color(gpui::rgba(0xc8cad4ff))
                                                 .child("›"),
                                         ),
                                 )
@@ -1205,7 +1205,7 @@ impl UsamiApp {
                                                 .child(
                                                     div()
                                                         .text_size(px(10.0))
-                                                        .text_color(gpui::rgba(0x8696a0ff))
+                                                        .text_color(gpui::rgba(0xc8cad4ff))
                                                         .child("Versão 0.5.1 · Core local 127.0.0.1:8787"),
                                                 ),
                                         ),
@@ -1223,9 +1223,9 @@ impl UsamiApp {
                             .items_center()
                             .justify_center()
                             .bg(if is_settings_view {
-                                gpui::rgba(0x0b141aff)
+                                gpui::rgba(0x141316ff)
                             } else {
-                                gpui::rgba(0x1f2c34ff)
+                                gpui::rgba(0x1e1c22ff)
                             })
                             .rounded_bl(px(44.5))
                             .rounded_br(px(44.5))

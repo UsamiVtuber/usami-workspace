@@ -45,7 +45,7 @@ pub(crate) fn render_vn_tab_btn(
         })
         .hover(move |s| {
             if !is_active {
-                s.bg(rgba(0xf5c3e126))
+                s.bg(rgba(0xf5d0d81f))
             } else {
                 s
             }
@@ -78,10 +78,8 @@ pub(crate) fn render_vn_tab_btn(
                 .text_color(if is_active { c.pearl } else { c.muted })
                 .child(label),
         )
-        // Ornamento no estado ativo
-        .when(is_active, |el| {
-            el.child(div().text_size(px(10.0)).text_color(c.pearl).child("✦"))
-        })
+        // Ornamento no estado ativo (lacinho bordô com gema esmeralda)
+        .when(is_active, |el| el.child(icon("bunny_bow", 14.0)))
 }
 
 /// Formata data civil (dd/mm/aaaa) a partir de epoch ms, sem dependência de
@@ -185,7 +183,7 @@ pub(crate) fn render_vn_tab_home(
                         .child("o quarto da Usami estava esperando por você."),
                 ),
         )
-        // Caixa de diálogo estilo Visual Novel
+        // Caixa de diálogo estilo Visual Novel (nameplate compacta + fala)
         .child(
             div()
                 .p(px(14.0))
@@ -196,23 +194,39 @@ pub(crate) fn render_vn_tab_home(
                 .shadow(t.shadow.vn_card.clone())
                 .flex()
                 .flex_col()
-                .gap(px(8.0))
+                .gap(px(10.0))
                 .child(
                     div()
-                        .px(px(10.0))
-                        .py(px(2.0))
-                        .rounded(px(999.0))
-                        .bg(t.vn_tab_active_bg())
-                        .text_size(px(11.0))
-                        .font_family(theme::FONT_CHARACTER)
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(c.pearl)
-                        .child("Usami ♡"),
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .px(px(11.0))
+                                .py(px(3.0))
+                                .rounded(px(999.0))
+                                .bg(t.vn_tab_active_bg())
+                                .border_1()
+                                .border_color(theme::Palette::vn_border_bright())
+                                .child(icon("bunny_bow", 12.0))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .font_family(theme::FONT_CHARACTER)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.pearl)
+                                        .child("Usami ♡"),
+                                ),
+                        )
+                        .child(icon("emerald_gem", 12.0)),
                 )
                 .child(
                     div()
-                        .text_size(px(14.0))
-                        .line_height(px(21.0))
+                        .text_size(px(14.5))
+                        .line_height(px(22.0))
                         .font(theme::font_character_italic())
                         .text_color(c.pearl)
                         .child(format!("“{dialogue}”")),
@@ -525,16 +539,24 @@ pub(crate) fn render_vn_tab_diary(
                                         .w_full()
                                         .min_w(px(0.0))
                                         .items_center()
-                                        .gap(px(8.0))
-                                        .p(px(6.0))
-                                        .rounded(px(8.0))
+                                        .gap(px(10.0))
+                                        .p(px(8.0))
+                                        .rounded(px(10.0))
                                         .overflow_hidden()
-                                        .bg(rgba(0x22123d66))
+                                        .bg(rgba(0x27242c99))
+                                        .border_1()
+                                        .border_color(theme::Palette::vn_card_border())
+                                        .border_l_2()
                                         .child(
                                             div()
-                                                .w(px(76.0))
+                                                .px(px(8.0))
+                                                .py(px(2.0))
+                                                .rounded(px(999.0))
+                                                .bg(rgba(0x8e1b3355))
+                                                .border_1()
+                                                .border_color(theme::Palette::vn_border_bright())
                                                 .flex_shrink_0()
-                                                .text_size(px(9.5))
+                                                .text_size(px(9.0))
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_color(theme::Palette::vn_pink_soft())
                                                 .child(tag),
@@ -1235,7 +1257,7 @@ pub(crate) fn render_vn_tab_profile(
                 .items_center()
                 .p(px(12.0))
                 .rounded(px(14.0))
-                .bg(rgba(0x22123d80))
+                .bg(rgba(0x27242cb3))
                 .border_1()
                 .border_color(vis.accent)
                 .shadow(theme::glow(vis.accent, 10.0))
@@ -1355,7 +1377,7 @@ pub(crate) fn render_vn_profile_row(label: &'static str, val: &'static str) -> i
         .gap(px(8.0))
         .p(px(6.0))
         .rounded(px(8.0))
-        .bg(rgba(0x22123d66))
+        .bg(rgba(0x27242c99))
         .child(
             div()
                 .w(px(100.0))
@@ -1390,7 +1412,7 @@ pub(crate) fn mood_visual(id: &str) -> MoodVisual {
         "soft" | "love" => MoodVisual {
             label: "Carinhosa",
             glyph: "♡",
-            accent: rgb(0xf052b5),
+            accent: rgb(0xf5d0d8),
         },
         "tsundere" => MoodVisual {
             label: "Tsundere",
@@ -1759,9 +1781,9 @@ impl UsamiApp {
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(c.pearl)
                                 .bg(if selected {
-                                    rgba(0xf052b638)
+                                    rgba(0x8e1b3355)
                                 } else {
-                                    rgba(0x22123d88)
+                                    rgba(0x27242cb3)
                                 })
                                 .border_1()
                                 .border_color(if selected {
@@ -1824,7 +1846,7 @@ impl UsamiApp {
                             .gap(px(10.0))
                             .p(px(8.0))
                             .rounded(px(10.0))
-                            .bg(rgba(0x22123d77))
+                            .bg(rgba(0x27242c99))
                             .border_1()
                             .border_color(c.line)
                             .child(
@@ -1839,7 +1861,7 @@ impl UsamiApp {
                                             .px(px(7.0))
                                             .py(px(2.0))
                                             .rounded_full()
-                                            .bg(rgba(0x100819cc))
+                                            .bg(rgba(0x141316d9))
                                             .border_1()
                                             .border_color(e_vis.accent)
                                             .text_size(px(10.5))
@@ -1961,7 +1983,8 @@ impl UsamiApp {
                                                             div()
                                                                 .flex()
                                                                 .items_center()
-                                                                .gap(px(6.0))
+                                                                .gap(px(8.0))
+                                                                .child(icon("bunny_ears", 24.0))
                                                                 .child(
                                                                     div()
                                                                         .text_size(px(22.0))
@@ -1976,7 +1999,7 @@ impl UsamiApp {
                                                                 .text_size(px(ty.xs))
                                                                 .font(theme::font_with_jp(theme::FONT_DISPLAY))
                                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                                .child("ウサミ · VN Romance Hub"),
+                                                                .child("ウサミ · Velvet Bunny Romance"),
                                                         )
                                                         .child(
                                                             div()
@@ -2049,12 +2072,12 @@ impl UsamiApp {
                                                         }))),
                                                 ),
                                         )
-                                        // Rodapé Mascote Chibi
+                                        // Rodapé Mascote Coelho
                                         .child(
                                             div()
                                                 .p(px(10.0))
                                                 .rounded(px(14.0))
-                                                .bg(rgba(0x23123d88))
+                                                .bg(t.vn_card_bg())
                                                 .border_1()
                                                 .border_color(theme::Palette::vn_card_border())
                                                 .flex()
@@ -2067,16 +2090,11 @@ impl UsamiApp {
                                                         .justify_between()
                                                         .child(
                                                             div()
-                                                                .text_size(px(14.0))
+                                                                .text_size(px(13.0))
                                                                 .text_color(theme::Palette::vn_pink_soft())
-                                                                .child("(˶ᵔ ᵕ ᵔ˶) ♡"),
+                                                                .child("(ᐢ. ̫ .ᐢ) ♡"),
                                                         )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme::Palette::vn_gold())
-                                                                .child("✦"),
-                                                        ),
+                                                        .child(icon("bunny_bow", 14.0)),
                                                 )
                                                 .child(
                                                     div()
@@ -2109,11 +2127,11 @@ impl UsamiApp {
                                                 .pb(px(6.0))
                                                 .border_b_1()
                                                 .border_color(theme::Palette::vn_card_border())
-                                                // Badge Coração de Nível
+                                                // Badge Coração de Coelho (Nível)
                                                 .child(
                                                     div()
                                                         .px(px(14.0))
-                                                        .py(px(4.0))
+                                                        .py(px(5.0))
                                                         .rounded(px(16.0))
                                                         .bg(t.vn_heart_badge_bg())
                                                         .border_1()
@@ -2123,11 +2141,18 @@ impl UsamiApp {
                                                         .items_center()
                                                         .child(
                                                             div()
-                                                                .text_size(px(16.0))
-                                                                .font_family(theme::FONT_CHARACTER)
-                                                                .font_weight(FontWeight::BOLD)
-                                                                .text_color(c.pearl)
-                                                                .child(format!("♥ Nv. {bond_level}")),
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap(px(6.0))
+                                                                .child(icon("heart_bunny", 17.0))
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(16.0))
+                                                                        .font_family(theme::FONT_CHARACTER)
+                                                                        .font_weight(FontWeight::BOLD)
+                                                                        .text_color(c.pearl)
+                                                                        .child(format!("Nv. {bond_level}")),
+                                                                ),
                                                         )
                                                         .child(
                                                             div()
@@ -2163,9 +2188,23 @@ impl UsamiApp {
                                                                 )
                                                                 .child(
                                                                     div()
-                                                                        .text_size(px(9.5))
-                                                                        .text_color(theme::Palette::vn_gold())
-                                                                        .child("✦ BÔNUS DIÁRIO ✦"),
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap(px(5.0))
+                                                                        .px(px(8.0))
+                                                                        .py(px(2.0))
+                                                                        .rounded_full()
+                                                                        .bg(theme::Palette::emerald_soft())
+                                                                        .border_1()
+                                                                        .border_color(theme::Palette::emerald_border())
+                                                                        .child(icon("emerald_gem", 11.0))
+                                                                        .child(
+                                                                            div()
+                                                                                .text_size(px(9.5))
+                                                                                .font_weight(FontWeight::BOLD)
+                                                                                .text_color(theme::Palette::emerald())
+                                                                                .child("BÔNUS DIÁRIO"),
+                                                                        ),
                                                                 ),
                                                         )
                                                         .child(

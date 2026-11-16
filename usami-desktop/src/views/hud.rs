@@ -49,7 +49,9 @@ impl UsamiApp {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .size(px(38.0))
+                                        .gap(px(4.0))
+                                        .h(px(38.0))
+                                        .px(px(11.0))
                                         .rounded_full()
                                         .bg(if active_drawer == ActiveDrawer::Bond {
                                             c.icon_bg_active
@@ -71,9 +73,10 @@ impl UsamiApp {
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.toggle_drawer(ActiveDrawer::Bond, cx);
                                         }))
+                                        .child(icon("heart_bunny", 14.0))
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                .text_size(px(11.5))
                                                 .font_family(theme::FONT_DISPLAY)
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_color(if active_drawer == ActiveDrawer::Bond {
@@ -81,7 +84,7 @@ impl UsamiApp {
                                                 } else {
                                                     c.pearl
                                                 })
-                                                .child(format!("Lv{bond_level}")),
+                                                .child(format!("Nv.{bond_level}")),
                                         ),
                                 )
                                 .child({

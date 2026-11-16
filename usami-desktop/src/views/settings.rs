@@ -26,8 +26,10 @@ fn render_settings_category<E: IntoElement>(
         .flex_col()
         .gap(px(sp.s3))
         .rounded(px(t.radius.lg))
+        .bg(t.vn_card_bg())
         .border_1()
-        .border_color(c.line)
+        .border_color(theme::Palette::vn_card_border())
+        .border_l_2()
         .p(px(sp.s4))
         .child(
             div()
@@ -36,11 +38,18 @@ fn render_settings_category<E: IntoElement>(
                 .gap(px(sp.s1))
                 .child(
                     div()
-                        .text_size(px(15.0))
-                        .font_family(theme::FONT_CHARACTER)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::Palette::vn_pink_soft())
-                        .child(title),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(crate::ui::widgets::icon("bunny_bow", 14.0))
+                        .child(
+                            div()
+                                .text_size(px(15.0))
+                                .font_family(theme::FONT_CHARACTER)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::Palette::vn_pink_soft())
+                                .child(title),
+                        ),
                 )
                 .child(
                     div()
@@ -100,11 +109,11 @@ impl UsamiApp {
                                             .px(px(6.0))
                                             .py(px(2.0))
                                             .rounded(px(4.0))
-                                            .bg(if has_token { rgba(0x5cb85c22) } else { rgba(0xf0ad4e22) })
+                                            .bg(if has_token { theme::Palette::emerald_soft() } else { rgba(0xf0ad4e22) })
                                             .border_1()
-                                            .border_color(if has_token { rgba(0x5cb85c66) } else { rgba(0xf0ad4e66) })
+                                            .border_color(if has_token { theme::Palette::emerald_border() } else { rgba(0xf0ad4e66) })
                                             .text_size(px(ty.xs))
-                                            .text_color(if has_token { rgb(0x5cb85c) } else { rgb(0xf0ad4e) })
+                                            .text_color(if has_token { theme::Palette::emerald() } else { rgb(0xf0ad4e) })
                                             .child(if has_token { "TOKEN ATIVO" } else { "SEM TOKEN" }),
                                     ),
                             )
@@ -153,11 +162,11 @@ impl UsamiApp {
                                             .px(px(6.0))
                                             .py(px(2.0))
                                             .rounded(px(4.0))
-                                            .bg(if proactive_enabled { rgba(0x5cb85c22) } else { rgba(0x88888822) })
+                                            .bg(if proactive_enabled { theme::Palette::emerald_soft() } else { rgba(0x88888822) })
                                             .border_1()
-                                            .border_color(if proactive_enabled { rgba(0x5cb85c66) } else { rgba(0x88888866) })
+                                            .border_color(if proactive_enabled { theme::Palette::emerald_border() } else { rgba(0x88888866) })
                                             .text_size(px(ty.xs))
-                                            .text_color(if proactive_enabled { rgb(0x5cb85c) } else { rgb(0x888888) })
+                                            .text_color(if proactive_enabled { theme::Palette::emerald() } else { rgb(0x888888) })
                                             .child(if proactive_enabled { "ATIVADO" } else { "DESATIVADO" }),
                                     ),
                             )
@@ -360,11 +369,11 @@ impl UsamiApp {
                             div()
                                 .p(px(sp.s2))
                                 .rounded(px(r.sm))
-                                .bg(rgba(0x5cb85c22))
+                                .bg(theme::Palette::emerald_soft())
                                 .border_1()
-                                .border_color(rgba(0x5cb85c66))
+                                .border_color(theme::Palette::emerald_border())
                                 .text_size(px(ty.xs))
-                                .text_color(rgb(0x5cb85c))
+                                .text_color(theme::Palette::emerald())
                                 .child(SharedString::from(st)),
                         );
                     }
@@ -738,11 +747,11 @@ impl UsamiApp {
                             div()
                                 .p(px(sp.s2))
                                 .rounded(px(r.sm))
-                                .bg(rgba(0x5cb85c22))
+                                .bg(theme::Palette::emerald_soft())
                                 .border_1()
-                                .border_color(rgba(0x5cb85c66))
+                                .border_color(theme::Palette::emerald_border())
                                 .text_size(px(ty.xs))
-                                .text_color(rgb(0x5cb85c))
+                                .text_color(theme::Palette::emerald())
                                 .child(SharedString::from(st)),
                         );
                     }

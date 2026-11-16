@@ -267,8 +267,10 @@ impl CircuitBreaker {
     pub fn record_failure(&mut self, now: Instant) {
         self.failures += 1;
         if self.failures >= FAILURE_THRESHOLD {
-            let backoff = (INITIAL_BACKOFF * 2u32.pow(self.failures.saturating_sub(FAILURE_THRESHOLD)))
-                .min(MAX_BACKOFF);
+            // Expoente limitado: 2u32.pow(32) estoura em debug e o backoff já
+            // é limitado por MAX_BACKOFF de qualquer forma.
+            let exponent = self.failures.saturating_sub(FAILURE_THRESHOLD).min(5);
+            let backoff = (INITIAL_BACKOFF * 2u32.pow(exponent)).min(MAX_BACKOFF);
             self.retry_after = Some(now + backoff);
             eprintln!(
                 "[Usami.GG] Circuit breaker aberto apos {} falhas; retry em {:?}",
@@ -327,5 +329,18 @@ mod tests {
 
         let (s5, _) = advance_state(s4, ProbeResult::Closed);
         assert!(matches!(s5, PollerState::GameClosed { backoff } if backoff == MIN_BACKOFF));
+    }
+
+    #[test]
+    fn circuit_breaker_survives_many_consecutive_failures() {
+        let start = Instant::now();
+        let mut breaker = CircuitBreaker::new();
+        for _ in 0..100 {
+            breaker.record_failure(start);
+        }
+        assert!(!breaker.should_poll(start));
+        assert!(breaker.should_poll(start + MAX_BACKOFF + Duration::from_millis(1)));
+        breaker.record_success();
+        assert!(breaker.should_poll(start));
     }
 }

@@ -1,9 +1,11 @@
 //! Gerenciamento assíncrono de Vínculo, Afeto, Humor e Atividade de Chat com o core.
 
 use crate::api;
+use crate::api::tokio_runtime;
 use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 
 impl UsamiApp {
     pub(crate) fn apply_bond(&mut self, bond: api::BondData) {
@@ -17,18 +19,21 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_bond().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_bond().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
                             match res {
                                 Ok(resp) => {
                                     view.apply_bond(resp.bond);
-                                    // O core reavalia conquistas junto com o
-                                    // vínculo; recarrega para refletir datas.
                                     view.fetch_achievements(cx);
                                 }
                                 Err(error) => eprintln!("[Vínculo] indisponível: {error}"),
@@ -53,10 +58,15 @@ impl UsamiApp {
         }
         self.activity_loading = true;
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_chat_activity().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_chat_activity().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -85,10 +95,15 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_achievements().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_achievements().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -113,10 +128,15 @@ impl UsamiApp {
         self.mood_loading = true;
         let had_mood = self.mood.is_some();
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_mood().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_mood().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -160,10 +180,15 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.post_mood_event(emotion, Some(reason)).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.post_mood_event(emotion, Some(reason)).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -187,10 +212,15 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.award_bond_chat(&content, spoken).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.award_bond_chat(&content, spoken).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -215,10 +245,15 @@ impl UsamiApp {
             return;
         }
         let api = Arc::clone(&self.api_client);
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.award_bond_call(minutes).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.award_bond_call(minutes).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {

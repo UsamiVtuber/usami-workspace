@@ -1,5 +1,6 @@
 //! Polling e apresentação de eventos proativos da Usami, além do controle de gavetas (drawers).
 
+use crate::api::tokio_runtime;
 use crate::model::{current_phone_time, ActiveDrawer, ChatMessage, Sender};
 use crate::speech::sanitize_speech_text;
 use crate::storage;
@@ -7,6 +8,7 @@ use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 
 impl UsamiApp {
     pub(crate) fn poll_proactive_events(&mut self, cx: &mut Context<Self>) {
@@ -27,10 +29,16 @@ impl UsamiApp {
             "idle"
         };
 
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_proactive_events(activity).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                if let Ok(res) = api.get_proactive_events(activity).await {
+                let res = rx.await.expect("Tokio task dropped without sending result");
+                if let Ok(res) = res {
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, _cx| {
@@ -78,10 +86,16 @@ impl UsamiApp {
 
         if !self.is_away && self.api_client.has_token() {
             let api = Arc::clone(&self.api_client);
+            let (tx, rx) = oneshot::channel();
+            tokio_runtime().spawn(async move {
+                let resp = api.get_agent_suggestions(false, 20).await;
+                let _ = tx.send(resp);
+            });
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    if let Ok(resp) = api.get_agent_suggestions(false, 20).await {
+                    let resp = rx.await.expect("Tokio task dropped without sending result");
+                    if let Ok(resp) = resp {
                         let _ = cx.update(|cx: &mut App| {
                             if let Some(this) = this.upgrade() {
                                 this.update(cx, |view, cx| {

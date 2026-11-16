@@ -1,9 +1,11 @@
 //! Gerenciamento assíncrono de Memória e Personalidade com o core Usami.
 
 use crate::api;
+use crate::api::tokio_runtime;
 use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 
 impl UsamiApp {
     pub(crate) fn fetch_memory(&mut self, cx: &mut Context<Self>) {
@@ -15,11 +17,15 @@ impl UsamiApp {
         self.memory_error = None;
         self.memory_status = None;
         let api = Arc::clone(&self.api_client);
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_memory().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_memory().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -59,11 +65,15 @@ impl UsamiApp {
             fact: Some(fact),
             date: None,
         };
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.forget_memory(&payload).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.forget_memory(&payload).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -104,11 +114,15 @@ impl UsamiApp {
             fact: None,
             date: None,
         };
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.forget_memory(&payload).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.forget_memory(&payload).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -148,11 +162,15 @@ impl UsamiApp {
         self.personality_error = None;
         self.personality_status = None;
         let api = Arc::clone(&self.api_client);
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.get_personality().await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_personality().await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -201,11 +219,15 @@ impl UsamiApp {
             custom_prompt: Some(data.custom_prompt),
             reset: None,
         };
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.update_personality(&payload).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.update_personality(&payload).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -240,11 +262,15 @@ impl UsamiApp {
             custom_prompt: None,
             reset: Some(true),
         };
-
+        let (tx, rx) = oneshot::channel();
+        tokio_runtime().spawn(async move {
+            let res = api.update_personality(&payload).await;
+            let _ = tx.send(res);
+        });
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.update_personality(&payload).await;
+                let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {

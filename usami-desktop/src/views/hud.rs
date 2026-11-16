@@ -197,10 +197,7 @@ impl UsamiApp {
                                         })
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.load_settings_data(cx);
-                                            this.phone_view_settings = true;
-                                            this.active_drawer = ActiveDrawer::Chat;
-                                            this.poke(cx);
-                                            cx.notify();
+                                            this.toggle_drawer(ActiveDrawer::Settings, cx);
                                         }))
                                         .child(icon("gear", 16.0)),
                                 ),

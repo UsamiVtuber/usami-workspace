@@ -27,7 +27,7 @@ use crate::assets::{asset_base_dir, asset_path, env_path, first_existing};
 use crate::api::UsamiApiClient;
 use crate::audio::AudioPlayer;
 use crate::media::AttachedMedia;
-use crate::model::{chat_message_from_stored, current_phone_time, format_tool_badge, stored_turns, ActiveDrawer, BondTab, ChatMessage, Sender};
+use crate::model::{chat_message_from_stored, current_phone_time, format_tool_badge, stored_turns, ActiveDrawer, BondTab, ChatMessage, Sender, SettingsTab};
 use crate::ui::widgets::icon;
 use crate::speech::sanitize_speech_text;
 use gpui::prelude::FluentBuilder;
@@ -98,7 +98,9 @@ struct UsamiApp {
     phone_settings_scroll: ScrollHandle,
     phone_view_settings: bool,
     settings_advanced_open: bool,
+    settings_tab: SettingsTab,
     bond_tab: BondTab,
+    diary_page: usize,
     chat_history: Vec<ChatMessage>,
     /// Conquistas avaliadas pelo core (`GET /api/achievements`); lista vazia
     /// até a primeira resposta.
@@ -538,7 +540,9 @@ impl UsamiApp {
             phone_settings_scroll: ScrollHandle::new(),
             phone_view_settings: false,
             settings_advanced_open: false,
+            settings_tab: SettingsTab::Chat,
             bond_tab: BondTab::Home,
+            diary_page: 0,
             chat_history,
             bond: None,
             mood: None,
@@ -1350,6 +1354,10 @@ impl Render for UsamiApp {
             // ── LAYER 8: CENTRAL DE RELACIONAMENTO & DIÁRIO ESTILO VISUAL NOVEL ──
             .when(active_drawer == ActiveDrawer::Bond, |parent| {
                 parent.child(self.render_vn_bond_overlay(cx))
+            })
+            // ── LAYER 9: MODAL DEDICADO DE CONFIGURAÇÕES ──
+            .when(active_drawer == ActiveDrawer::Settings, |parent| {
+                parent.child(self.render_settings_modal(cx))
             })
             .into_any_element()
     }

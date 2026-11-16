@@ -1132,14 +1132,15 @@ pub(crate) fn render_vn_tab_achievements(
 pub(crate) fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElement {
     let t = theme::theme();
     let unlocked = a.unlocked;
+    let anim_id = SharedString::from(format!("ach-gacha-glow-{}", a.id));
     let date = a
         .unlocked_at
         .as_deref()
         .map(format_unlocked_at)
         .unwrap_or_default();
-    div()
-        .w(px(320.0))
-        .p(px(8.0))
+    let card = div()
+        .w(px(340.0))
+        .p(px(10.0))
         .rounded(px(12.0))
         .bg(t.vn_card_bg())
         .border_1()
@@ -1147,6 +1148,10 @@ pub(crate) fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElem
             theme::Palette::vn_border_bright()
         } else {
             t.color.line
+        })
+        .hover(|s| {
+            s.bg(rgba(0x8e1b3333))
+                .border_color(theme::Palette::silver_bright())
         })
         .flex()
         .items_center()
@@ -1158,7 +1163,7 @@ pub(crate) fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElem
                 .bg(if unlocked {
                     t.vn_tab_active_bg()
                 } else {
-                    theme::Theme::gradient(90.0, rgba(0x181024aa), rgba(0x181024aa))
+                    theme::Theme::gradient(90.0, rgba(0x1e1c22aa), rgba(0x1e1c22aa))
                 })
                 .flex()
                 .items_center()
@@ -1218,7 +1223,25 @@ pub(crate) fn render_vn_achievement_badge(a: &api::Achievement) -> impl IntoElem
                             "Ainda por conquistar".to_string()
                         }),
                 ),
+        );
+
+    if unlocked {
+        card.with_animation(
+            anim_id,
+            Animation::new(std::time::Duration::from_millis(2200))
+                .repeat()
+                .with_easing(bounce(ease_in_out)),
+            |el, delta| {
+                el.shadow(theme::glow(
+                    theme::Palette::vn_pink_soft(),
+                    4.0 + delta * 10.0,
+                ))
+            },
         )
+        .into_any_element()
+    } else {
+        card.into_any_element()
+    }
 }
 
 pub(crate) fn render_vn_tab_profile(
@@ -1372,16 +1395,19 @@ pub(crate) fn render_vn_tab_profile(
 pub(crate) fn render_vn_profile_row(label: &'static str, val: &'static str) -> impl IntoElement {
     let t = theme::theme();
     div()
+        .w_full()
+        .min_w(px(0.0))
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(8.0))
         .p(px(6.0))
         .rounded(px(8.0))
         .bg(rgba(0x27242c99))
         .child(
             div()
-                .w(px(100.0))
-                .text_size(px(11.5))
+                .w(px(92.0))
+                .flex_shrink_0()
+                .text_size(px(11.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme::Palette::vn_pink_soft())
                 .child(label),
@@ -1389,7 +1415,9 @@ pub(crate) fn render_vn_profile_row(label: &'static str, val: &'static str) -> i
         .child(
             div()
                 .flex_1()
-                .text_size(px(11.5))
+                .min_w(px(0.0))
+                .text_size(px(11.0))
+                .line_height(px(15.0))
                 .text_color(t.color.pearl)
                 .child(val),
         )
@@ -1699,8 +1727,9 @@ impl UsamiApp {
                                     .child(
                                         div()
                                             .flex()
-                                            .items_center()
-                                            .gap(px(8.0))
+                                            .flex_col()
+                                            .items_start()
+                                            .gap(px(4.0))
                                             .child(
                                                 div()
                                                     .text_size(px(18.0))
@@ -1714,10 +1743,10 @@ impl UsamiApp {
                                                     .px(px(8.0))
                                                     .py(px(2.0))
                                                     .rounded_full()
-                                                    .bg(rgba(0xf052b622))
+                                                    .bg(rgba(0x8e1b3344))
                                                     .border_1()
                                                     .border_color(vis.accent)
-                                                    .text_size(px(10.5))
+                                                    .text_size(px(10.0))
                                                     .font_weight(FontWeight::BOLD)
                                                     .text_color(c.pearl)
                                                     .child(format!("Expressão: {expr_label}")),
@@ -1919,42 +1948,59 @@ impl UsamiApp {
                 None => (0, 0, 0, "—".to_string(), false),
             };
         div()
-.id("vn-scrim-overlay")
-                        .occlude()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(rgba(0x06030edd))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.active_drawer = ActiveDrawer::None;
-                            this.poke(cx);
-                            cx.notify();
-                        }))
-                        .child(
-                            // Container Principal da Central de Visual Novel (960x610)
-                            div()
-                                .id("vn-modal-container")
-                                .w(px(960.0))
-                                .h(px(610.0))
-                                .max_h(px(610.0))
-                                .flex()
-                                .flex_row()
-                                .overflow_hidden()
-                                .rounded(px(26.0))
-                                .bg(t.vn_modal_bg())
-                                .border_2()
-                                .border_color(theme::Palette::vn_border_bright())
-                                .shadow(t.shadow.vn_modal.clone())
-                                // O modal fica dentro do scrim clicável: sem parar a
-                                // propagação, todo clique interno sobe e fecha o painel.
-                                .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                                    cx.stop_propagation();
-                                })
+            .id("vn-scrim-overlay")
+            .occlude()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x0c0b0ed9))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.active_drawer = ActiveDrawer::None;
+                this.poke(cx);
+                cx.notify();
+            }))
+            .child(
+                // Container Principal da Central de Visual Novel (1060x660 — Otome Velvet Edition)
+                div()
+                    .id("vn-modal-container")
+                    .relative()
+                    .w(px(1060.0))
+                    .max_w(relative(0.94))
+                    .h(px(660.0))
+                    .max_h(relative(0.90))
+                    .flex()
+                    .flex_row()
+                    .overflow_hidden()
+                    .rounded(px(26.0))
+                    .bg(t.vn_modal_bg())
+                    .border_2()
+                    .border_color(theme::Palette::silver())
+                    .shadow(t.shadow.vn_modal.clone())
+                    .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        cx.stop_propagation();
+                    })
+                    // Textura sutil de veludo no fundo do painel
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .right(px(0.0))
+                            .opacity(0.65)
+                            .child(icon("velvet_pattern", 280.0)),
+                    )
+                    // Cantoneira ornamental Otome
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(8.0))
+                            .left(px(8.0))
+                            .child(icon("vn_corner", 24.0)),
+                    )
                                 // ── COLUNA ESQUERDA: SIDEBAR VISUAL NOVEL ──
                                 .child(
                                     div()
@@ -2015,18 +2061,18 @@ impl UsamiApp {
                                                         .h(px(1.0))
                                                         .bg(theme::Palette::vn_card_border()),
                                                 )
-                                                // Menu de capítulos verticais
+                                                // Menu de capítulos verticais (4 espaços arejados)
                                                 .child(
                                                     div()
                                                         .flex()
                                                         .flex_col()
-                                                        .gap(px(6.0))
+                                                        .gap(px(8.0))
                                                         .child(render_vn_tab_btn("vn-tab-home", "01", "Início", bond_tab == BondTab::Home, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Home;
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-diary", "02", "Diário", bond_tab == BondTab::Diary, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-diary", "02", "Diário & Memórias", bond_tab == BondTab::Diary || bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Diary;
                                                             if !this.memory_loading {
                                                                 this.fetch_memory(cx);
@@ -2034,42 +2080,31 @@ impl UsamiApp {
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-memories", "03", "Álbum de Memórias", bond_tab == BondTab::Memories, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Memories;
-                                                            if !this.memory_loading {
-                                                                this.fetch_memory(cx);
-                                                            }
-                                                            this.poke(cx);
-                                                            cx.notify();
-                                                        })))
-                                                        .child(render_vn_tab_btn("vn-tab-bonds", "04", "Laços", bond_tab == BondTab::Bonds, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        .child(render_vn_tab_btn("vn-tab-bonds", "03", "Laços & Conquistas", bond_tab == BondTab::Bonds || bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
                                                             this.bond_tab = BondTab::Bonds;
-                                                            this.poke(cx);
-                                                            cx.notify();
-                                                        })))
-                                                        .child(render_vn_tab_btn("vn-tab-achievements", "05", "Conquistas", bond_tab == BondTab::Achievements, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Achievements;
                                                             this.fetch_achievements(cx);
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-mood", "06", "Humor", bond_tab == BondTab::Mood, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Mood;
+                                                        .child(render_vn_tab_btn("vn-tab-profile", "04", "Perfil & Humor", bond_tab == BondTab::Profile || bond_tab == BondTab::Mood, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                            this.bond_tab = BondTab::Profile;
                                                             this.fetch_mood(cx);
                                                             this.poke(cx);
                                                             cx.notify();
                                                         })))
-                                                        .child(render_vn_tab_btn("vn-tab-profile", "07", "Perfil da Usami", bond_tab == BondTab::Profile, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Profile;
-                                                            this.poke(cx);
-                                                            cx.notify();
-                                                        })))
-                                                        .child(render_vn_tab_btn("vn-tab-settings", "08", "Ajustes", bond_tab == BondTab::Settings, cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                            this.bond_tab = BondTab::Settings;
-                                                            this.load_settings_data(cx);
-                                                            this.poke(cx);
-                                                            cx.notify();
-                                                        }))),
+                                                        .child(
+                                                            div()
+                                                                .mt(px(8.0))
+                                                                .pt(px(8.0))
+                                                                .border_t_1()
+                                                                .border_color(theme::Palette::vn_card_border())
+                                                                .child(render_vn_tab_btn("vn-tab-open-settings", "⚙", "Configurações", false, cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                                    this.load_settings_data(cx);
+                                                                    this.active_drawer = ActiveDrawer::Settings;
+                                                                    this.poke(cx);
+                                                                    cx.notify();
+                                                                }))),
+                                                        ),
                                                 ),
                                         )
                                         // Rodapé Mascote Coelho
@@ -2127,7 +2162,7 @@ impl UsamiApp {
                                                 .pb(px(6.0))
                                                 .border_b_1()
                                                 .border_color(theme::Palette::vn_card_border())
-                                                // Badge Coração de Coelho (Nível)
+                                                // Badge Coração de Coelho (Nível) com brilho pulsante Gacha
                                                 .child(
                                                     div()
                                                         .px(px(14.0))
@@ -2160,6 +2195,18 @@ impl UsamiApp {
                                                                 .font_weight(FontWeight::BOLD)
                                                                 .text_color(theme::Palette::vn_pink_soft())
                                                                 .child(format!("✦ {} ✦", bond_level_title)),
+                                                        )
+                                                        .with_animation(
+                                                            "vn-level-gacha-pulse",
+                                                            Animation::new(std::time::Duration::from_millis(2000))
+                                                                .repeat()
+                                                                .with_easing(bounce(ease_in_out)),
+                                                            |el, delta| {
+                                                                el.shadow(theme::glow(
+                                                                    theme::Palette::vn_pink_soft(),
+                                                                    6.0 + delta * 14.0,
+                                                                ))
+                                                            },
                                                         ),
                                                 )
                                                 // Barra de EXP
@@ -2204,6 +2251,18 @@ impl UsamiApp {
                                                                                 .font_weight(FontWeight::BOLD)
                                                                                 .text_color(theme::Palette::emerald())
                                                                                 .child("BÔNUS DIÁRIO"),
+                                                                        )
+                                                                        .with_animation(
+                                                                            "vn-emerald-gacha-pulse",
+                                                                            Animation::new(std::time::Duration::from_millis(1700))
+                                                                                .repeat()
+                                                                                .with_easing(bounce(ease_in_out)),
+                                                                            |el, delta| {
+                                                                                el.shadow(theme::glow(
+                                                                                    rgba(0x10b98166),
+                                                                                    2.0 + delta * 6.0,
+                                                                                ))
+                                                                            },
                                                                         ),
                                                                 ),
                                                         )
@@ -2256,28 +2315,430 @@ impl UsamiApp {
                                                         .child(icon("close", 14.0)),
                                                 ),
                                         )
-                                        // Conteúdo dinâmico da Aba
+                                        // Conteúdo dinâmico da Aba (4 espaços modulares e arejados)
                                         .child(
                                             match bond_tab {
                                                 BondTab::Home => render_vn_tab_home(bond_level, bond.as_ref(), t).into_any_element(),
-                                                BondTab::Diary => render_vn_tab_diary(bond.as_ref(), memory_data.as_ref(), t).into_any_element(),
-                                                BondTab::Memories => render_vn_tab_memories(bond.as_ref(), memory_data.as_ref(), t).into_any_element(),
-                                                BondTab::Bonds => render_vn_tab_bonds(bond_level, bond.as_ref(), t).into_any_element(),
-                                                BondTab::Achievements => render_vn_tab_achievements(&achievements, t).into_any_element(),
-                                                BondTab::Mood => self.render_vn_tab_mood(mood_data.as_ref(), t, cx).into_any_element(),
-                                                BondTab::Profile => render_vn_tab_profile(
-                                                    mood_data.as_ref(),
-                                                    mood_vis,
-                                                    self.vrm_controller.portrait_image(),
-                                                    self.prev_portrait_image.clone(),
-                                                    t,
-                                                )
-                                                .into_any_element(),
+                                                BondTab::Diary | BondTab::Memories => self.render_vn_open_diary_book(bond.as_ref(), memory_data.as_ref(), mood_vis, t, cx).into_any_element(),
+                                                BondTab::Bonds | BondTab::Achievements => {
+                                                    div()
+                                                        .id("vn-bonds-ach-scroll")
+                                                        .flex_1()
+                                                        .min_h(px(0.0))
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(14.0))
+                                                        .overflow_y_scroll()
+                                                        .child(render_vn_tab_bonds(bond_level, bond.as_ref(), t))
+                                                        .child(render_vn_tab_achievements(&achievements, t))
+                                                        .into_any_element()
+                                                }
+                                                BondTab::Profile | BondTab::Mood => {
+                                                    div()
+                                                        .flex_1()
+                                                        .min_h(px(0.0))
+                                                        .flex()
+                                                        .flex_row()
+                                                        .gap(px(14.0))
+                                                        .overflow_hidden()
+                                                        .child(
+                                                            div()
+                                                                .id("vn-profile-col")
+                                                                .flex_1()
+                                                                .min_w(px(0.0))
+                                                                .h_full()
+                                                                .overflow_y_scroll()
+                                                                .child(render_vn_tab_profile(
+                                                                    mood_data.as_ref(),
+                                                                    mood_vis,
+                                                                    self.vrm_controller.portrait_image(),
+                                                                    self.prev_portrait_image.clone(),
+                                                                    t,
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("vn-mood-col")
+                                                                .flex_1()
+                                                                .min_w(px(0.0))
+                                                                .h_full()
+                                                                .flex()
+                                                                .flex_col()
+                                                                .child(self.render_vn_tab_mood(mood_data.as_ref(), t, cx)),
+                                                        )
+                                                        .into_any_element()
+                                                }
                                                 BondTab::Settings => self.render_settings_page(cx).into_any_element(),
                                             }
                                         ),
                                 )
                         )
+    }
+
+    pub(crate) fn render_vn_open_diary_book(
+        &mut self,
+        bond: Option<&api::BondData>,
+        memory: Option<&api::MemoryData>,
+        mood_vis: MoodVisual,
+        t: &theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let c = t.color;
+        let line = bond
+            .map(|b| b.summary.line.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "Cada dia ao seu lado vira uma página nova no meu diário.".to_string());
+        let entries = collect_diary_entries(bond, memory);
+        let total_entries = entries.len();
+        let per_page = 4usize;
+        let total_pages = total_entries.max(1).div_ceil(per_page);
+        let page = self.diary_page.min(total_pages.saturating_sub(1));
+        let start = page * per_page;
+        let page_entries: Vec<_> = entries.into_iter().skip(start).take(per_page).collect();
+
+        let today = format_date(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis() as i64)
+                .unwrap_or(0),
+        );
+
+        let facts_count = memory.map(|m| m.recent_facts.len()).unwrap_or(0);
+
+        div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_row()
+            .gap(px(2.0))
+            .p(px(4.0))
+            .rounded(px(18.0))
+            .bg(rgba(0x111014cc))
+            .border_1()
+            .border_color(theme::Palette::silver())
+            // ── PÁGINA ESQUERDA (Capa Interna / Bilhete do Dia) ──
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .h_full()
+                    .p(px(16.0))
+                    .rounded_l(px(14.0))
+                    .bg(t.vn_card_bg())
+                    .border_r_1()
+                    .border_color(theme::Palette::vn_card_border())
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .overflow_hidden()
+                    // Fita marcadora bordô com gema esmeralda
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .right(px(18.0))
+                            .child(icon("diary_ribbon", 26.0)),
+                    )
+                    // Textura sutil de papel/veludo
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom(px(-10.0))
+                            .left(px(-10.0))
+                            .opacity(0.45)
+                            .child(icon("velvet_pattern", 160.0)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(3.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme::Palette::vn_pink_soft())
+                                            .child(format!("CAPÍTULO DIÁRIO · {today}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(22.0))
+                                            .font_family(theme::FONT_CHARACTER)
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.pearl)
+                                            .child("Diário da Usami"),
+                                    ),
+                            )
+                            // Carimbo de humor
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .px(px(10.0))
+                                            .py(px(3.0))
+                                            .rounded_full()
+                                            .bg(rgba(0x141316cc))
+                                            .border_1()
+                                            .border_color(mood_vis.accent)
+                                            .text_size(px(10.5))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(mood_vis.accent)
+                                            .child(format!("{} Humor: {}", mood_vis.glyph, mood_vis.label)),
+                                    ),
+                            )
+                            // Folha do bilhete com borda esquerda bordô
+                            .child(
+                                div()
+                                    .mt(px(4.0))
+                                    .p(px(14.0))
+                                    .rounded(px(12.0))
+                                    .bg(rgba(0x14131699))
+                                    .border_1()
+                                    .border_color(theme::Palette::vn_card_border())
+                                    .border_l_2()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme::Palette::vn_pink_soft())
+                                            .child("✦ ANOTAÇÃO DE HOJE"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.0))
+                                            .line_height(px(21.0))
+                                            .font(theme::font_character_italic())
+                                            .text_color(c.pearl)
+                                            .child(format!("“{line}”")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .text_color(c.faint)
+                                            .child("— Com carinho, Usami ♡"),
+                                    ),
+                            ),
+                    )
+                    // Rodapé da página esquerda
+                    .child(
+                        div()
+                            .pt(px(10.0))
+                            .border_t_1()
+                            .border_color(theme::Palette::vn_card_border())
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(icon("emerald_gem", 12.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .text_color(c.muted)
+                                            .child(format!("{facts_count} fatos lembrados sobre você")),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .font(theme::font_character_italic())
+                                    .text_color(c.faint)
+                                    .child(format!("Pág. {} / {}", page + 1, total_pages)),
+                            ),
+                    ),
+            )
+            // ── PÁGINA DIREITA (Memórias e Momentos Paginados) ──
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .p(px(16.0))
+                    .rounded_r(px(14.0))
+                    .bg(t.vn_card_bg())
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(icon("bunny_bow", 14.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(13.0))
+                                            .font_family(theme::FONT_CHARACTER)
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(c.pearl)
+                                            .child("Páginas de Memórias"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(c.faint)
+                                    .child(format!("{total_entries} registros")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .when(page_entries.is_empty(), |col| {
+                                col.child(
+                                    div()
+                                        .p(px(14.0))
+                                        .rounded(px(12.0))
+                                        .bg(rgba(0x14131680))
+                                        .border_1()
+                                        .border_color(theme::Palette::vn_card_border())
+                                        .text_size(px(11.5))
+                                        .text_color(c.muted)
+                                        .child("Nenhuma memória registrada ainda — converse com a Usami para preencher estas páginas."),
+                                )
+                            })
+                            .children(page_entries.into_iter().map(|(tag, title, when, date)| {
+                                let stamp = if when.is_empty() {
+                                    date
+                                } else {
+                                    format!("{when} · {date}")
+                                };
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.0))
+                                    .p(px(10.0))
+                                    .rounded(px(10.0))
+                                    .bg(rgba(0x1e1c22cc))
+                                    .border_1()
+                                    .border_color(theme::Palette::vn_card_border())
+                                    .border_l_2()
+                                    .hover(|s| {
+                                        s.bg(rgba(0x8e1b3333))
+                                            .border_color(theme::Palette::vn_border_bright())
+                                    })
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .px(px(7.0))
+                                                    .py(px(1.5))
+                                                    .rounded_full()
+                                                    .bg(rgba(0x8e1b3355))
+                                                    .border_1()
+                                                    .border_color(theme::Palette::vn_border_bright())
+                                                    .text_size(px(8.5))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(theme::Palette::vn_pink_soft())
+                                                    .child(tag),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(9.5))
+                                                    .font(theme::font_character_italic())
+                                                    .text_color(c.faint)
+                                                    .child(stamp),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .line_height(px(15.5))
+                                            .text_color(c.pearl)
+                                            .line_clamp(2)
+                                            .text_ellipsis()
+                                            .child(title),
+                                    )
+                            })),
+                    )
+                    // Navegação de páginas do diário
+                    .child(
+                        div()
+                            .pt(px(8.0))
+                            .border_t_1()
+                            .border_color(theme::Palette::vn_card_border())
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .id("diary-prev-page")
+                                    .cursor_pointer()
+                                    .px(px(10.0))
+                                    .py(px(5.0))
+                                    .rounded(px(8.0))
+                                    .bg(if page > 0 { rgba(0x27242ccc) } else { rgba(0x27242c44) })
+                                    .border_1()
+                                    .border_color(theme::Palette::vn_card_border())
+                                    .hover(|s| s.bg(rgba(0x8e1b3355)).border_color(theme::Palette::vn_border_bright()))
+                                    .text_size(px(10.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(if page > 0 { c.pearl } else { c.faint })
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        if this.diary_page > 0 {
+                                            this.diary_page -= 1;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child("◂ Anterior"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font(theme::font_character_italic())
+                                    .text_color(theme::Palette::vn_pink_soft())
+                                    .child(format!("Página {} de {}", page + 1, total_pages)),
+                            )
+                            .child(
+                                div()
+                                    .id("diary-next-page")
+                                    .cursor_pointer()
+                                    .px(px(10.0))
+                                    .py(px(5.0))
+                                    .rounded(px(8.0))
+                                    .bg(if page + 1 < total_pages { rgba(0x27242ccc) } else { rgba(0x27242c44) })
+                                    .border_1()
+                                    .border_color(theme::Palette::vn_card_border())
+                                    .hover(|s| s.bg(rgba(0x8e1b3355)).border_color(theme::Palette::vn_border_bright()))
+                                    .text_size(px(10.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(if page + 1 < total_pages { c.pearl } else { c.faint })
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        if this.diary_page + 1 < total_pages {
+                                            this.diary_page += 1;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child("Próxima ▸"),
+                            ),
+                    ),
+            )
     }
 }
 

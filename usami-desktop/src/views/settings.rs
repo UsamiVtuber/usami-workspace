@@ -1272,4 +1272,209 @@ impl UsamiApp {
             self.fetch_personality(cx);
         }
     }
+
+    pub(crate) fn render_settings_modal(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let ty = t.text;
+        let active_tab = self.settings_tab;
+
+        let tabs = [
+            (SettingsTab::Chat, "Chat & IA", "settings-tab-chat"),
+            (SettingsTab::Voice, "Voz & Áudio", "settings-tab-voice"),
+            (SettingsTab::Avatar, "Avatar", "settings-tab-avatar"),
+            (SettingsTab::Memory, "Memória", "settings-tab-memory"),
+            (SettingsTab::Personality, "Personalidade", "settings-tab-personality"),
+            (SettingsTab::About, "Sistema", "settings-tab-about"),
+        ];
+
+        let content = self.render_settings_section(active_tab, cx);
+
+        div()
+            .id("settings-modal-backdrop")
+            .occlude()
+            .absolute()
+            .inset_0()
+            .bg(rgba(0x0c0b0ed9))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("settings-modal-frame")
+                    .relative()
+                    .w(px(940.0))
+                    .max_w(relative(0.92))
+                    .h(px(620.0))
+                    .max_h(relative(0.88))
+                    .rounded(px(22.0))
+                    .bg(t.vn_modal_bg())
+                    .border_2()
+                    .border_color(theme::Palette::silver())
+                    .shadow(t.shadow.vn_modal.clone())
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    // Cantoneira ornamental superior esquerda
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(8.0))
+                            .left(px(8.0))
+                            .child(crate::ui::widgets::icon("vn_corner", 24.0)),
+                    )
+                    // Textura sutil de veludo no fundo
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .right(px(0.0))
+                            .opacity(0.6)
+                            .child(crate::ui::widgets::icon("velvet_pattern", 220.0)),
+                    )
+                    // Cabeçalho
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(sp.s6))
+                            .pt(px(sp.s5))
+                            .pb(px(sp.s4))
+                            .border_b_1()
+                            .border_color(theme::Palette::vn_card_border())
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.0))
+                                    .child(crate::ui::widgets::icon("bunny_ears", 24.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .text_size(px(22.0))
+                                                    .font_family(theme::FONT_CHARACTER)
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(c.pearl)
+                                                    .child("Configurações da Usami"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(ty.xs))
+                                                    .text_color(theme::Palette::vn_pink_soft())
+                                                    .child("Ajustes de voz, personalidade, memória e sistema"),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("settings-modal-close")
+                                    .cursor_pointer()
+                                    .size(px(34.0))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(c.surface_soft)
+                                    .border_1()
+                                    .border_color(theme::Palette::vn_card_border())
+                                    .hover(|s| {
+                                        s.bg(theme::Palette::vn_pink_neon())
+                                            .border_color(c.pearl)
+                                    })
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.active_drawer = crate::model::ActiveDrawer::None;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    }))
+                                    .child(crate::ui::widgets::icon("close", 14.0)),
+                            ),
+                    )
+                    // Barra horizontal de sub-abas
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(sp.s6))
+                            .py(px(sp.s3))
+                            .bg(rgba(0x14131699))
+                            .border_b_1()
+                            .border_color(theme::Palette::vn_card_border())
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .children(tabs.into_iter().map(|(tab, label, id)| {
+                                let is_active = active_tab == tab;
+                                div()
+                                    .id(id)
+                                    .cursor_pointer()
+                                    .px(px(14.0))
+                                    .py(px(7.0))
+                                    .rounded(px(999.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .bg(if is_active {
+                                        t.vn_tab_active_bg()
+                                    } else {
+                                        theme::Theme::gradient(
+                                            90.0,
+                                            rgba(0x27242c99),
+                                            rgba(0x27242c99),
+                                        )
+                                    })
+                                    .border_1()
+                                    .border_color(if is_active {
+                                        theme::Palette::vn_border_bright()
+                                    } else {
+                                        theme::Palette::vn_card_border()
+                                    })
+                                    .when(is_active, |el| {
+                                        el.shadow(theme::glow(theme::Palette::vn_pink_soft(), 10.0))
+                                    })
+                                    .hover(|s| {
+                                        if !is_active {
+                                            s.bg(rgba(0x8e1b3355))
+                                                .border_color(theme::Palette::vn_border_bright())
+                                        } else {
+                                            s
+                                        }
+                                    })
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.settings_tab = tab;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    }))
+                                    .when(is_active, |el| {
+                                        el.child(crate::ui::widgets::icon("bunny_bow", 12.0))
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(12.0))
+                                            .font_weight(if is_active {
+                                                FontWeight::BOLD
+                                            } else {
+                                                FontWeight::MEDIUM
+                                            })
+                                            .text_color(if is_active { c.pearl } else { c.muted })
+                                            .child(label),
+                                    )
+                            })),
+                    )
+                    // Corpo rolável com respiro
+                    .child(
+                        div()
+                            .id("settings-modal-scroll")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .p(px(sp.s6))
+                            .overflow_y_scroll()
+                            .child(content),
+                    ),
+            )
+    }
 }

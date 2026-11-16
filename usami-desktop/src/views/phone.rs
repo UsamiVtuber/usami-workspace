@@ -8,6 +8,7 @@
 //! Além disso, inclui a tela de Configurações nativa do WhatsApp no próprio aparelho.
 
 use crate::UsamiApp;
+use crate::asset_path;
 use crate::model::{ActiveDrawer, Sender, current_phone_time};
 use crate::theme;
 use crate::ui::widgets::icon;
@@ -92,39 +93,53 @@ impl UsamiApp {
             .occlude()
             .absolute()
             .left(px(sp.s6))
-            .bottom(px(80.0))
+            .bottom(px(76.0))
             .w(px(392.0))
-            .h(px(630.0))
             .flex()
             .flex_col()
-            // Chassis premium de smartphone (acabamento titânio escuro com chanfro metálico ultrafino)
-            .rounded(px(48.0))
-            .overflow_hidden()
-            .bg(gpui::rgba(0x111317ff))
-            .p(px(3.5))
-            .border_1()
-            .border_color(gpui::rgba(0xffffff24))
-            .shadow(vec![
-                BoxShadow {
-                    color: gpui::rgba(0x000000cc).into(),
-                    offset: point(px(0.0), px(24.0)),
-                    blur_radius: px(50.0),
-                    spread_radius: px(0.0),
-                },
-                BoxShadow {
-                    color: gpui::rgba(0x00000088).into(),
-                    offset: point(px(0.0), px(6.0)),
-                    blur_radius: px(16.0),
-                    spread_radius: px(0.0),
-                },
-                BoxShadow {
-                    color: gpui::rgba(0x10b98118).into(),
-                    offset: point(px(0.0), px(0.0)),
-                    blur_radius: px(28.0),
-                    spread_radius: px(0.0),
-                },
-            ])
+            .items_center()
+            // Orelhas de coelho da capinha Velvet Bunny saindo do topo do chassi
             .child(
+                img(asset_path("assets/icons/phone_bunny_ears.svg"))
+                    .w(px(260.0))
+                    .h(px(88.0))
+                    .mb(px(-14.0))
+                    .flex_shrink_0(),
+            )
+            // Chassis premium de smartphone (acabamento grafite aveludado com borda prata)
+            .child(
+                div()
+                    .w(px(392.0))
+                    .h(px(610.0))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(48.0))
+                    .overflow_hidden()
+                    .bg(gpui::rgba(0x141316ff))
+                    .p(px(3.5))
+                    .border_1()
+                    .border_color(gpui::rgba(0xc8cad459))
+                    .shadow(vec![
+                        BoxShadow {
+                            color: gpui::rgba(0x000000cc).into(),
+                            offset: point(px(0.0), px(24.0)),
+                            blur_radius: px(50.0),
+                            spread_radius: px(0.0),
+                        },
+                        BoxShadow {
+                            color: gpui::rgba(0xa8244033).into(),
+                            offset: point(px(0.0), px(0.0)),
+                            blur_radius: px(26.0),
+                            spread_radius: px(0.0),
+                        },
+                        BoxShadow {
+                            color: gpui::rgba(0x10b9811c).into(),
+                            offset: point(px(0.0), px(0.0)),
+                            blur_radius: px(28.0),
+                            spread_radius: px(0.0),
+                        },
+                    ])
+                    .child(
                 // Tela interna OLED com cantos curvos perfeitos
                 div()
                     .id("phone-screen")
@@ -1237,6 +1252,7 @@ impl UsamiApp {
                                     .bg(gpui::rgba(0xffffff44)),
                             ),
                     ),
+                ),
             )
     }
 }

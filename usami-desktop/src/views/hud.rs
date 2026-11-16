@@ -209,6 +209,35 @@ impl UsamiApp {
                                             this.toggle_drawer(ActiveDrawer::Settings, cx);
                                         }))
                                         .child(icon("gear", 16.0)),
+                                )
+                                .child(
+                                    div()
+                                        .id("top-connectors-btn")
+                                        .cursor_pointer()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .h(px(38.0))
+                                        .px(px(11.0))
+                                        .rounded_full()
+                                        .bg(c.icon_bg)
+                                        .border_1()
+                                        .border_color(c.line)
+                                        .hover(|style| {
+                                            style.bg(c.icon_bg_hover).border_color(c.line_strong)
+                                        })
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.os_shell.toggle_window("connectors");
+                                            this.poke(cx);
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(c.pearl)
+                                                .child("Plug-ins"),
+                                        ),
                                 ),
                         )
                         // Top Right: Créditos e modelo ativo

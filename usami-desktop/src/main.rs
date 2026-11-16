@@ -155,6 +155,8 @@ struct UsamiApp {
     attached_media: Option<AttachedMedia>,
     pending_voice_audio: Option<AttachedMedia>,
     expanded_voice_transcripts: std::collections::HashSet<usize>,
+    os_shell: views::os_shell::OsShellState,
+    collab_stage: views::collab_stage::CollabStageState,
     agent_tab: AgentCenterTab,
     agent_skill_filter: SkillFilter,
     agent_exec_filter: ExecFilter,
@@ -591,6 +593,8 @@ impl UsamiApp {
             attached_media: None,
             pending_voice_audio: None,
             expanded_voice_transcripts: std::collections::HashSet::new(),
+            os_shell: views::os_shell::OsShellState::default(),
+            collab_stage: views::collab_stage::CollabStageState::default(),
             agent_tab: AgentCenterTab::Skills,
             agent_skill_filter: SkillFilter::All,
             agent_exec_filter: ExecFilter::All,
@@ -1359,6 +1363,9 @@ impl Render for UsamiApp {
             .child(self.render_hud_top(cx))
             // ── LAYER 5: CONTROLES INFERIORES & COMPOSER FLUTUANTE ──
             .child(self.render_bottom_controls(is_idle, cx))
+            // ── LAYER OS: JANELAS FLUTUANTES & CONECTORES PLUG-AND-PLAY ──
+            .child(self.render_os_shell_layer(cx))
+            .child(self.render_collab_stage(cx))
             // ── LAYER 6: PAINEL DE CONVERSA EM FORMATO SMARTPHONE ESTILO WHATSAPP ──
             .when(chat_open, |parent| {
                 parent.child(self.render_phone_drawer(cx))

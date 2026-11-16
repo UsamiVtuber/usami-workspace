@@ -1,6 +1,7 @@
 pub mod agent_center_model;
 pub mod api;
 pub mod lol;
+pub mod ollama;
 mod assets;
 pub mod audio;
 mod media;

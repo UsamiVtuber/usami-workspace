@@ -15,6 +15,7 @@ pub mod types;
 
 use crate::api::UsamiApiClient;
 use crate::lol::brain::{EventPriorityQueue, build_llm_prompt, parse_companion_reply};
+use crate::ollama::OllamaClient;
 use crate::lol::ddragon::DataDragonStore;
 use crate::lol::ipc::{LolControlMsg, LolUiCommand, LolUiEndpoint, create_ipc_channels};
 use crate::lol::live_client::{CircuitBreaker, LiveClientPoller, PollerState, ProbeResult, advance_state};
@@ -414,6 +415,47 @@ async fn dispatch_to_llm(
     event_tag: &str,
     recent_replies: &Arc<TokioMutex<Vec<String>>>,
 ) {
+    // Tenta o Ollama local primeiro quando USAMI_LLM_SOURCE=ollama, para
+    // poupar as APIs pagas (OpenRouter/NVIDIA) do backend 8787.
+    let ollama_text = if std::env::var("USAMI_LLM_SOURCE").ok().as_deref() == Some("ollama") {
+        let client = OllamaClient::default();
+        match tokio::time::timeout(Duration::from_secs(30), client.chat(prompt)).await {
+            Ok(Ok(text)) if !text.trim().is_empty() => Some(text),
+            Ok(Err(err)) => {
+                eprintln!("[Usami.GG] Ollama falhou ({err}); tentando backend 8787.");
+                None
+            }
+            Err(_) => {
+                eprintln!("[Usami.GG] Timeout (30s) aguardando resposta do Ollama.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(text) = ollama_text {
+        let reply = parse_companion_reply(&text, fallback_priority, fallback_expr);
+        if reply.fala.trim().is_empty() {
+            return;
+        }
+        let mut lock = recent_replies.lock().await;
+        if !lock.contains(&reply.fala) {
+            lock.push(reply.fala.clone());
+            if lock.len() > 5 {
+                lock.remove(0);
+            }
+        }
+        let _ = ui_tx.send(LolUiCommand::CompanionSpeak {
+            fala: reply.fala,
+            expressao: reply.expressao,
+            prioridade: reply.prioridade,
+            event_tag: event_tag.to_string(),
+        });
+        return;
+    }
+
+    // Fallback para o backend 8787 (OpenRouter/NVIDIA).
     let call_fut = api_client.send_chat_with_options(prompt, false, true);
     match tokio::time::timeout(Duration::from_secs(8), call_fut).await {
         Ok(Ok(res)) => {

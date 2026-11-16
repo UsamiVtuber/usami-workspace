@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst content = String(body.content || '').trim();\nconst author = body.author || {};\nconst authorName = String(author.globalName || author.username || 'amigo').trim();\nconst channelId = String(body.channelId || '').trim();\nconst messageId = String(body.messageId || '').trim();\nconst guildId = body.guildId ? String(body.guildId) : null;\nconst isDm = Boolean(body.isDm || !guildId);\n\nif (!content || !channelId) {\n  throw new Error('Evento discord.chat_message sem content ou channelId.');\n}\n\nconst usamiMessage = `[Discord | ${authorName}]: ${content}`.slice(0, 1800);\n\nreturn [{\n  json: {\n    channelId,\n    messageId,\n    guildId,\n    isDm,\n    authorName,\n    content,\n    usamiMessage\n  }\n}];"
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst content = String(body.content || '').trim();\nconst author = body.author || {};\nconst authorName = String(author.globalName || author.username || 'amigo').trim();\nconst channelId = String(body.channelId || '').trim();\nconst messageId = String(body.messageId || '').trim();\nconst guildId = body.guildId ? String(body.guildId) : null;\nconst isDm = Boolean(body.isDm || !guildId);\nconst media = (body.media && typeof body.media === 'object' && body.media.data) ? body.media : null;\n\nif (!content && !media) {\n  throw new Error('Evento discord.chat_message sem content nem media.');\n}\nif (!channelId) {\n  throw new Error('Evento discord.chat_message sem channelId.');\n}\n\nconst userText = content || (media ? 'Dá uma olhada nisso aqui!' : '');\nconst usamiMessage = `[Discord | ${authorName}]: ${userText}`.slice(0, 1800);\n\nreturn [{\n  json: {\n    channelId,\n    messageId,\n    guildId,\n    isDm,\n    authorName,\n    content: userText,\n    usamiMessage,\n    hasMedia: Boolean(media),\n    media\n  }\n}];"
       },
       "id": "dc-chat-0002-4000-8000-000000000002",
       "name": "Extrair Mensagem Discord",
@@ -36,7 +36,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://10.42.0.1:8787/api/chat",
+        "url": "={{ $json.hasMedia ? 'http://10.42.0.1:8787/api/media/analyze' : 'http://10.42.0.1:8787/api/chat' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -56,13 +56,13 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ message: $json.usamiMessage }) }}",
+        "jsonBody": "={{ JSON.stringify($json.hasMedia ? { mimeType: $json.media.mimeType, data: $json.media.data, filename: $json.media.filename, prompt: $json.usamiMessage } : { message: $json.usamiMessage }) }}",
         "options": {
-          "timeout": 25000
+          "timeout": 45000
         }
       },
       "id": "dc-chat-0003-4000-8000-000000000003",
-      "name": "Chamar API Usami (/api/chat)",
+      "name": "Chamar API Usami",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -145,14 +145,14 @@
       "main": [
         [
           {
-            "node": "Chamar API Usami (/api/chat)",
+            "node": "Chamar API Usami",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Chamar API Usami (/api/chat)": {
+    "Chamar API Usami": {
       "main": [
         [
           {

@@ -111,8 +111,12 @@ impl UsamiApp {
                                 while let Ok(newer) = partials.try_recv() {
                                     slice = newer;
                                 }
-                                let Ok(text) = api.transcribe(slice.wav).await else {
-                                    continue;
+                                let text = match api.transcribe(slice.wav).await {
+                                    Ok(t) => t,
+                                    Err(err) => {
+                                        eprintln!("[STT partial] {err}");
+                                        continue;
+                                    }
                                 };
                                 let trimmed = text.trim().to_string();
                                 if trimmed.is_empty() {
@@ -123,7 +127,7 @@ impl UsamiApp {
                                         if let Some(this) = this.upgrade() {
                                             this.update(cx, |view, cx| {
                                                 if !view.is_listening
-                                                    || !view.is_calling
+                                                    || (!view.is_calling && !view.lol_overlay_active)
                                                     || view.listen_session != session
                                                 {
                                                     return false;
@@ -172,7 +176,6 @@ impl UsamiApp {
                                             }
                                             view.voice_turn_closed =
                                                 view.voice_turn_closed.max(slice.turn);
-                                            view.live_transcript = SharedString::default();
                                             cx.notify();
                                             true
                                         })
@@ -185,7 +188,8 @@ impl UsamiApp {
                                 break;
                             }
 
-                            let transcript = api.transcribe(slice.wav).await;
+                            let wav_bytes = slice.wav;
+                            let transcript = api.transcribe(wav_bytes.clone()).await;
                             let active = cx
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
@@ -209,6 +213,19 @@ impl UsamiApp {
                                                         }
                                                         return true;
                                                     }
+                                                    let mut voice_media = crate::AttachedMedia::from_bytes(
+                                                        "voz.wav".to_string(),
+                                                        "audio/wav",
+                                                        wav_bytes,
+                                                    );
+                                                    if let Some(bytes) = crate::api::base64_decode(&voice_media.data_base64) {
+                                                        voice_media.stored_path = crate::storage::save_media_file(
+                                                            "voz.wav",
+                                                            "audio/wav",
+                                                            &bytes,
+                                                        );
+                                                    }
+                                                    view.pending_voice_audio = Some(voice_media);
                                                     view.cursor_char_idx = trimmed.chars().count();
                                                     view.selection_anchor = None;
                                                     view.input_text = trimmed;

@@ -1,4 +1,9 @@
 import { createHmac } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import {
   Client,
   GatewayIntentBits,
@@ -8,6 +13,8 @@ import {
   Routes,
   SlashCommandBuilder,
 } from 'discord.js';
+
+const execFileAsync = promisify(execFile);
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
@@ -29,6 +36,56 @@ const N8N_WEBHOOK_SECRET = process.env.N8N_WEBHOOK_SECRET || '';
 const COMMUNITY_COMMANDS = new Set(['afk', 'aniversario', 'nota', 'sugestao', 'sorteio', 'stats', 'obs']);
 const MOD_COMMANDS = new Set(['ticket', 'cmd', 'sticky', 'reactionrole']);
 const EPHEMERAL_COMMANDS = new Set(['nota', 'cmd', 'sticky', 'reactionrole']);
+
+const AUDIO_EXTENSIONS = new Set(['ogg', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'opus', 'weba']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi']);
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']);
+const TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'yaml', 'yml', 'xml', 'html', 'css',
+  'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'py', 'rs', 'c', 'cpp', 'h', 'hpp', 'sh',
+  'bash', 'zsh', 'sql', 'toml', 'ini', 'env', 'diff', 'patch', 'dockerfile', 'r', 'java', 'kt', 'go', 'cs', 'php', 'rb', 'lua',
+]);
+
+async function extractPdfText(buffer) {
+  let tmpDir = null;
+  try {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'discord-pdf-'));
+    const tmpFile = path.join(tmpDir, 'document.pdf');
+    await fs.writeFile(tmpFile, buffer);
+    const { stdout } = await execFileAsync('pdftotext', ['-layout', '-enc', 'UTF-8', tmpFile, '-'], { timeout: 15000 });
+    const text = (stdout || '').trim();
+    console.log(`[discord-bridge] PDF extraído com sucesso (${text.length} caracteres)`);
+    return text;
+  } catch (err) {
+    console.warn('[discord-bridge] Falha ao extrair texto do PDF com pdftotext:', redactSecrets(err?.message || err));
+    return '';
+  } finally {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
+    }
+  }
+}
+
+function guessMimeType(filename = '') {
+  const ext = String(filename || '').split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'png': return 'image/png';
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'webp': return 'image/webp';
+    case 'gif': return 'image/gif';
+    case 'mp4': return 'video/mp4';
+    case 'webm': return 'video/webm';
+    case 'mov': return 'video/quicktime';
+    case 'mp3': return 'audio/mp3';
+    case 'wav': return 'audio/wav';
+    case 'ogg':
+    case 'opus': return 'audio/ogg';
+    case 'm4a': return 'audio/m4a';
+    case 'pdf': return 'application/pdf';
+    default: return 'application/octet-stream';
+  }
+}
 
 if (!DISCORD_BOT_TOKEN) {
   console.error('[discord-bridge] DISCORD_BOT_TOKEN ausente; defina no .env do Nyarch.');
@@ -279,12 +336,92 @@ client.on('messageCreate', async message => {
 
   // 1. Chat & Companion Usami
   if (!isPrefixCommand && (isDm || mentionsBot || isChatChannel)) {
-    const cleanContent = client.user
+    let cleanContent = client.user
       ? rawContent.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim()
       : rawContent;
-    if (cleanContent) {
+
+    const attachments = message.attachments ? [...message.attachments.values()] : [];
+    let media = null;
+
+    if (attachments.length > 0) {
+      const att = attachments[0];
+      const mime = String(att.contentType || '').toLowerCase();
+      const filename = String(att.name || '').toLowerCase();
+      const ext = filename.split('.').pop() || '';
+
+      const isImg = mime.startsWith('image/') || IMAGE_EXTENSIONS.has(ext);
+      const isVid = mime.startsWith('video/') || VIDEO_EXTENSIONS.has(ext);
+      const isAud = mime.startsWith('audio/') || AUDIO_EXTENSIONS.has(ext);
+      const isPdf = mime === 'application/pdf' || ext === 'pdf';
+      const isTxt = mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml' || TEXT_EXTENSIONS.has(ext);
+
+      if (att.size <= 25 * 1024 * 1024) {
+        try {
+          const res = await fetch(att.url, { signal: AbortSignal.timeout(25000) });
+          if (res.ok) {
+            const arrayBuf = await res.arrayBuffer();
+            const buffer = Buffer.from(arrayBuf);
+
+            if (isImg) {
+              media = {
+                mimeType: att.contentType || guessMimeType(att.name),
+                data: buffer.toString('base64'),
+                filename: att.name,
+              };
+            } else if (isVid) {
+              media = {
+                mimeType: att.contentType || guessMimeType(att.name),
+                data: buffer.toString('base64'),
+                filename: att.name,
+              };
+            } else if (isAud) {
+              media = {
+                mimeType: att.contentType || (ext === 'ogg' || ext === 'opus' ? 'audio/ogg' : (ext === 'wav' ? 'audio/wav' : 'audio/mp3')),
+                data: buffer.toString('base64'),
+                filename: att.name,
+              };
+            } else if (isPdf) {
+              const pdfText = await extractPdfText(buffer);
+              const contentToEncode = pdfText || '[PDF sem texto selecionável ou digitalizado como imagem]';
+              media = {
+                mimeType: 'text/plain',
+                data: Buffer.from(contentToEncode, 'utf8').toString('base64'),
+                filename: att.name,
+              };
+            } else if (isTxt) {
+              const fileText = buffer.toString('utf8');
+              media = {
+                mimeType: 'text/plain',
+                data: Buffer.from(fileText, 'utf8').toString('base64'),
+                filename: att.name,
+              };
+            } else {
+              // Outros arquivos: tenta ler como UTF-8 se for texto
+              try {
+                const genericText = buffer.toString('utf8');
+                if (/^[\x09\x0A\x0D\x20-\x7E\xC2-\xF4]*$/.test(genericText.slice(0, 1000))) {
+                  media = {
+                    mimeType: 'text/plain',
+                    data: Buffer.from(genericText, 'utf8').toString('base64'),
+                    filename: att.name,
+                  };
+                } else {
+                  cleanContent += `\n\n[Arquivo recebido: ${att.name} (${(att.size / 1024).toFixed(1)} KB) - formato não suportado diretamente]`;
+                }
+              } catch {
+                cleanContent += `\n\n[Arquivo recebido: ${att.name}]`;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[discord-bridge] Falha ao processar anexo:', redactSecrets(err?.message || err));
+        }
+      }
+    }
+
+    if (cleanContent || media) {
       try {
-        await message.channel.sendTyping().catch(() => {});
+        await message.channel.sendTyping().catch(() => { });
         await postToN8n(N8N_CHAT_WEBHOOK, {
           event: 'discord.chat_message',
           isDm,
@@ -292,12 +429,13 @@ client.on('messageCreate', async message => {
           channelId: message.channelId,
           messageId: message.id,
           content: cleanContent,
+          media,
           author: {
             id: message.author.id,
             username: message.author.username,
             globalName: message.author.globalName || message.author.username,
           },
-        }, { timeoutMs: 30000 });
+        }, { timeoutMs: 60000 });
       } catch (err) {
         await emitObservabilityError('discord.chat_message', err, { channelId: message.channelId });
       }
@@ -413,7 +551,7 @@ client.on('interactionCreate', async interaction => {
     await emitObservabilityError(`discord.slash.${commandName}`, err, { guildId: interaction.guildId });
     await interaction.editReply({
       content: 'Ops, não consegui falar com o fluxo da Usami no n8n agora. Já registrei o erro na observabilidade!',
-    }).catch(() => {});
+    }).catch(() => { });
   }
 });
 

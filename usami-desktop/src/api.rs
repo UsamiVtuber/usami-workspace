@@ -132,6 +132,8 @@ pub struct ChatMessageRequest {
     pub skip_agent: Option<bool>,
     #[serde(rename = "fastTier", skip_serializing_if = "Option::is_none")]
     pub fast_tier: Option<bool>,
+    #[serde(rename = "spoken", skip_serializing_if = "Option::is_none")]
+    pub spoken: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1002,10 +1004,38 @@ pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveCharacterResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(rename = "characterId")]
+    pub character_id: String,
+    #[serde(default)]
+    pub manifest: serde_json::Value,
+}
+
 pub struct UsamiApiClient {
     base_url: String,
     token: Option<String>,
+    character_id: std::sync::RwLock<String>,
     client: reqwest::Client,
+}
+
+/// Garante que futures que usam `reqwest` rodem dentro do runtime Tokio,
+/// mesmo quando chamadas a partir do executor do GPUI (`cx.spawn`).
+async fn run_on_tokio<F, T>(fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>> + Send + 'static,
+    T: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        fut.await
+    } else {
+        tokio_runtime()
+            .spawn(fut)
+            .await
+            .map_err(|e| format!("Falha na tarefa HTTP: {e}"))?
+    }
 }
 
 impl UsamiApiClient {
@@ -1014,15 +1044,38 @@ impl UsamiApiClient {
     }
 
     pub fn with_token(base_url: impl Into<String>, token: Option<String>) -> Self {
+        let initial_character = std::env::var("USAMI_CHARACTER_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "usami-classic".to_string());
         Self {
             base_url: normalize_base_url(Some(base_url.into())),
             token,
+            character_id: std::sync::RwLock::new(initial_character),
             client: build_http_client(),
         }
     }
 
     pub fn from_env() -> Self {
         Self::with_token(api_base_url_from_env(), api_token_from_env())
+    }
+
+    pub fn character_id(&self) -> String {
+        self.character_id
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| "usami-classic".to_string())
+    }
+
+    pub fn set_character_id(&self, id: impl Into<String>) {
+        let trimmed = id.into().trim().to_string();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.character_id.write() {
+            *guard = trimmed;
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -1042,7 +1095,18 @@ impl UsamiApiClient {
         message: &str,
         sleep_companion_active: bool,
     ) -> Result<ChatResponse, String> {
-        self.send_chat_with_options(message, sleep_companion_active, false).await
+        self.send_chat_full(message, sleep_companion_active, false, false)
+            .await
+    }
+
+    pub async fn send_chat_spoken(
+        &self,
+        message: &str,
+        sleep_companion_active: bool,
+        spoken: bool,
+    ) -> Result<ChatResponse, String> {
+        self.send_chat_full(message, sleep_companion_active, false, spoken)
+            .await
     }
 
     pub async fn send_chat_with_options(
@@ -1050,6 +1114,17 @@ impl UsamiApiClient {
         message: &str,
         sleep_companion_active: bool,
         skip_agent: bool,
+    ) -> Result<ChatResponse, String> {
+        self.send_chat_full(message, sleep_companion_active, skip_agent, false)
+            .await
+    }
+
+    async fn send_chat_full(
+        &self,
+        message: &str,
+        sleep_companion_active: bool,
+        skip_agent: bool,
+        spoken: bool,
     ) -> Result<ChatResponse, String> {
         let capabilities = serde_json::json!({
             "format": "VRM",
@@ -1074,24 +1149,37 @@ impl UsamiApiClient {
             sleep_companion_active: Some(sleep_companion_active),
             skip_agent: if skip_agent { Some(true) } else { None },
             fast_tier: if skip_agent { Some(true) } else { None },
+            spoken: if spoken { Some(true) } else { None },
         };
 
         let client = self.client.clone();
         let url = format!("{}/api/chat", self.base_url);
+        let character_id = self.character_id().to_string();
 
-        let res = client
-            .post(url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(map_request_error)?
-            .error_for_status()
-            .map_err(map_request_error)?
-            .json::<ChatResponse>()
-            .await
-            .map_err(map_request_error)?;
+        run_on_tokio(async move {
+            let res = client
+                .post(url)
+                .header("x-character-id", character_id)
+                .json(&payload)
+                .send()
+                .await
+                .map_err(map_request_error)?;
 
-        Ok(res)
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await
+                    && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+                {
+                    return Err(format!("Erro {status}: {msg}"));
+                }
+                return Err(format!("O servidor local respondeu com erro {}.", status.as_u16()));
+            }
+
+            res.json::<ChatResponse>()
+                .await
+                .map_err(map_request_error)
+        })
+        .await
     }
 
     /// Lê a atividade ao vivo do turno (`GET /api/chat/activity`).
@@ -1130,6 +1218,7 @@ impl UsamiApiClient {
             // O teto padrão de 90 s vale para o corpo inteiro; uma fala longa em
             // streaming passaria disso e seria cortada no meio.
             .post(format!("{}/api/tts", self.base_url))
+            .header("x-character-id", self.character_id())
             .timeout(Duration::from_secs(180))
             .json(&payload)
             .send()
@@ -1155,26 +1244,29 @@ impl UsamiApiClient {
         let url = format!("{}/api/stt", self.base_url);
         let token = self.token.clone();
 
-        let part = reqwest::multipart::Part::bytes(wav)
-            .file_name("mic.wav")
-            .mime_str("audio/wav")
-            .map_err(map_request_error)?;
-        let form = reqwest::multipart::Form::new().part("audio", part);
-        let mut req = client.post(url).multipart(form);
-        if let Some(ref t) = token {
-            req = req.header("x-usami-token", t);
-        }
-        let response = req
-            .send()
-            .await
-            .map_err(map_request_error)?
-            .error_for_status()
-            .map_err(map_request_error)?
-            .json::<SttResponse>()
-            .await
-            .map_err(map_request_error)?;
+        run_on_tokio(async move {
+            let part = reqwest::multipart::Part::bytes(wav)
+                .file_name("mic.wav")
+                .mime_str("audio/wav")
+                .map_err(map_request_error)?;
+            let form = reqwest::multipart::Form::new().part("audio", part);
+            let mut req = client.post(url).multipart(form);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let response = req
+                .send()
+                .await
+                .map_err(map_request_error)?
+                .error_for_status()
+                .map_err(map_request_error)?
+                .json::<SttResponse>()
+                .await
+                .map_err(map_request_error)?;
 
-        Ok(response.text)
+            Ok(response.text)
+        })
+        .await
     }
 
     pub async fn get_memory(&self) -> Result<MemoryResponse, String> {
@@ -1182,7 +1274,9 @@ impl UsamiApiClient {
         let url = format!("{}/api/memory", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.get(url);
+        let mut req = client
+            .get(url)
+            .header("x-character-id", self.character_id());
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1208,7 +1302,10 @@ impl UsamiApiClient {
         let token = self.token.clone();
         let payload = payload.clone();
 
-        let mut req = client.post(url).json(&payload);
+        let mut req = client
+            .post(url)
+            .header("x-character-id", self.character_id())
+            .json(&payload);
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1230,7 +1327,9 @@ impl UsamiApiClient {
         let url = format!("{}/api/bond", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.get(url);
+        let mut req = client
+            .get(url)
+            .header("x-character-id", self.character_id());
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1289,7 +1388,10 @@ impl UsamiApiClient {
         let url = format!("{}/api/bond/event", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.post(url).json(&payload);
+        let mut req = client
+            .post(url)
+            .header("x-character-id", self.character_id())
+            .json(&payload);
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1311,7 +1413,9 @@ impl UsamiApiClient {
         let url = format!("{}/api/mood", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.get(url);
+        let mut req = client
+            .get(url)
+            .header("x-character-id", self.character_id());
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1341,7 +1445,10 @@ impl UsamiApiClient {
             "reason": reason.unwrap_or(""),
         });
 
-        let mut req = client.post(url).json(&payload);
+        let mut req = client
+            .post(url)
+            .header("x-character-id", self.character_id())
+            .json(&payload);
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1363,7 +1470,9 @@ impl UsamiApiClient {
         let url = format!("{}/api/personality", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.get(url);
+        let mut req = client
+            .get(url)
+            .header("x-character-id", self.character_id());
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1389,7 +1498,10 @@ impl UsamiApiClient {
         let token = self.token.clone();
         let payload = payload.clone();
 
-        let mut req = client.post(url).json(&payload);
+        let mut req = client
+            .post(url)
+            .header("x-character-id", self.character_id())
+            .json(&payload);
         if let Some(ref t) = token {
             req = req.header("x-usami-token", t);
         }
@@ -1491,34 +1603,57 @@ impl UsamiApiClient {
             capabilities,
         };
 
-        let mut req = client
-            .post(url)
-            .json(&payload)
-            .header("x-usami-client", "usami-desktop");
+        run_on_tokio(async move {
+            let mut req = client
+                .post(url)
+                .json(&payload)
+                .header("x-usami-client", "usami-desktop");
 
-        if let Some(t) = token {
-            req = req.header("x-usami-token", t);
-        }
+            if let Some(t) = token {
+                req = req.header("x-usami-token", t);
+            }
 
-        let res = req
-            .send()
-            .await
-            .map_err(|e| format!("Falha de conexão com a API de análise de mídia: {e}"))?;
+            let res = req
+                .send()
+                .await
+                .map_err(|e| format!("Falha de conexão com a API de análise de mídia: {e}"))?;
 
-        let status = res.status();
-        if !status.is_success() {
-            let err_text = res.text().await.unwrap_or_default();
-            return Err(format!(
-                "Erro HTTP {status} na análise de mídia: {err_text}"
-            ));
-        }
+            let status = res.status();
+            if !status.is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+                return Err(format!(
+                    "Erro HTTP {status} na análise de mídia: {err_text}"
+                ));
+            }
 
-        let data = res
-            .json::<MediaAnalyzeResponse>()
-            .await
-            .map_err(|e| format!("Resposta inválida da API de mídia: {e}"))?;
+            res.json::<MediaAnalyzeResponse>()
+                .await
+                .map_err(|e| format!("Resposta inválida da API de mídia: {e}"))
+        })
+        .await
+    }
 
-        Ok(data)
+    pub async fn get_active_character(&self) -> Result<ActiveCharacterResponse, String> {
+        self.send_agent_get(
+            "/api/characters/active".to_string(),
+            "Falha ao ler personagem ativo",
+        )
+        .await
+    }
+
+    pub async fn set_active_character(
+        &self,
+        character_id: &str,
+    ) -> Result<ActiveCharacterResponse, String> {
+        let res: ActiveCharacterResponse = self
+            .send_agent_post(
+                "/api/characters/active".to_string(),
+                serde_json::json!({ "characterId": character_id }),
+                "Falha ao ativar personagem",
+            )
+            .await?;
+        self.set_character_id(&res.character_id);
+        Ok(res)
     }
 
     pub async fn get_agent_skills(&self) -> Result<AgentSkillsResponse, String> {
@@ -1582,23 +1717,26 @@ impl UsamiApiClient {
         let url = format!("{}/api/agent/skills/{skill_id}/{action}", self.base_url);
         let token = self.token.clone();
 
-        let mut req = client.post(url).json(&serde_json::json!({}));
-        if let Some(ref t) = token {
-            req = req.header("x-usami-token", t);
-        }
-        let res = req.send().await.map_err(map_request_error)?;
-        let status = res.status();
-        if !status.is_success() {
-            if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                    return Err(msg.to_string());
-                }
+        run_on_tokio(async move {
+            let mut req = client.post(url).json(&serde_json::json!({}));
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
             }
-            return Err(format!("Falha ao atualizar skill (HTTP {status})."));
-        }
-        res.json::<SkillToggleResponse>()
-            .await
-            .map_err(map_request_error)
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("Falha ao atualizar skill (HTTP {status})."));
+            }
+            res.json::<SkillToggleResponse>()
+                .await
+                .map_err(map_request_error)
+        })
+        .await
     }
 
     async fn send_agent_get<T: serde::de::DeserializeOwned + Send + 'static>(
@@ -1610,21 +1748,24 @@ impl UsamiApiClient {
         let url = format!("{}{}", self.base_url, path);
         let token = self.token.clone();
 
-        let mut req = client.get(url);
-        if let Some(ref t) = token {
-            req = req.header("x-usami-token", t);
-        }
-        let res = req.send().await.map_err(map_request_error)?;
-        let status = res.status();
-        if !status.is_success() {
-            if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                    return Err(msg.to_string());
-                }
+        run_on_tokio(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
             }
-            return Err(format!("{fallback_err} (HTTP {status})."));
-        }
-        res.json::<T>().await.map_err(map_request_error)
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("{fallback_err} (HTTP {status})."));
+            }
+            res.json::<T>().await.map_err(map_request_error)
+        })
+        .await
     }
 
     async fn send_agent_post<T: serde::de::DeserializeOwned + Send + 'static>(
@@ -1637,21 +1778,24 @@ impl UsamiApiClient {
         let url = format!("{}{}", self.base_url, path);
         let token = self.token.clone();
 
-        let mut req = client.post(url).json(&payload);
-        if let Some(ref t) = token {
-            req = req.header("x-usami-token", t);
-        }
-        let res = req.send().await.map_err(map_request_error)?;
-        let status = res.status();
-        if !status.is_success() {
-            if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                    return Err(msg.to_string());
-                }
+        run_on_tokio(async move {
+            let mut req = client.post(url).json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
             }
-            return Err(format!("{fallback_err} (HTTP {status})."));
-        }
-        res.json::<T>().await.map_err(map_request_error)
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                if let Ok(err_json) = res.json::<serde_json::Value>().await {
+                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
+                        return Err(msg.to_string());
+                    }
+                }
+                return Err(format!("{fallback_err} (HTTP {status})."));
+            }
+            res.json::<T>().await.map_err(map_request_error)
+        })
+        .await
     }
 
     pub async fn get_agent_self_tools(&self) -> Result<AgentSelfResponse, String> {
@@ -2432,7 +2576,9 @@ mod tests {
         assert_eq!(res.skills[0].state.as_deref(), Some("installed"));
         assert!(res.skills[0].activation.can_activate);
 
-        let req = requests.recv_timeout(Duration::from_secs(5)).expect("get skills");
+        let req = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("get skills");
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/agent/skills");
 
@@ -2496,7 +2642,9 @@ mod tests {
             Some("resultado reprovado por verify()")
         );
 
-        let req = requests.recv_timeout(Duration::from_secs(5)).expect("get execs");
+        let req = requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("get execs");
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/agent/executions?limit=50");
 
@@ -2543,7 +2691,9 @@ mod tests {
             .expect("revoke");
         assert_eq!(perm_res.revocations.len(), 1);
         assert_eq!(perm_res.revocations[0].tool, "briefing.*");
-        let preq = perm_reqs.recv_timeout(Duration::from_secs(5)).expect("post");
+        let preq = perm_reqs
+            .recv_timeout(Duration::from_secs(5))
+            .expect("post");
         assert_eq!(preq.method, "POST");
         assert_eq!(preq.path, "/api/agent/permissions");
         let body: serde_json::Value = serde_json::from_str(&preq.body).expect("json");
@@ -2566,7 +2716,9 @@ mod tests {
             .await
             .expect("confirmacao");
         assert_eq!(conf.confirmation.token, "singleuse123");
-        let creq = conf_reqs.recv_timeout(Duration::from_secs(5)).expect("post");
+        let creq = conf_reqs
+            .recv_timeout(Duration::from_secs(5))
+            .expect("post");
         assert_eq!(creq.path, "/api/agent/confirmations");
         let cbody: serde_json::Value = serde_json::from_str(&creq.body).expect("json");
         assert_eq!(cbody["skill"], "extra-skill");
@@ -2600,5 +2752,89 @@ mod tests {
         assert_eq!(bres.briefing.date, "2026-11-11");
         let breq = br_reqs.recv_timeout(Duration::from_secs(5)).expect("get");
         assert_eq!(breq.path, "/api/agent/briefing");
+    }
+
+    #[tokio::test]
+    async fn character_id_defaults_updates_and_active_character_round_trip() {
+        let (char_url, char_reqs) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"characterId":"luna-cyber","manifest":{"metadata":{"id":"luna-cyber","name":"Luna"}}}"#,
+        );
+        let client = UsamiApiClient::with_token(char_url, Some("tok".into()));
+        assert_eq!(client.character_id(), "usami-classic");
+
+        let active = client
+            .set_active_character("luna-cyber")
+            .await
+            .expect("ativa personagem");
+        assert!(active.ok);
+        assert_eq!(active.character_id, "luna-cyber");
+        assert_eq!(client.character_id(), "luna-cyber");
+
+        let req = char_reqs
+            .recv_timeout(Duration::from_secs(5))
+            .expect("post");
+        assert_eq!(req.method, "POST");
+        assert_eq!(req.path, "/api/characters/active");
+        let body: serde_json::Value = serde_json::from_str(&req.body).expect("json");
+        assert_eq!(body["characterId"], "luna-cyber");
+    }
+
+    fn poll_outside_tokio<F, T>(fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct NoopWake;
+        impl Wake for NoopWake {
+            fn wake(self: std::sync::Arc<Self>) {}
+        }
+
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "teste deve rodar fora do contexto Tokio"
+        );
+        let mut fut = std::pin::pin!(fut);
+        let waker = Waker::from(std::sync::Arc::new(NoopWake));
+        let mut cx = Context::from_waker(&waker);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(res) => return res,
+                Poll::Pending => {
+                    assert!(std::time::Instant::now() < deadline, "timeout no poll");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stt_transcribe_works_outside_tokio_reactor() {
+        let (base_url, _requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"text":"oi fora do tokio"}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
+        let result = poll_outside_tokio(client.transcribe(b"RIFF....WAVE".to_vec()));
+        assert_eq!(result.expect("transcribe fora do tokio"), "oi fora do tokio");
+    }
+
+    #[test]
+    fn chat_send_works_outside_tokio_reactor() {
+        let (base_url, _requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"reply":"hmph, oi!","gesture":"tsundere","actions":[]}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
+        let result = poll_outside_tokio(client.send_chat("oi por voz", false));
+        assert_eq!(result.expect("send_chat fora do tokio").reply, "hmph, oi!");
     }
 }

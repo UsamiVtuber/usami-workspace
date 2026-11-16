@@ -102,4 +102,18 @@ Formato de cada entrada:
 
 ---
 
+### KE-006 — Panic `there is no reactor running` ao chamar `UsamiApiClient` dentro de `cx.spawn` (GPUI)
+- **Data:** 2026-11-16
+- **Componente:** usami-desktop (`src/api.rs`, `src/voice.rs`, `src/main.rs`, `src/views/agent_center.rs`)
+- **Erro / falha:** panic em runtime `there is no reactor running, must be called from the context of a Tokio 1.x runtime` ao usar voz (STT -> `send_chat`) ou ações HTTP disparadas pelo executor do GPUI.
+- **Sintoma:** o app fecha abruptamente (`exit code: 0xc0000409`) logo após capturar fala no microfone ou ao submeter chat/mídia por um caminho que roda em `cx.spawn(...)`.
+- **Causa raiz:** `cx.spawn(...)` roda no executor foreground do GPUI, que **não** possui um reator Tokio 1.x ativo. Qualquer chamada `reqwest` executada diretamente nele entra em panic ao tentar usar timers/sockets do Tokio.
+- **Tentado e não funcionou:** corrigir apenas um call site isolado (`transcribe`) deixou o próximo passo da cadeia (`view.submit(cx)` -> `api.send_chat` em `main.rs`) ainda rodando fora do Tokio.
+- **Correção que funcionou:** centralizar o helper `run_on_tokio` dentro de `src/api.rs` (`Handle::try_current().is_ok()` ou fallback para `tokio_runtime().spawn(...)`) nos métodos de `UsamiApiClient` (`send_chat_with_options`, `transcribe`, `analyze_media`, `toggle_skill_enabled`, `send_agent_get`, `send_agent_post`), além de `install_panic_hook` em `src/main.rs` gravando em `%APPDATA%\Usami\crash.log` e enviando para `POST /api/observability/client-log`.
+- **Como evitar / reproduzir:** nunca chamar `reqwest` diretamente no executor do GPUI sem passar por `run_on_tokio` ou `tokio_runtime().spawn(...)`; cobrir novos métodos do `UsamiApiClient` com testes fora do Tokio (`poll_outside_tokio`).
+- **Status:** resolvido
+- **Referências:** `src/api.rs` (`run_on_tokio`, `stt_transcribe_works_outside_tokio_reactor`, `chat_send_works_outside_tokio_reactor`)
+
+---
+
 **Como adicionar uma nova entrada:** copie o bloco acima, preencha com o próximo número KE disponível, descreva sintoma, causa raiz, tentativas fracassadas, correção que funcionou e referências (commit/PR/issue). Mantenha em pt-BR.

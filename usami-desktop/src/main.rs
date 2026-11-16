@@ -1,35 +1,38 @@
 pub mod agent_center_model;
 pub mod api;
-pub mod lol;
-pub mod ollama;
 mod assets;
 pub mod audio;
-mod media;
-mod model;
-#[cfg(target_os = "windows")]
-mod presence;
-pub mod recorder;
-mod storage;
-mod speech;
-mod theme;
-mod ui;
-mod memory_personality;
 mod bond;
-mod proactive;
 mod input_editor;
 mod lifecycle;
+pub mod lol;
+mod media;
+mod memory_personality;
+mod model;
+pub mod ollama;
+#[cfg(target_os = "windows")]
+mod presence;
+mod proactive;
+pub mod recorder;
+mod speech;
+mod storage;
+mod text_input;
+mod theme;
+mod ui;
 mod views;
 mod voice;
-mod text_input;
 
 use crate::agent_center_model::{AgentCenterTab, ExecFilter, SkillFilter};
-use crate::assets::{asset_base_dir, asset_path, env_path, first_existing};
 use crate::api::UsamiApiClient;
+use crate::assets::{asset_base_dir, asset_path, env_path, first_existing};
 use crate::audio::AudioPlayer;
 use crate::media::AttachedMedia;
-use crate::model::{chat_message_from_stored, current_phone_time, format_tool_badge, stored_turns, ActiveDrawer, BondTab, ChatMessage, Sender, SettingsTab};
-use crate::ui::widgets::icon;
+use crate::model::{
+    ActiveDrawer, BondTab, ChatMessage, Sender, SettingsTab, chat_message_from_stored,
+    current_phone_time, format_tool_badge, stored_turns,
+};
 use crate::speech::sanitize_speech_text;
+use crate::ui::widgets::icon;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
@@ -37,7 +40,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
 
 struct UsamiApp {
     focus_handle: FocusHandle,
@@ -50,6 +52,8 @@ struct UsamiApp {
     input_active: bool,
     caret_on: bool,
     status_text: SharedString,
+    character_name: SharedString,
+    character_credit: SharedString,
     last_reply: SharedString,
     last_emotion: SharedString,
     show_bubble: bool,
@@ -149,6 +153,8 @@ struct UsamiApp {
     /// turnos anteriores são descartadas ao chegar atrasadas.
     voice_turn_closed: u64,
     attached_media: Option<AttachedMedia>,
+    pending_voice_audio: Option<AttachedMedia>,
+    expanded_voice_transcripts: std::collections::HashSet<usize>,
     agent_tab: AgentCenterTab,
     agent_skill_filter: SkillFilter,
     agent_exec_filter: ExecFilter,
@@ -414,9 +420,10 @@ impl UsamiApp {
                                     if view.lol_overlay_active && !view.window_focused {
                                         let now = Instant::now();
                                         let min_interval = Duration::from_millis(250); // ~4 fps
-                                        let notify = view.last_overlay_notify.map_or(true, |last| {
-                                            now.duration_since(last) >= min_interval
-                                        });
+                                        let notify =
+                                            view.last_overlay_notify.map_or(true, |last| {
+                                                now.duration_since(last) >= min_interval
+                                            });
                                         if notify {
                                             view.last_overlay_notify = Some(now);
                                             cx.notify();
@@ -500,6 +507,8 @@ impl UsamiApp {
             input_active: false,
             caret_on: true,
             status_text: "COM VOCÊ".into(),
+            character_name: "Usami".into(),
+            character_credit: "白ー (shiro) — Model by Sweet_nya555".into(),
             last_reply,
             last_emotion,
             show_bubble: true,
@@ -580,6 +589,8 @@ impl UsamiApp {
             listen_session: 0,
             voice_turn_closed: 0,
             attached_media: None,
+            pending_voice_audio: None,
+            expanded_voice_transcripts: std::collections::HashSet::new(),
             agent_tab: AgentCenterTab::Skills,
             agent_skill_filter: SkillFilter::All,
             agent_exec_filter: ExecFilter::All,
@@ -689,8 +700,6 @@ impl UsamiApp {
         self.last_prefs_save = Instant::now();
     }
 
-
-
     pub(crate) fn attach_file_prompt(&mut self, cx: &mut Context<Self>) {
         self.touch_ui(cx);
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -780,11 +789,8 @@ impl UsamiApp {
         if let Some(media) = attached.as_mut() {
             if media.stored_path.is_none() {
                 if let Some(bytes) = api::base64_decode(&media.data_base64) {
-                    media.stored_path = storage::save_media_file(
-                        &media.filename,
-                        &media.mime_type,
-                        &bytes,
-                    );
+                    media.stored_path =
+                        storage::save_media_file(&media.filename, &media.mime_type, &bytes);
                 }
             }
         }
@@ -957,13 +963,15 @@ impl UsamiApp {
             return;
         }
 
+        let voice_media = self.pending_voice_audio.take();
+        self.live_transcript = SharedString::default();
         self.push_history(ChatMessage {
             sender: Sender::User,
             text: text.clone(),
             emotion: None,
             tool_badge: None,
             time_str: Some(current_phone_time()),
-            media: None,
+            media: voice_media,
         });
 
         cx.notify();
@@ -974,11 +982,14 @@ impl UsamiApp {
         let api = Arc::clone(&self.api_client);
         let audio = self.audio_player.clone();
         let sleep_companion_active = self.sleep_companion_started_at.is_some();
+        let is_spoken = self.is_calling;
 
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.send_chat(&text, sleep_companion_active).await;
+                let res = api
+                    .send_chat_spoken(&text, sleep_companion_active, is_spoken)
+                    .await;
 
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
@@ -1039,7 +1050,7 @@ impl UsamiApp {
 
                                     view.push_history(ChatMessage {
                                         sender: Sender::Usami,
-                                        text: response.reply.clone(),
+                                        text: sanitize_speech_text(&response.reply),
                                         emotion: Some(emotion.clone()),
                                         tool_badge: format_tool_badge(response.agent_turn.as_ref()),
                                         time_str: Some(current_phone_time()),
@@ -1127,7 +1138,10 @@ impl UsamiApp {
                                     }
                                 }
                                 Err(err) => {
+                                    eprintln!("[Chat] erro ao responder: {err}");
                                     view.status_text = format!("ERRO: {}", err).into();
+                                    view.last_reply = format!("Erro ao falar com o servidor: {err}").into();
+                                    view.show_bubble = true;
                                     cx.notify();
                                 }
                             }
@@ -1138,9 +1152,6 @@ impl UsamiApp {
         })
         .detach();
     }
-
-
-
 
     pub(crate) fn apply_lol_command(
         &mut self,
@@ -1171,7 +1182,8 @@ impl UsamiApp {
                 self.lol_cs = cs;
 
                 let should_overlay = in_match || loading || self.lol_manual_overlay;
-                self.mic_gate.set_gamer_mode(in_match || loading || self.lol_manual_overlay);
+                self.mic_gate
+                    .set_gamer_mode(in_match || loading || self.lol_manual_overlay);
                 if should_overlay != was_active {
                     self.lol_overlay_active = should_overlay;
                     if should_overlay {
@@ -1219,7 +1231,9 @@ impl UsamiApp {
                 } else {
                     self.lol_manual_overlay = !self.lol_manual_overlay;
                     self.lol_overlay_active = self.lol_manual_overlay;
-                    self.mic_gate.set_gamer_mode(self.lol_manual_overlay || self.lol_in_match || self.lol_loading);
+                    self.mic_gate.set_gamer_mode(
+                        self.lol_manual_overlay || self.lol_in_match || self.lol_loading,
+                    );
                     self.lol_click_through = true;
                     if self.lol_overlay_active {
                         self.active_drawer = ActiveDrawer::None;
@@ -1288,13 +1302,15 @@ impl UsamiApp {
                 }
             };
 
-            if tokio::time::timeout(Duration::from_secs(12), playback).await.is_err() {
+            if tokio::time::timeout(Duration::from_secs(12), playback)
+                .await
+                .is_err()
+            {
                 vrm_ctrl.end_speech_stream();
                 vrm_ctrl.set_speaking(false, 0.0);
             }
         });
     }
-
 }
 
 impl Render for UsamiApp {
@@ -1363,7 +1379,61 @@ impl Render for UsamiApp {
     }
 }
 
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic sem mensagem".to_string()
+        };
+        let location = info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        storage::append_crash_log(&format!("PANIC at {location}: {payload}"));
+
+        let base_url = api::UsamiApiClient::from_env().base_url().to_string();
+        let token = api::UsamiApiClient::from_env().token().map(str::to_string);
+        let body = serde_json::json!({
+            "source": "usami-desktop",
+            "kind": "desktop_panic",
+            "level": "fatal",
+            "message": payload,
+            "location": location,
+            "metadata": { "version": env!("CARGO_PKG_VERSION") }
+        });
+
+        let handle = std::thread::spawn(move || {
+            let client = match reqwest::Client::builder()
+                .timeout(Duration::from_millis(1200))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            let _ = api::tokio_runtime().block_on(async move {
+                let mut req = client
+                    .post(format!("{base_url}/api/observability/client-log"))
+                    .header("x-usami-client", "usami-desktop")
+                    .json(&body);
+                if let Some(ref t) = token {
+                    req = req.header("x-usami-token", t);
+                }
+                let _ = req.send().await;
+            });
+        });
+        let _ = handle.join();
+
+        default_hook(info);
+    }));
+}
+
 fn main() {
+    install_panic_hook();
     println!("[Usami Desktop] Inicializando interface minimalista idêntica à print...");
     Application::new().run(|cx: &mut App| {
         // Fontes OFL locais (sem CDN em runtime). Fica antes de abrir a janela
@@ -1407,4 +1477,3 @@ fn main() {
         .unwrap();
     });
 }
-

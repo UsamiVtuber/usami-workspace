@@ -146,11 +146,14 @@ Credenciais necessárias no n8n após importar os JSONs:
 - **`Usami - Relatorio Observabilidade (agendado).json`** (`Schedule` diário às 23:50): consolida métricas das últimas 24h (chamadas API, latência média/p95, LLM por modelo, erros e execuções n8n), grava `/files/obsidian/usami/Inbox/Automations/observability-AAAA-MM-DD.md` e posta resumo em `#usami-observabilidade` (`DISCORD_OBS_SUMMARY_CHANNEL_ID`).
 
 ### Espaço B — Bot Discord da Usami (inspirado em `Rukafuu/LiraVtuber`)
-- **`Usami - Discord Chat Companion.json`** (`POST /webhook/usami-discord-chat`): responde menções `@Usami`, DMs e o canal `#usami-chat` via `POST http://10.42.0.1:8787/api/chat` (roteado pelo proxy systemd `usami-api-bridge` no host Nyarch para a API no Windows), com fallback amigável caso o PC Windows esteja offline.
+- **`Usami - Discord Chat Companion.json`** (`POST /webhook/usami-discord-chat`): responde menções `@Usami`, DMs e o canal `#usami-chat`. Suporta texto, leitura de arquivos anexados (`.txt`, `.py`, `.json`, etc.) e visão multimodal para imagens e vídeos via `POST http://10.42.0.1:8787/api/media/analyze` (ou `/api/chat` para conversas puramente textuais), com fallback amigável caso o PC Windows esteja offline.
 - **`Usami - Discord Engajamento e Utilidades.json`** (`POST /webhook/usami-discord-community` + `Schedule` 09:00 e 5 min): boas-vindas (`guildMemberAdd`), sistema AFK automático, aniversários (`/aniversario` + parabéns às 09:00), Notepad (`/nota`), sugestões com votação (`/sugestao`), sorteios (`/sorteio` + sorteio automático de vencedores), estatísticas (`/stats`) e resumo rápido de observabilidade (`/obs`).
 - **`Usami - Discord Moderacao e Estrutura.json`** (`POST /webhook/usami-discord-mod`): Auto-Mod (links de convite, menções em massa, golpes comuns + log em `#mod-logs`), Reaction Roles (`/reactionrole` + reações), Tickets de suporte privados (`/ticket`), Sticky Messages (`/sticky` + repostagem automática) e comandos customizados (`/cmd` + `!nome`).
 
-
-
-
+## Usami - Busca e Matching de Vagas (agendado)
+- **Arquivo:** `Usami - Busca e Matching de Vagas (agendado).json` (id `UBTFGRMidGiVdbpu`).
+- **Gatilho:** Schedule Trigger diário às **09:00** (`America/Sao_Paulo`).
+- **Nós:** Schedule → HTTP Request (`GET https://remoteok.com/api`) → Code (`Extrair Vagas`) → Code (`Calcular Score ATS`) → Code (`Filtrar Score >= 10`) → Data Table (`Filtrar Vagas Ineditas` via `rowNotExists` em `candidatura_id`) → Data Table (`Registrar na Tabela`, status `Nova`) → Wait (5s) → Code (`Preparar Mensagem Discord`) → HTTP Request (`Notificar Discord` via Webhook).
+- **Papel:** Varre vagas remotas públicas, calcula pontuação de afinidade ATS para o perfil de Engenharia de Software / IA / Backend, desduplica contra a Data Table local `controle_candidaturas` para reter apenas vagas inéditas, cadastra com status `Nova` e envia alerta formatado no Discord com link direto para candidatura manual.
+- **Segurança & Idempotência:** Não realiza submissões/candidaturas automáticas (apenas triagem e notificação informativa). Idempotência garantida pelo nó nativo `rowNotExists` que impede alertas repetidos ou re-cadastro de IDs já processados.
 

@@ -23,6 +23,8 @@ impl UsamiApp {
         let sp = t.space;
 
         let is_busy = self.is_busy;
+        let is_listening = self.is_listening;
+        let live_transcript = self.live_transcript.clone();
         let is_calling = self.is_calling;
         let is_muted = self.is_muted;
         let is_settings_view = self.phone_view_settings;
@@ -62,6 +64,12 @@ impl UsamiApp {
         };
         let hud_prev_slot = self.prev_portrait_image.clone();
         let turns = self.chat_history.clone();
+        let expanded_transcripts = self.expanded_voice_transcripts.clone();
+        let duplicate_last_user = turns
+            .last()
+            .is_some_and(|m| m.sender == Sender::User && m.text.trim() == live_transcript.trim());
+        let show_live_bubble =
+            is_listening && !is_busy && !live_transcript.is_empty() && !duplicate_last_user;
         let phone_scroll = self.phone_scroll.clone();
         let phone_settings_scroll = self.phone_settings_scroll.clone();
         let no_turns = turns.is_empty();
@@ -508,11 +516,27 @@ impl UsamiApp {
                                                 ),
                                         )
                                     })
-                                    .children(turns.clone().into_iter().map(|msg| {
+                                    .children(turns.clone().into_iter().enumerate().map(|(idx, msg)| {
                                         let is_user = msg.sender == Sender::User;
                                         let time = msg.time_str.as_deref().unwrap_or("agora");
 
                                         if is_user {
+                                            let is_voice_note = msg
+                                                .media
+                                                .as_ref()
+                                                .is_some_and(|m| m.mime_type.starts_with("audio/"));
+                                            let transcript_open = expanded_transcripts.contains(&idx);
+                                            let audio_b64 = msg
+                                                .media
+                                                .as_ref()
+                                                .filter(|_| is_voice_note)
+                                                .map(|m| m.data_base64.clone());
+                                            let audio_path = msg
+                                                .media
+                                                .as_ref()
+                                                .filter(|_| is_voice_note)
+                                                .and_then(|m| m.stored_path.clone());
+
                                             div()
                                                 .flex()
                                                 .flex_shrink_0()
@@ -534,40 +558,132 @@ impl UsamiApp {
                                                             blur_radius: px(3.0),
                                                             spread_radius: px(0.0),
                                                         }])
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(12.8))
-                                                                .line_height(px(18.0))
-                                                                .text_color(gpui::rgba(0xe9edefff))
-                                                                .child(msg.text),
-                                                        )
-                                                        .when_some(msg.media.as_ref(), |_parent, media| {
-                                                            if media.mime_type.starts_with("image/") {
-                                                                div()
-                                                                    .mt(px(6.0))
-                                                                    .w(px(160.0))
-                                                                    .h(px(110.0))
-                                                                    .rounded(px(8.0))
-                                                                    .overflow_hidden()
-                                                                    .bg(gpui::rgba(0x0b1419ff))
-                                                                    .border_1()
-                                                                    .border_color(gpui::rgba(0x2a3942ff))
-                                                                    .child(
-                                                                        img(media.preview.clone())
-                                                                            .size_full()
-                                                                            .object_fit(ObjectFit::Cover),
+                                                        .when(is_voice_note, |parent| {
+                                                            parent
+                                                                .child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap(px(8.0))
+                                                                        .child(
+                                                                            div()
+                                                                                .id(("voice-play", idx))
+                                                                                .w(px(28.0))
+                                                                                .h(px(28.0))
+                                                                                .rounded_full()
+                                                                                .bg(gpui::rgba(0xffffff22))
+                                                                                .hover(|s| s.bg(gpui::rgba(0xffffff38)))
+                                                                                .cursor_pointer()
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .justify_center()
+                                                                                .text_size(px(12.0))
+                                                                                .text_color(gpui::rgba(0xffffffff))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                    if let Some(player) = this.audio_player.as_ref() {
+                                                                                        let bytes = audio_b64
+                                                                                            .as_deref()
+                                                                                            .and_then(crate::api::base64_decode)
+                                                                                            .filter(|b| !b.is_empty())
+                                                                                            .or_else(|| {
+                                                                                                audio_path.as_deref().and_then(|rel| {
+                                                                                                    std::fs::read(crate::storage::data_dir().join(rel)).ok()
+                                                                                                })
+                                                                                            });
+                                                                                        if let Some(wav) = bytes {
+                                                                                            let _ = player.play_wav(wav);
+                                                                                        }
+                                                                                    }
+                                                                                    this.poke(cx);
+                                                                                }))
+                                                                                .child("▶"),
+                                                                        )
+                                                                        .child(
+                                                                            div()
+                                                                                .flex_1()
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .gap(px(2.5))
+                                                                                .children([6.0, 12.0, 9.0, 15.0, 8.0, 14.0, 10.0, 16.0, 11.0, 7.0, 13.0, 8.0].into_iter().map(|h| {
+                                                                                    div()
+                                                                                        .w(px(2.5))
+                                                                                        .h(px(h))
+                                                                                        .rounded_full()
+                                                                                        .bg(gpui::rgba(0xffffff99))
+                                                                                })),
+                                                                        )
+                                                                        .child(
+                                                                            div()
+                                                                                .id(("voice-transcript-toggle", idx))
+                                                                                .px(px(6.0))
+                                                                                .py(px(2.5))
+                                                                                .rounded_full()
+                                                                                .bg(gpui::rgba(0x00000033))
+                                                                                .hover(|s| s.bg(gpui::rgba(0x00000055)))
+                                                                                .cursor_pointer()
+                                                                                .text_size(px(9.5))
+                                                                                .text_color(gpui::rgba(0xf3f4f6dd))
+                                                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                                                    if !this.expanded_voice_transcripts.remove(&idx) {
+                                                                                        this.expanded_voice_transcripts.insert(idx);
+                                                                                    }
+                                                                                    this.poke(cx);
+                                                                                    cx.notify();
+                                                                                }))
+                                                                                .child(if transcript_open { "Ocultar" } else { "Transcrição" }),
+                                                                        ),
+                                                                )
+                                                                .when(transcript_open, |parent| {
+                                                                    parent.child(
+                                                                        div()
+                                                                            .mt(px(5.0))
+                                                                            .pt(px(4.0))
+                                                                            .border_t_1()
+                                                                            .border_color(gpui::rgba(0xffffff22))
+                                                                            .text_size(px(12.0))
+                                                                            .line_height(px(17.0))
+                                                                            .text_color(gpui::rgba(0xe9edefdd))
+                                                                            .child(msg.text.clone()),
                                                                     )
-                                                            } else {
-                                                                div()
-                                                                    .mt(px(6.0))
-                                                                    .flex()
-                                                                    .items_center()
-                                                                    .gap(px(8.0))
-                                                                    .text_size(px(11.0))
-                                                                    .text_color(gpui::rgba(0xc8cad4ff))
-                                                                    .child("📄")
-                                                                    .child(media.filename.clone())
-                                                            }
+                                                                })
+                                                        })
+                                                        .when(!is_voice_note, |parent| {
+                                                            parent
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(12.8))
+                                                                        .line_height(px(18.0))
+                                                                        .text_color(gpui::rgba(0xe9edefff))
+                                                                        .child(msg.text.clone()),
+                                                                )
+                                                                .when_some(msg.media.as_ref(), |_parent, media| {
+                                                                    if media.mime_type.starts_with("image/") {
+                                                                        div()
+                                                                            .mt(px(6.0))
+                                                                            .w(px(160.0))
+                                                                            .h(px(110.0))
+                                                                            .rounded(px(8.0))
+                                                                            .overflow_hidden()
+                                                                            .bg(gpui::rgba(0x0b1419ff))
+                                                                            .border_1()
+                                                                            .border_color(gpui::rgba(0x2a3942ff))
+                                                                            .child(
+                                                                                img(media.preview.clone())
+                                                                                    .size_full()
+                                                                                    .object_fit(ObjectFit::Cover),
+                                                                            )
+                                                                    } else {
+                                                                        div()
+                                                                            .mt(px(6.0))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap(px(8.0))
+                                                                            .text_size(px(11.0))
+                                                                            .text_color(gpui::rgba(0xc8cad4ff))
+                                                                            .child("📄")
+                                                                            .child(media.filename.clone())
+                                                                    }
+                                                                })
                                                         })
                                                         .child(
                                                             div()
@@ -651,6 +767,35 @@ impl UsamiApp {
                                                 )
                                         }
                                     }))
+                                    .when(show_live_bubble, |col| {
+                                        col.child(
+                                            div()
+                                                .flex()
+                                                .flex_shrink_0()
+                                                .w_full()
+                                                .justify_end()
+                                                .child(
+                                                    div()
+                                                        .max_w(px(238.0))
+                                                        .px(px(10.0))
+                                                        .py(px(6.0))
+                                                        .rounded_tl(px(12.0))
+                                                        .rounded_bl(px(12.0))
+                                                        .rounded_br(px(12.0))
+                                                        .rounded_tr(px(2.0))
+                                                        .bg(gpui::rgba(0x4b1d2acc))
+                                                        .border_1()
+                                                        .border_color(gpui::rgba(0xf472b666))
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(12.5))
+                                                                .line_height(px(17.0))
+                                                                .text_color(gpui::rgba(0xf3f4f6ee))
+                                                                .child(format!("🎙 {live_transcript}")),
+                                                        ),
+                                                ),
+                                        )
+                                    })
                                     .when(is_busy, |col| {
                                         col.child(
                                             div()

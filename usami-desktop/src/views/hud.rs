@@ -1,10 +1,10 @@
 //! Header superior do desktop e legenda ao vivo de STT (Camadas 4 e 4b).
 
+use crate::UsamiApp;
 use crate::agent_center_model::{pending_confirmations_count, pending_suggestions_count};
 use crate::model::ActiveDrawer;
 use crate::theme;
 use crate::ui::widgets::icon;
-use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -18,13 +18,11 @@ impl UsamiApp {
         let active_drawer = self.active_drawer;
         let chat_open = active_drawer == ActiveDrawer::Chat;
         let is_idle = self.is_ui_idle;
-        let is_listening = self.is_listening;
-        let live_transcript = self.live_transcript.clone();
-        let show_live_caption = is_listening && !live_transcript.is_empty();
 
         let bond_level = self.bond_level;
 
         div()
+            .w_full()
             // ── LAYER 4: HEADER SUPERIOR (SOME NO IDLE) ──
             .when(!is_idle, |parent| {
                 parent.child(
@@ -79,20 +77,23 @@ impl UsamiApp {
                                                 .text_size(px(11.5))
                                                 .font_family(theme::FONT_DISPLAY)
                                                 .font_weight(FontWeight::BOLD)
-                                                .text_color(if active_drawer == ActiveDrawer::Bond {
-                                                    c.primary
-                                                } else {
-                                                    c.pearl
-                                                })
+                                                .text_color(
+                                                    if active_drawer == ActiveDrawer::Bond {
+                                                        c.primary
+                                                    } else {
+                                                        c.pearl
+                                                    },
+                                                )
                                                 .child(format!("Nv.{bond_level}")),
                                         ),
                                 )
                                 .child({
-                                    let agent_attention_count = pending_confirmations_count(
-                                        &self.agent_skills,
-                                        &self.agent_proposals,
-                                        &self.agent_plans,
-                                    ) + pending_suggestions_count(&self.agent_suggestions);
+                                    let agent_attention_count =
+                                        pending_confirmations_count(
+                                            &self.agent_skills,
+                                            &self.agent_proposals,
+                                            &self.agent_plans,
+                                        ) + pending_suggestions_count(&self.agent_suggestions);
                                     div()
                                         .id("top-skills-btn")
                                         .relative()
@@ -159,11 +160,19 @@ impl UsamiApp {
                                         .justify_center()
                                         .size(px(38.0))
                                         .rounded_full()
-                                        .bg(if chat_open { c.icon_bg_active } else { c.icon_bg })
+                                        .bg(if chat_open {
+                                            c.icon_bg_active
+                                        } else {
+                                            c.icon_bg
+                                        })
                                         .border_1()
                                         .border_color(if chat_open { c.primary } else { c.line })
-                                        .when(chat_open, |el| el.shadow(theme::glow(c.primary, 14.0)))
-                                        .hover(|style| style.bg(c.icon_bg_hover).border_color(c.line_strong))
+                                        .when(chat_open, |el| {
+                                            el.shadow(theme::glow(c.primary, 14.0))
+                                        })
+                                        .hover(|style| {
+                                            style.bg(c.icon_bg_hover).border_color(c.line_strong)
+                                        })
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.toggle_drawer(ActiveDrawer::Chat, cx);
                                         }))
@@ -204,55 +213,12 @@ impl UsamiApp {
                         )
                         // Top Right: Créditos e modelo ativo
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(sp.s2))
-                                .child(
-                                    div()
-                                        .text_size(px(ty.xs))
-                                        .text_color(c.muted)
-                                        .child("白ー (shiro) — Model by Sweet_nya555"),
-                                ),
-                        ),
-                )
-            })
-            // ── LAYER 4b: PRÉVIA AO VIVO DO STT (o que já foi entendido) ──
-            .when(show_live_caption, |parent| {
-                parent.child(
-                    div()
-                        .absolute()
-                        .top(px(94.0))
-                        .left_0()
-                        .right_0()
-                        .flex()
-                        .justify_center()
-                        .child(
-                            div()
-                                .max_w(px(520.0))
-                                .px(px(sp.s4))
-                                .py(px(sp.s2))
-                                .rounded_full()
-                                .bg(c.surface_soft)
-                                .border_1()
-                                .border_color(c.line_strong)
-                                .flex()
-                                .items_center()
-                                .gap(px(sp.s2))
-                                .child(
-                                    div()
-                                        .size(px(8.0))
-                                        .rounded_full()
-                                        .bg(c.accent),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(ty.sm))
-                                        .text_color(c.pearl)
-                                        .line_clamp(2)
-                                        .text_ellipsis()
-                                        .child(live_transcript),
-                                ),
+                            div().flex().items_center().gap(px(sp.s2)).child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.muted)
+                                    .child(self.character_credit.clone()),
+                            ),
                         ),
                 )
             })

@@ -16,12 +16,12 @@ const STREAM_INIT_TIMEOUT: Duration = Duration::from_secs(2);
 const FRAME_MS: usize = 20;
 const PREROLL_MS: usize = 400;
 const START_FRAMES: usize = 6; // 120 ms de voz abrem a fala
-const SILENCE_FRAMES: usize = 45; // 900 ms de silêncio encerram o turno
+const SILENCE_FRAMES: usize = 30; // 600 ms de silêncio encerram o turno
 const MIN_UTTERANCE_MS: usize = 350;
-// Prévia ao vivo: a cada ~1,2 s de fala contínua uma cópia do que já foi dito
-// vai para o STT, para a legenda do topo aparecer enquanto a pessoa fala.
-const PARTIAL_MS: usize = 1200;
-const PARTIAL_MIN_MS: usize = 600;
+// Prévia ao vivo: a cada ~900 ms de fala contínua uma cópia do que já foi dito
+// vai para o STT quente sem saturar o semáforo antes do turno final.
+const PARTIAL_MS: usize = 900;
+const PARTIAL_MIN_MS: usize = 350;
 
 /// Portão único da escuta: a UI suspende enquanto pensa/fala e o usuário
 /// suspende ao mutar. A thread de captura descarta tudo enquanto fechado.

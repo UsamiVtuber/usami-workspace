@@ -181,6 +181,18 @@ fn session_path() -> PathBuf {
     data_dir().join("session.json")
 }
 
+/// Registra falhas/panics locais em `%APPDATA%\Usami\crash.log` para diagnóstico
+/// offline mesmo quando o backend não está acessível.
+pub fn append_crash_log(entry: &str) {
+    let dir = data_dir();
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("crash.log");
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "[{}] {}", now_ms(), entry);
+    }
+}
+
 fn write_json<T: Serialize>(path: &Path, value: &T) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);

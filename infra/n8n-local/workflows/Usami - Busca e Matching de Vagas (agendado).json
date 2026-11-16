@@ -1,0 +1,432 @@
+{
+  "updatedAt": "2026-11-16T18:06:42.628Z",
+  "createdAt": "2026-11-16T14:53:46.358Z",
+  "id": "UBTFGRMidGiVdbpu",
+  "name": "Busca e Matching de Vagas",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "d36abf83-9e93-4109-ba16-f37b81bba2bb",
+      "name": "Disparo Periodico",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        48,
+        128
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "28e8abd3-3f91-4045-97e0-a5e88efcb2c1",
+      "name": "Buscar Vagas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        272,
+        128
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://remoteok.com/api",
+        "authentication": "none"
+      }
+    },
+    {
+      "id": "91d71fea-1730-4bdc-a030-2a3adc46709e",
+      "name": "Extrair Vagas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        496,
+        128
+      ],
+      "parameters": {
+        "jsCode": "\nreturn $input.all().flatMap((item) => {\n  const json = item.json;\n  if (Array.isArray(json.items)) {\n    return json.items;\n  }\n  return [item];\n});\n      "
+      }
+    },
+    {
+      "id": "f92f0d7f-972c-47dc-b5bc-dd77e6da7301",
+      "name": "Calcular Score ATS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        720,
+        128
+      ],
+      "parameters": {
+        "jsCode": "\nconst vagas = $input.all();\nconst keywordsPositivos = [\n  'ai engineer', 'backend', 'software engineer', 'full stack', 'full-stack', 'devops', 'data engineer',\n  'python', 'fastapi', 'node.js', 'fastify', 'typescript', 'go', 'java', 'rest', 'api', 'jwt',\n  'llm', 'mcp', 'embeddings', 'rag', 'multiagent', 'docker', 'kubernetes',\n  'postgresql', 'mysql', 'sql', 'redis', 'supabase', 'github actions', 'ci/cd', 'git',\n  'back-end', 'backend', 'microsserviços', 'microservices', 'arquitetura', 'cloud', 'aws',\n  'linux', 'remoto', 'remote', 'home office',\n  'pleno', 'senior', 'sênior', 'sr.', 'lead'\n];\nconst keywordsNegativos = ['java', 'presencial', 'on-site', 'onsite'];\n\nreturn vagas.map((item) => {\n  const json = item.json;\n  const texto = [\n    json.position || json.title || '',\n    json.description || '',\n    json.location || ''\n  ].join(' ').toLowerCase();\n\n  let score = 0;\n\n  if (/ai engineer|backend|software engineer|full.?stack|devops|data engineer/.test(json.position?.toLowerCase() || json.title?.toLowerCase() || '')) {\n    score += 30;\n  }\n\n  const stackMatches = keywordsPositivos.filter(k => texto.includes(k)).length;\n  score += Math.min(stackMatches * 4, 40);\n\n  if (/pleno|senior|sênior/.test(texto)) {\n    score += 15;\n  }\n\n  if (/remoto|remote|home office/.test(texto)) {\n    score += 15;\n  }\n\n  if (/java\b/.test(texto) && !/javascript|typescript/.test(texto)) {\n    score -= 50;\n  }\n  if (/presencial|on.?site/.test(texto)) {\n    score -= 30;\n  }\n\n  score = Math.max(0, Math.min(100, score));\n\n  return {\n    ...json,\n    score_ats: score,\n    candidatura_id: json.id || json.apply_url || json.url || Date.now().toString(),\n  };\n});\n      "
+      }
+    },
+    {
+      "id": "d3de9de2-f13d-4cb7-a538-8b994bd39a63",
+      "name": "Filtrar Score >= 10",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        944,
+        128
+      ],
+      "parameters": {
+        "jsCode": "\nreturn $input.all().filter((item) => {\n  const score = item.json.score_ats || 0;\n  return score >= 10;\n});\n      "
+      }
+    },
+    {
+      "id": "fbfd0ac8-7b40-4cdf-80f1-be6584eb43b7",
+      "name": "Filtrar Vagas Ineditas",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1168,
+        128
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "controle_candidaturas"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "candidatura_id",
+              "keyValue": "={{ $json.candidatura_id }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "363035c8-9792-4354-bd59-2c2399c41db5",
+      "name": "Registrar na Tabela",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1392,
+        128
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "controle_candidaturas"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "candidatura_id": "={{ $json.candidatura_id }}",
+            "data_candidatura": "={{ $now.toISO() }}",
+            "empresa": "={{ $json.company }}",
+            "cargo": "={{ $json.position || $json.title }}",
+            "score_ats": "={{ $json.score_ats }}",
+            "status": "Nova",
+            "link_vaga": "={{ $json.apply_url || $json.url }}",
+            "versao_cv_utilizada": ""
+          },
+          "schema": [
+            {
+              "id": "candidatura_id",
+              "displayName": "candidatura_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "data_candidatura",
+              "displayName": "data_candidatura",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "empresa",
+              "displayName": "empresa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cargo",
+              "displayName": "cargo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "score_ats",
+              "displayName": "score_ats",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "link_vaga",
+              "displayName": "link_vaga",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "versao_cv_utilizada",
+              "displayName": "versao_cv_utilizada",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      }
+    },
+    {
+      "id": "b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e",
+      "name": "Aguardar",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1616,
+        128
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "webhookId": "7700d24a-265e-4610-8c36-4d52a781440b"
+    },
+    {
+      "id": "c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f",
+      "name": "Preparar Mensagem Discord",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1840,
+        128
+      ],
+      "parameters": {
+        "jsCode": "\nconst itens = $input.all();\nif (!itens || itens.length === 0) {\n  return [];\n}\n\nconst topo = itens\n  .sort((a, b) => (b.json.score_ats || 0) - (a.json.score_ats || 0));\n\nlet blocos = [];\nlet totalCaracteres = 0;\nlet exibidas = 0;\n\nfor (const i of topo) {\n  const j = i.json;\n  const empresa = j.empresa || j.company || 'Empresa';\n  const cargo = j.cargo || j.position || j.title || 'Vaga';\n  const score = j.score_ats ?? 0;\n  const link = j.link_vaga || j.apply_url || j.url || '';\n  const linkFormatado = link ? `\\n   🔗 <${link}>` : '';\n  const itemStr = `🎯 **${empresa}** — ${cargo} (Score ATS: **${score}**)${linkFormatado}`;\n\n  if (blocos.length >= 10 || (totalCaracteres + itemStr.length) > 1700) {\n    break;\n  }\n  blocos.push(itemStr);\n  totalCaracteres += itemStr.length;\n  exibidas++;\n}\n\nconst total = itens.length;\nconst extra = total > exibidas ? `\\n\\n_...e mais ${total - exibidas} nova(s) vaga(s) salvas no controle!_` : '';\nconst cabecalho = `📢 **Novas Vagas Encontradas (${total})**\\n\\n`;\nconst conteudo = cabecalho + blocos.join('\\n\\n') + extra;\n\nreturn [{ json: { content: conteudo } }];\n"
+      }
+    },
+    {
+      "id": "49940a89-088e-42dd-9999-6ae6bc240998",
+      "name": "Notificar Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2064,
+        128
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/1571902797819936960/6Gzbk_ZBQC9pBmpqZ043DeJQRAEuSyOHPMXv16lieB-p4WaDla7UgN8WLvMAp8yjuvMU",
+        "authentication": "none",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": {
+          "content": "={{ $json.content }}"
+        },
+        "executeOnce": true,
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Disparo Periodico": {
+      "main": [
+        [
+          {
+            "node": "Buscar Vagas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Vagas": {
+      "main": [
+        [
+          {
+            "node": "Extrair Vagas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Vagas": {
+      "main": [
+        [
+          {
+            "node": "Calcular Score ATS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular Score ATS": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Score >= 10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Score >= 10": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Vagas Ineditas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Vagas Ineditas": {
+      "main": [
+        [
+          {
+            "node": "Registrar na Tabela",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar na Tabela": {
+      "main": [
+        [
+          {
+            "node": "Aguardar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar": {
+      "main": [
+        [
+          {
+            "node": "Preparar Mensagem Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Mensagem Discord": {
+      "main": [
+        [
+          {
+            "node": "Notificar Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "dynamic",
+    "errorWorkflow": "YQfB3nQGjcQO3iO3",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "ac9cbd8d-75ee-4c42-a9b9-6886c200cda9",
+  "activeVersionId": null,
+  "versionCounter": 27,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-11-16T14:53:46.359Z",
+      "createdAt": "2026-11-16T14:53:46.359Z",
+      "role": "workflow:owner",
+      "workflowId": "UBTFGRMidGiVdbpu",
+      "projectId": "bU03fbzx13pIqr6r",
+      "project": {
+        "updatedAt": "2026-10-24T22:42:53.444Z",
+        "createdAt": "2026-10-24T22:31:45.277Z",
+        "id": "bU03fbzx13pIqr6r",
+        "name": "Lucas Frischeisen <devreskyume@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "860e97f9-e2b0-490f-8758-f18e56ffd952"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

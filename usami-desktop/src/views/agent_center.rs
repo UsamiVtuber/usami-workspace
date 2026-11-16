@@ -16,6 +16,18 @@ use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::sync::Arc;
+use tokio::sync::oneshot;
+
+/// Executa futuros `reqwest`/Tokio fora do executor do GPUI (evita panic "no reactor running").
+async fn run_on_tokio<T: Send + 'static>(
+    fut: impl std::future::Future<Output = T> + Send + 'static,
+) -> T {
+    let (tx, rx) = oneshot::channel();
+    api::tokio_runtime().spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    rx.await.expect("Tokio task dropped without sending result")
+}
 
 impl UsamiApp {
     /// Consulta estado completo da Central do Agente (`/api/agent/*`) sem bloquear a UI.
@@ -44,7 +56,7 @@ impl UsamiApp {
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let res = api.get_agent_skills().await;
+                    let res = run_on_tokio(async move { api.get_agent_skills().await }).await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -73,7 +85,7 @@ impl UsamiApp {
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let res = api.get_agent_executions(50).await;
+                    let res = run_on_tokio(async move { api.get_agent_executions(50).await }).await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -102,10 +114,14 @@ impl UsamiApp {
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let tools_res = api.get_agent_self_tools().await;
-                    let perms_res = api.get_agent_permissions().await;
-                    let props_res = api.get_skill_proposals().await;
-                    let plans_res = api.get_agent_plans(20).await;
+                    let (tools_res, perms_res, props_res, plans_res) = run_on_tokio(async move {
+                        let tools_res = api.get_agent_self_tools().await;
+                        let perms_res = api.get_agent_permissions().await;
+                        let props_res = api.get_skill_proposals().await;
+                        let plans_res = api.get_agent_plans(20).await;
+                        (tools_res, perms_res, props_res, plans_res)
+                    })
+                    .await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -142,7 +158,7 @@ impl UsamiApp {
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let res = api.get_agent_suggestions(false, 50).await;
+                    let res = run_on_tokio(async move { api.get_agent_suggestions(false, 50).await }).await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -196,9 +212,12 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api
-                    .set_tool_permission(&tool, action, reason.as_deref())
-                    .await;
+                let tool_req = tool.clone();
+                let res = run_on_tokio(async move {
+                    api.set_tool_permission(&tool_req, action, reason.as_deref())
+                        .await
+                })
+                .await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -251,13 +270,17 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let step = match api.create_skill_confirmation(&skill_id).await {
-                    Ok(conf) => {
-                        api.install_skill_with_confirmation(&skill_id, &conf.confirmation.token)
-                            .await
+                let skill_req = skill_id.clone();
+                let step = run_on_tokio(async move {
+                    match api.create_skill_confirmation(&skill_req).await {
+                        Ok(conf) => {
+                            api.install_skill_with_confirmation(&skill_req, &conf.confirmation.token)
+                                .await
+                        }
+                        Err(err) => Err(err),
                     }
-                    Err(err) => Err(err),
-                };
+                })
+                .await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -318,7 +341,8 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.create_tool_confirmation(&tool_name).await;
+                let tool_req = tool_name.clone();
+                let res = run_on_tokio(async move { api.create_tool_confirmation(&tool_req).await }).await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -365,7 +389,7 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_agent_suggestions(true, 50).await;
+                let res = run_on_tokio(async move { api.get_agent_suggestions(true, 50).await }).await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -421,12 +445,15 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = if accept {
-                    api.accept_agent_suggestion(&id).await
-                } else {
-                    api.dismiss_agent_suggestion(&id, Some("Descartada pela interface"))
-                        .await
-                };
+                let res = run_on_tokio(async move {
+                    if accept {
+                        api.accept_agent_suggestion(&id).await
+                    } else {
+                        api.dismiss_agent_suggestion(&id, Some("Descartada pela interface"))
+                            .await
+                    }
+                })
+                .await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -482,7 +509,7 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.get_daily_briefing().await;
+                let res = run_on_tokio(async move { api.get_daily_briefing().await }).await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -526,7 +553,8 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let res = api.toggle_skill_enabled(&skill_id, enable).await;
+                let skill_req = skill_id.clone();
+                let res = run_on_tokio(async move { api.toggle_skill_enabled(&skill_req, enable).await }).await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {

@@ -130,6 +130,27 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 - **Atenção:** o nó final envia o mesmo corpo inválido do briefing (`{ text, gesture }` sem `type`), então a API responde 400 e o aviso não entra na fila.
 - **Segurança:** Somente leitura, token protegido e escrita exclusiva em `Inbox/Automations/`.
 
+## Observabilidade e Bot Discord da Usami (modulares)
+
+Os fluxos são divididos por espaço/domínio e utilizam o PostgreSQL de aplicação (`n8n-usami-postgres`, banco `usami`, tabelas em `infra/n8n-local/nyarch/init-db.sql`) e o micro-bridge `n8n-discord-bridge` (`infra/n8n-local/nyarch/discord-bridge/`).
+
+Credenciais necessárias no n8n após importar os JSONs:
+- **`Usami Postgres`**: Postgres (`host: postgres`, `database: usami`, `user: usami`, senha `USAMI_POSTGRES_PASSWORD`).
+- **`Discord Bot Token`**: HTTP Header Auth (`Name: Authorization`, `Value: Bot <DISCORD_BOT_TOKEN>`).
+- **`n8n API Key`**: HTTP Header Auth (`Name: X-N8N-API-KEY`, `Value: <chave gerada em Settings -> n8n API>`).
+- **`Usami Token`**: já existente (`x-usami-token`).
+
+### Espaço A — Observabilidade
+- **`Usami - Observabilidade Ingest.json`** (`POST /webhook/usami-observability`): recebe em *fire-and-forget* chamadas HTTP `/api/*`, chamadas LLM/tools (`usami/src/telemetry.js` + `usami/src/n8n-observability.js`) e erros do `discord-bridge`, sanitiza tokens/chaves sem registrar texto privado de chat, grava em `obs_api_logs`/`obs_error_logs` e envia alerta imediato para `#usami-erros` (`DISCORD_OBS_ERRORS_CHANNEL_ID`).
+- **`Usami - Monitor de Erros e Execucoes n8n.json`** (`Error Trigger` + `Schedule` 15 min): captura falhas de qualquer workflow (defina este workflow como *Error Workflow* nas configurações dos demais) e coleta periodicamente `/api/v1/executions`, gravando em `obs_error_logs` e `obs_n8n_executions` com alerta em `#usami-erros`.
+- **`Usami - Relatorio Observabilidade (agendado).json`** (`Schedule` diário às 23:50): consolida métricas das últimas 24h (chamadas API, latência média/p95, LLM por modelo, erros e execuções n8n), grava `/files/obsidian/usami/Inbox/Automations/observability-AAAA-MM-DD.md` e posta resumo em `#usami-observabilidade` (`DISCORD_OBS_SUMMARY_CHANNEL_ID`).
+
+### Espaço B — Bot Discord da Usami (inspirado em `Rukafuu/LiraVtuber`)
+- **`Usami - Discord Chat Companion.json`** (`POST /webhook/usami-discord-chat`): responde menções `@Usami`, DMs e o canal `#usami-chat` via `POST http://10.42.0.1:8787/api/chat` (roteado pelo proxy systemd `usami-api-bridge` no host Nyarch para a API no Windows), com fallback amigável caso o PC Windows esteja offline.
+- **`Usami - Discord Engajamento e Utilidades.json`** (`POST /webhook/usami-discord-community` + `Schedule` 09:00 e 5 min): boas-vindas (`guildMemberAdd`), sistema AFK automático, aniversários (`/aniversario` + parabéns às 09:00), Notepad (`/nota`), sugestões com votação (`/sugestao`), sorteios (`/sorteio` + sorteio automático de vencedores), estatísticas (`/stats`) e resumo rápido de observabilidade (`/obs`).
+- **`Usami - Discord Moderacao e Estrutura.json`** (`POST /webhook/usami-discord-mod`): Auto-Mod (links de convite, menções em massa, golpes comuns + log em `#mod-logs`), Reaction Roles (`/reactionrole` + reações), Tickets de suporte privados (`/ticket`), Sticky Messages (`/sticky` + repostagem automática) e comandos customizados (`/cmd` + `!nome`).
+
+
 
 
 

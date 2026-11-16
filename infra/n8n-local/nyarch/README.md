@@ -15,7 +15,7 @@ O acesso é pelo contexto de Docker sobre SSH (a chave está no `~/.ssh/config` 
 
 ```powershell
 docker context use nyarch
-docker ps                                  # espera n8n-usami-inbox, n8n-searxng
+docker ps                                  # espera n8n-usami-inbox, n8n-searxng, n8n-usami-postgres, n8n-discord-bridge
 ssh nyarch-docker "cd ~/n8n && docker compose up -d"
 ```
 
@@ -38,10 +38,12 @@ Editor: http://10.42.0.1:5678
    esse caminho.
 3. **`~/n8n/.env`** — veja `.env.example`. Os segredos nunca entram neste repositório.
 4. **API da Usami no Windows** — os workflows agendados chamam a API pela rede do link
-   (`http://10.42.0.91:8787/...`, com credencial `Usami Token`). O compose não define
-   `extra_hosts` nem `network_mode: host`, então `127.0.0.1`/`host.docker.internal`
-   apontam para o próprio container. Se a API estiver parada, os nós HTTP falham conforme
-   o `onError` de cada workflow.
+   (`http://10.42.0.91:8787/...`, com credencial `Usami Token`), e o Chat Companion usa
+   `http://10.42.0.1:8787/api/chat`. Para garantir conectividade direta sem problemas de
+   roteamento entre sub-redes Docker e Windows, o serviço systemd de usuário
+   `usami-api-bridge.service` roda no Nyarch escutando em `10.42.0.1:8787` e repassando
+   transparentemente para `10.42.0.91:8787` pela interface física `enp2s0`.
+   Se a API estiver parada, os nós HTTP falham conforme o `onError` de cada workflow.
 
 ## Travas conhecidas
 
@@ -81,3 +83,9 @@ públicos, então gera tráfego de saída do notebook.
 Escuta esperada em `ss -tlnp`: `10.42.0.1:5678`, `127.0.0.1:5678`, `127.0.0.1:8080`. Nada
 além da rede do cabo cruzado (`10.42.0.0/24`). Antes de publicar webhooks externamente,
 troque `WEBHOOK_URL` para HTTPS por túnel seguro; não abra porta do roteador.
+
+## PostgreSQL de aplicação e Discord Gateway Bridge
+
+- **`n8n-usami-postgres`** (`postgres:16-alpine`): banco exclusivo da aplicação (tabelas de observabilidade `obs_*` e estado do bot Discord `discord_*` inicializadas por `init-db.sql`). O serviço `n8n` **não** usa `DB_TYPE=postgresdb` e permanece em `/home/node/.n8n/database.sqlite` para preservar credenciais e workflows existentes.
+- Antes do primeiro `docker compose up -d`, garanta a pasta `/dados/n8n/postgres` no Nyarch (`mkdir -p /dados/n8n/postgres`) e defina `USAMI_POSTGRES_PASSWORD` em `~/n8n/.env`.
+- **`n8n-discord-bridge`** (`./discord-bridge`): conecta ao Discord Gateway via WebSocket (outbound) e repassa mensagens, interações Slash Command, reações e entradas de membros para os webhooks internos do n8n (`http://n8n:5678/webhook/...`), sem expor portas.

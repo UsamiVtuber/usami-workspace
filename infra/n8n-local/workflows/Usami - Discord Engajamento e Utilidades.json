@@ -1,0 +1,592 @@
+{
+  "name": "Usami - Discord Engajamento e Utilidades",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-discord-community",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "dc-comm-0001-4000-8000-000000000001",
+      "name": "Receber Evento Engajamento",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-discord-community-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst event = String(body.event || '');\nconst channels = body.channelsConfig || {};\n\nconst b64 = obj => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\n// 1. Boas-vindas (Welcome)\nif (event === 'discord.member_join') {\n  const guildId = String(body.guildId || '');\n  const user = body.user || {};\n  const payload = { guildId, userId: String(user.id || ''), username: String(user.globalName || user.username || 'novo membro') };\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n    up AS (\n      INSERT INTO discord_server_stats (guild_id, members_joined, updated_at)\n      SELECT p.j->>'guildId', 1, NOW() FROM p\n      ON CONFLICT (guild_id) DO UPDATE SET\n        members_joined = discord_server_stats.members_joined + 1,\n        updated_at = NOW()\n      RETURNING members_joined\n    )\n    SELECT jsonb_build_object('action', 'member_join', 'members_joined', (SELECT members_joined FROM up)) AS result;\n  `;\n  return [{ json: { mode: 'event', event, body, channels, sql, payloadB64: b64(payload) } }];\n}\n\n// 2. Atividade de mensagem (stats + AFK check)\nif (event === 'discord.message_activity') {\n  const guildId = String(body.guildId || '');\n  const author = body.author || {};\n  const mentionedUserIds = Array.isArray(body.mentionedUserIds) ? body.mentionedUserIds.map(String) : [];\n  const payload = {\n    guildId,\n    authorId: String(author.id || ''),\n    authorName: String(author.username || 'usuário'),\n    mentionedUserIds\n  };\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n    st AS (\n      INSERT INTO discord_server_stats (guild_id, messages_count, updated_at)\n      SELECT p.j->>'guildId', 1, NOW() FROM p\n      ON CONFLICT (guild_id) DO UPDATE SET\n        messages_count = discord_server_stats.messages_count + 1,\n        updated_at = NOW()\n    ),\n    cleared AS (\n      DELETE FROM discord_afk\n      WHERE user_id = (SELECT p.j->>'authorId' FROM p)\n      RETURNING user_id, username, reason, since_at\n    ),\n    mentioned AS (\n      SELECT user_id, username, reason, since_at\n      FROM discord_afk\n      WHERE user_id = ANY(\n        SELECT jsonb_array_elements_text((SELECT COALESCE(p.j->'mentionedUserIds', '[]'::jsonb) FROM p))\n      )\n    )\n    SELECT jsonb_build_object(\n      'action', 'message_activity',\n      'clearedAfk', (SELECT row_to_json(cleared) FROM cleared LIMIT 1),\n      'mentionedAfk', COALESCE((SELECT jsonb_agg(row_to_json(mentioned)) FROM mentioned), '[]'::jsonb)\n    ) AS result;\n  `;\n  return [{ json: { mode: 'event', event, body, channels, sql, payloadB64: b64(payload) } }];\n}\n\n// 3. Slash commands de comunidade\nif (event === 'discord.slash_command') {\n  const cmd = String(body.commandName || '');\n  const opts = body.options || {};\n  const user = body.user || {};\n  const guildId = String(body.guildId || 'dm');\n  const channelId = String(body.channelId || '');\n  const userId = String(user.id || '');\n  const username = String(user.globalName || user.username || 'usuário');\n\n  if (cmd === 'afk') {\n    const reason = String(opts.motivo || 'Ausente no momento').slice(0, 200);\n    const payload = { userId, guildId, username, reason };\n    const sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      st AS (\n        INSERT INTO discord_server_stats (guild_id, commands_count, updated_at)\n        SELECT p.j->>'guildId', 1, NOW() FROM p\n        ON CONFLICT (guild_id) DO UPDATE SET commands_count = discord_server_stats.commands_count + 1, updated_at = NOW()\n      ),\n      up AS (\n        INSERT INTO discord_afk (user_id, guild_id, username, reason, since_at)\n        SELECT p.j->>'userId', p.j->>'guildId', p.j->>'username', p.j->>'reason', NOW() FROM p\n        ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, username = EXCLUDED.username, since_at = NOW()\n        RETURNING reason\n      )\n      SELECT jsonb_build_object('action', 'afk', 'reason', (SELECT reason FROM up)) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'aniversario') {\n    const acao = String(opts.acao || 'listar');\n    const dia = Number(opts.dia || 0);\n    const mes = Number(opts.mes || 0);\n    const payload = { acao, userId, guildId, username, dia, mes };\n    const sql = acao === 'registrar'\n      ? `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        up AS (\n          INSERT INTO discord_birthdays (user_id, guild_id, username, birth_day, birth_month)\n          SELECT p.j->>'userId', p.j->>'guildId', p.j->>'username', (p.j->>'dia')::int, (p.j->>'mes')::int FROM p\n          WHERE (p.j->>'dia')::int BETWEEN 1 AND 31 AND (p.j->>'mes')::int BETWEEN 1 AND 12\n          ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username, birth_day = EXCLUDED.birth_day, birth_month = EXCLUDED.birth_month\n          RETURNING birth_day, birth_month\n        )\n        SELECT jsonb_build_object('action', 'aniversario_registrar', 'saved', (SELECT row_to_json(up) FROM up LIMIT 1)) AS result;\n      `\n      : `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        rows AS (\n          SELECT username, birth_day, birth_month FROM discord_birthdays\n          WHERE guild_id = (SELECT p.j->>'guildId' FROM p)\n          ORDER BY birth_month, birth_day LIMIT 15\n        )\n        SELECT jsonb_build_object('action', 'aniversario_listar', 'list', COALESCE((SELECT jsonb_agg(row_to_json(rows)) FROM rows), '[]'::jsonb)) AS result;\n      `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'nota') {\n    const acao = String(opts.acao || 'listar');\n    const titulo = String(opts.titulo || '').trim().slice(0, 100);\n    const conteudo = String(opts.conteudo || '').trim().slice(0, 1000);\n    const payload = { acao, userId, titulo, conteudo };\n    let sql = '';\n    if (acao === 'salvar') {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        ins AS (\n          INSERT INTO discord_notes (user_id, title, content)\n          SELECT p.j->>'userId', COALESCE(NULLIF(p.j->>'titulo', ''), 'Nota rápida'), p.j->>'conteudo' FROM p\n          WHERE COALESCE(p.j->>'conteudo', '') <> ''\n          RETURNING id, title\n        )\n        SELECT jsonb_build_object('action', 'nota_salvar', 'saved', (SELECT row_to_json(ins) FROM ins LIMIT 1)) AS result;\n      `;\n    } else if (acao === 'apagar') {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        del AS (\n          DELETE FROM discord_notes\n          WHERE user_id = (SELECT p.j->>'userId' FROM p)\n            AND (id::text = (SELECT p.j->>'titulo' FROM p) OR LOWER(title) = LOWER((SELECT p.j->>'titulo' FROM p)))\n          RETURNING id, title\n        )\n        SELECT jsonb_build_object('action', 'nota_apagar', 'deletedCount', (SELECT COUNT(*) FROM del)) AS result;\n      `;\n    } else {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        rows AS (\n          SELECT id, title, content, created_at FROM discord_notes\n          WHERE user_id = (SELECT p.j->>'userId' FROM p)\n          ORDER BY created_at DESC LIMIT 10\n        )\n        SELECT jsonb_build_object('action', 'nota_listar', 'notes', COALESCE((SELECT jsonb_agg(row_to_json(rows)) FROM rows), '[]'::jsonb)) AS result;\n      `;\n    }\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'sugestao') {\n    const texto = String(opts.texto || '').trim().slice(0, 1000);\n    const payload = { guildId, userId, username, texto };\n    const sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      ins AS (\n        INSERT INTO discord_suggestions (guild_id, user_id, username, content)\n        SELECT p.j->>'guildId', p.j->>'userId', p.j->>'username', p.j->>'texto' FROM p\n        RETURNING id, content, username\n      )\n      SELECT jsonb_build_object('action', 'sugestao', 'suggestion', (SELECT row_to_json(ins) FROM ins LIMIT 1)) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'sorteio') {\n    const premio = String(opts.premio || 'Prêmio surpresa').trim().slice(0, 200);\n    const duracao = Math.max(1, Math.min(10080, Number(opts.duracao_minutos || 10)));\n    const vencedores = Math.max(1, Math.min(10, Number(opts.vencedores || 1)));\n    const payload = { guildId, channelId, prize: premio, winnersCount: vencedores, durationMin: duracao, hostId: userId };\n    const sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      ins AS (\n        INSERT INTO discord_giveaways (guild_id, channel_id, prize, winners_count, ends_at, host_id)\n        SELECT p.j->>'guildId', p.j->>'channelId', p.j->>'prize', (p.j->>'winnersCount')::int, NOW() + ((p.j->>'durationMin')::int * INTERVAL '1 minute'), p.j->>'hostId' FROM p\n        RETURNING id, prize, winners_count, ends_at\n      )\n      SELECT jsonb_build_object('action', 'sorteio', 'giveaway', (SELECT row_to_json(ins) FROM ins LIMIT 1)) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'stats') {\n    const payload = { guildId };\n    const sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\n      SELECT jsonb_build_object(\n        'action', 'stats',\n        'server', (SELECT row_to_json(s) FROM discord_server_stats s WHERE s.guild_id = (SELECT p.j->>'guildId' FROM p)),\n        'afkCount', (SELECT COUNT(*) FROM discord_afk WHERE guild_id = (SELECT p.j->>'guildId' FROM p)),\n        'suggestionsCount', (SELECT COUNT(*) FROM discord_suggestions WHERE guild_id = (SELECT p.j->>'guildId' FROM p)),\n        'activeGiveaways', (SELECT COUNT(*) FROM discord_giveaways WHERE guild_id = (SELECT p.j->>'guildId' FROM p) AND ended = FALSE),\n        'apiLastHour', (SELECT COUNT(*) FROM obs_api_logs WHERE created_at >= NOW() - INTERVAL '1 hour')\n      ) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'obs') {\n    const payload = {};\n    const sql = `\n      SELECT jsonb_build_object(\n        'action', 'obs',\n        'apiTotal', (SELECT COUNT(*) FROM obs_api_logs WHERE created_at >= NOW() - INTERVAL '24 hours'),\n        'apiErrors', (SELECT COUNT(*) FROM obs_api_logs WHERE created_at >= NOW() - INTERVAL '24 hours' AND (is_error OR status_code >= 400)),\n        'apiAvgMs', (SELECT COALESCE(ROUND(AVG(duration_ms))::int, 0) FROM obs_api_logs WHERE created_at >= NOW() - INTERVAL '24 hours'),\n        'errorsTotal', (SELECT COUNT(*) FROM obs_error_logs WHERE created_at >= NOW() - INTERVAL '24 hours'),\n        'n8nTotal', (SELECT COUNT(*) FROM obs_n8n_executions WHERE created_at >= NOW() - INTERVAL '24 hours'),\n        'n8nErrors', (SELECT COUNT(*) FROM obs_n8n_executions WHERE created_at >= NOW() - INTERVAL '24 hours' AND status = 'error')\n      ) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n}\n\nthrow new Error(`Evento de comunidade não reconhecido: ${event}`);"
+      },
+      "id": "dc-comm-0002-4000-8000-000000000002",
+      "name": "Roteador de Engajamento e SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "dc-comm-0003-4000-8000-000000000003",
+      "name": "Executar Operacao Engajamento",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Roteador de Engajamento e SQL').item.json;\nconst res = ($input.first().json && $input.first().json.result) || {};\nconst body = ctx.body || {};\nconst channels = ctx.channels || {};\nconst calls = [];\n\nconst addJsonCall = (method, url, payload, meta = {}) => {\n  calls.push({\n    json: {\n      method,\n      url,\n      hasBody: true,\n      bodyJson: JSON.stringify(payload),\n      meta\n    }\n  });\n};\n\nif (ctx.event === 'discord.member_join') {\n  const welcomeCh = channels.welcomeChannelId;\n  const user = body.user || {};\n  if (welcomeCh) {\n    addJsonCall('POST', `https://discord.com/api/v10/channels/${welcomeCh}/messages`, {\n      content: `Bem-vindo(a) ao servidor, <@${user.id}>! 💜`,\n      embeds: [{\n        title: `✨ Novo membro em ${body.guildName || 'nossa comunidade'}!`,\n        description: `Oi **${user.globalName || user.username}**! Eu sou a Usami. Fique à vontade para conversar comigo ou usar \\`/nota\\`, \\`/sugestao\\` e \\`/afk\\`!`,\n        color: 16735870,\n        thumbnail: user.avatarUrl ? { url: user.avatarUrl } : undefined,\n        footer: { text: `Membro #${body.memberCount || res.members_joined || 1}` }\n      }]\n    });\n  }\n}\n\nif (ctx.event === 'discord.message_activity') {\n  const ch = body.channelId;\n  if (res.clearedAfk && ch) {\n    addJsonCall('POST', `https://discord.com/api/v10/channels/${ch}/messages`, {\n      content: `Bem-vindo(a) de volta, <@${body.author.id}>! Removi seu status **AFK**.`\n    });\n  }\n  const mentionedAfk = Array.isArray(res.mentionedAfk) ? res.mentionedAfk : [];\n  if (mentionedAfk.length > 0 && ch) {\n    const lines = mentionedAfk.map(a => `• **${a.username}** está AFK: _${a.reason}_`);\n    addJsonCall('POST', `https://discord.com/api/v10/channels/${ch}/messages`, {\n      content: lines.join('\\n'),\n      allowed_mentions: { parse: [] }\n    });\n  }\n}\n\nif (ctx.mode === 'slash') {\n  const patchUrl = body.webhookPatchUrl;\n  const cmd = ctx.commandName;\n  if (cmd === 'afk') {\n    addJsonCall('PATCH', patchUrl, {\n      content: `🌙 Status **AFK** ativado! Motivo: _${res.reason || 'Ausente no momento'}_`\n    });\n  } else if (cmd === 'aniversario') {\n    if (res.action === 'aniversario_registrar') {\n      const msg = res.saved\n        ? `🎂 Aniversário salvo para **${String(res.saved.birth_day).padStart(2, '0')}/${String(res.saved.birth_month).padStart(2, '0')}**!`\n        : 'Informe um dia (1-31) e mês (1-12) válidos para registrar seu aniversário.';\n      addJsonCall('PATCH', patchUrl, { content: msg });\n    } else {\n      const list = Array.isArray(res.list) ? res.list : [];\n      const lines = list.length\n        ? list.map(b => `• **${b.username}** — ${String(b.birth_day).padStart(2, '0')}/${String(b.birth_month).padStart(2, '0')}`).join('\\n')\n        : 'Nenhum aniversário cadastrado ainda. Use `/aniversario registrar`!';\n      addJsonCall('PATCH', patchUrl, { embeds: [{ title: '🎂 Aniversários do Servidor', description: lines, color: 16754377 }] });\n    }\n  } else if (cmd === 'nota') {\n    if (res.action === 'nota_salvar') {\n      addJsonCall('PATCH', patchUrl, {\n        content: res.saved ? `📝 Nota **#${res.saved.id} (${res.saved.title})** salva com sucesso!` : 'Informe o conteúdo da nota para salvar.'\n      });\n    } else if (res.action === 'nota_apagar') {\n      addJsonCall('PATCH', patchUrl, {\n        content: Number(res.deletedCount) > 0 ? `🗑️ ${res.deletedCount} nota(s) removida(s).` : 'Nenhuma nota encontrada com esse ID ou título.'\n      });\n    } else {\n      const notes = Array.isArray(res.notes) ? res.notes : [];\n      const desc = notes.length\n        ? notes.map(n => `**#${n.id} — ${n.title}**\\n${String(n.content).slice(0, 120)}`).join('\\n\\n')\n        : 'Você ainda não tem notas salvas. Use `/nota salvar`!';\n      addJsonCall('PATCH', patchUrl, { embeds: [{ title: '📒 Seu Notepad', description: desc, color: 2633026 }] });\n    }\n  } else if (cmd === 'sugestao') {\n    const s = res.suggestion || {};\n    const targetCh = channels.suggestionsChannelId || body.channelId;\n    addJsonCall('PATCH', patchUrl, {\n      content: `💡 Sugestão **#${s.id || ''}** publicada para votação em <#${targetCh}>!`\n    });\n    addJsonCall('POST', `https://discord.com/api/v10/channels/${targetCh}/messages`, {\n      embeds: [{\n        title: `💡 Sugestão #${s.id || ''}`,\n        description: s.content || '',\n        color: 16754377,\n        footer: { text: `Enviada por ${s.username || 'membro'} • Reaja com 👍 ou 👎` }\n      }]\n    }, { reactEmojis: ['👍', '👎'], channelId: targetCh });\n  } else if (cmd === 'sorteio') {\n    const g = res.giveaway || {};\n    const endsUnix = g.ends_at ? Math.floor(new Date(g.ends_at).getTime() / 1000) : Math.floor(Date.now() / 1000 + 600);\n    addJsonCall('PATCH', patchUrl, {\n      content: `🎉 Sorteio **#${g.id || ''}** iniciado!`,\n      embeds: [{\n        title: `🎁 Sorteio: ${g.prize || 'Prêmio'}`,\n        description: `Reaja com 🎉 para participar!\\nVencedores: **${g.winners_count || 1}**\\nEncerra: <t:${endsUnix}:R>`,\n        color: 16735870,\n        footer: { text: `Sorteio #${g.id || ''}` }\n      }]\n    }, { giveawayId: g.id, channelId: body.channelId, reactEmojis: ['🎉'] });\n  } else if (cmd === 'stats') {\n    const srv = res.server || {};\n    addJsonCall('PATCH', patchUrl, {\n      embeds: [{\n        title: '📈 Estatísticas da Comunidade & Usami',\n        color: 16735870,\n        fields: [\n          { name: 'Mensagens contadas', value: String(srv.messages_count || 0), inline: true },\n          { name: 'Comandos executados', value: String(srv.commands_count || 0), inline: true },\n          { name: 'Membros acolhidos', value: String(srv.members_joined || 0), inline: true },\n          { name: 'Usuários AFK', value: String(res.afkCount || 0), inline: true },\n          { name: 'Sugestões registradas', value: String(res.suggestionsCount || 0), inline: true },\n          { name: 'Chamadas API Usami (1h)', value: String(res.apiLastHour || 0), inline: true }\n        ]\n      }]\n    });\n  } else if (cmd === 'obs') {\n    addJsonCall('PATCH', patchUrl, {\n      embeds: [{\n        title: '🩺 Observabilidade Usami (Últimas 24h)',\n        color: (Number(res.errorsTotal || 0) > 0 || Number(res.n8nErrors || 0) > 0) ? 16753920 : 5763719,\n        fields: [\n          { name: 'Eventos API / LLM', value: `${res.apiTotal || 0} (${res.apiErrors || 0} falhas)`, inline: true },\n          { name: 'Latência média API', value: `${res.apiAvgMs || 0} ms`, inline: true },\n          { name: 'Execuções n8n', value: `${res.n8nTotal || 0} (${res.n8nErrors || 0} erros)`, inline: true },\n          { name: 'Erros registrados', value: String(res.errorsTotal || 0), inline: true }\n        ]\n      }]\n    });\n  }\n}\n\nreturn calls;"
+      },
+      "id": "dc-comm-0004-4000-8000-000000000004",
+      "name": "Montar Chamadas Discord",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-comm-0005-4000-8000-000000000005",
+      "name": "Enviar Resposta Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        300
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst calls = $('Montar Chamadas Discord').all();\nconst reactions = [];\nlet giveawayUpdate = null;\n\nfor (let i = 0; i < items.length; i++) {\n  const res = items[i].json || {};\n  const meta = (calls[i] && calls[i].json && calls[i].json.meta) || {};\n  const msgId = res.id;\n  const chId = res.channel_id || meta.channelId;\n  if (msgId && chId && Array.isArray(meta.reactEmojis)) {\n    for (const emoji of meta.reactEmojis) {\n      reactions.push({\n        json: {\n          url: `https://discord.com/api/v10/channels/${chId}/messages/${msgId}/reactions/${encodeURIComponent(emoji)}/@me`\n        }\n      });\n    }\n  }\n  if (msgId && meta.giveawayId) {\n    giveawayUpdate = { id: meta.giveawayId, messageId: String(msgId) };\n  }\n}\n\nreturn reactions.map(r => ({\n  json: {\n    ...r.json,\n    giveawayB64: giveawayUpdate ? Buffer.from(JSON.stringify(giveawayUpdate), 'utf8').toString('base64') : null\n  }\n}));"
+      },
+      "id": "dc-comm-0006-4000-8000-000000000006",
+      "name": "Preparar Reacoes e Message ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 5000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-comm-0007-4000-8000-000000000007",
+      "name": "Adicionar Reacao Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1640,
+        220
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($('Preparar Reacoes e Message ID').item.json.giveawayB64) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "dc-comm-0008-4000-8000-000000000008",
+      "name": "Eh Sorteio Novo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1640,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\nUPDATE discord_giveaways\nSET message_id = (SELECT p.j->>'messageId' FROM p)\nWHERE id = (SELECT (p.j->>'id')::bigint FROM p);",
+        "options": {
+          "queryReplacement": "={{ $('Preparar Reacoes e Message ID').item.json.giveawayB64 }}"
+        }
+      },
+      "id": "dc-comm-0009-4000-8000-000000000009",
+      "name": "Salvar Message ID do Sorteio",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        380
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "dc-comm-0010-4000-8000-000000000010",
+      "name": "Checagem Diaria Aniversarios (09:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH today AS (\n  SELECT\n    EXTRACT(DAY FROM (NOW() AT TIME ZONE 'America/Sao_Paulo'))::int AS d,\n    EXTRACT(MONTH FROM (NOW() AT TIME ZONE 'America/Sao_Paulo'))::int AS m,\n    EXTRACT(YEAR FROM (NOW() AT TIME ZONE 'America/Sao_Paulo'))::int AS y\n),\nupdated AS (\n  UPDATE discord_birthdays b\n  SET last_announced_year = (SELECT y FROM today)\n  FROM today t\n  WHERE b.birth_day = t.d AND b.birth_month = t.m AND b.last_announced_year IS DISTINCT FROM t.y\n  RETURNING b.user_id, b.username, b.guild_id\n)\nSELECT jsonb_build_object(\n  'birthdays', COALESCE((SELECT jsonb_agg(row_to_json(updated)) FROM updated), '[]'::jsonb)\n) AS result;",
+        "options": {}
+      },
+      "id": "dc-comm-0011-4000-8000-000000000011",
+      "name": "Buscar Aniversariantes do Dia",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = ($input.first().json && $input.first().json.result) || {};\nconst list = Array.isArray(res.birthdays) ? res.birthdays : [];\nlet welcomeCh = '';\ntry {\n  welcomeCh = ($env && $env.DISCORD_WELCOME_CHANNEL_ID) ? String($env.DISCORD_WELCOME_CHANNEL_ID).trim() : '';\n} catch {\n  welcomeCh = '';\n}\nif (!list.length || !welcomeCh) return [];\n\nreturn list.map(b => ({\n  json: {\n    channelId: welcomeCh,\n    bodyJson: JSON.stringify({\n      content: `🎂 Feliz aniversário, <@${b.user_id}>!! Desejo um dia incrível cheio de coisas boas! 💜🎉`\n    })\n  }\n}));"
+      },
+      "id": "dc-comm-0012-4000-8000-000000000012",
+      "name": "Montar Parabens Discord",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $json.channelId + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-comm-0013-4000-8000-000000000013",
+      "name": "Anunciar Aniversariante",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        640
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "dc-comm-0014-4000-8000-000000000014",
+      "name": "Checar Sorteios Encerrados (5 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH due AS (\n  UPDATE discord_giveaways\n  SET ended = TRUE\n  WHERE ended = FALSE AND ends_at <= NOW() AND message_id IS NOT NULL\n  RETURNING id, channel_id, message_id, prize, winners_count\n)\nSELECT id, channel_id, message_id, prize, winners_count FROM due;",
+        "options": {}
+      },
+      "id": "dc-comm-0015-4000-8000-000000000015",
+      "name": "Encerrar Sorteios Vencidos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        880
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $json.channel_id + '/messages/' + $json.message_id + '/reactions/%F0%9F%8E%89?limit=100' }}",
+        "options": {
+          "timeout": 5000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-comm-0016-4000-8000-000000000016",
+      "name": "Buscar Participantes Sorteio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        880
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const giveaways = $('Encerrar Sorteios Vencidos').all();\nconst reactionResponses = $input.all();\nconst out = [];\n\nfor (let i = 0; i < giveaways.length; i++) {\n  const g = giveaways[i].json;\n  const rawUsers = reactionResponses[i]?.json;\n  const users = Array.isArray(rawUsers) ? rawUsers.filter(u => u && !u.bot && u.id) : [];\n  const pool = [...users];\n  const winners = [];\n  const targetCount = Math.min(Number(g.winners_count || 1), pool.length);\n  for (let w = 0; w < targetCount; w++) {\n    const idx = Math.floor(Math.random() * pool.length);\n    winners.push(pool.splice(idx, 1)[0]);\n  }\n  const content = winners.length\n    ? `🎉 Sorteio **#${g.id} (${g.prize})** encerrado! Parabéns: ${winners.map(u => `<@${u.id}>`).join(', ')}! 🏆`\n    : `🎉 Sorteio **#${g.id} (${g.prize})** encerrado, mas não houve participantes válidos.`;\n  out.push({\n    json: {\n      channelId: g.channel_id,\n      bodyJson: JSON.stringify({ content })\n    }\n  });\n}\nreturn out;"
+      },
+      "id": "dc-comm-0017-4000-8000-000000000017",
+      "name": "Sortear Vencedores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $json.channelId + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-comm-0018-4000-8000-000000000018",
+      "name": "Anunciar Vencedor Sorteio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        880
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receber Evento Engajamento": {
+      "main": [
+        [
+          {
+            "node": "Roteador de Engajamento e SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteador de Engajamento e SQL": {
+      "main": [
+        [
+          {
+            "node": "Executar Operacao Engajamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar Operacao Engajamento": {
+      "main": [
+        [
+          {
+            "node": "Montar Chamadas Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Chamadas Discord": {
+      "main": [
+        [
+          {
+            "node": "Enviar Resposta Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Resposta Discord": {
+      "main": [
+        [
+          {
+            "node": "Preparar Reacoes e Message ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Reacoes e Message ID": {
+      "main": [
+        [
+          {
+            "node": "Adicionar Reacao Discord",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Eh Sorteio Novo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eh Sorteio Novo?": {
+      "main": [
+        [
+          {
+            "node": "Salvar Message ID do Sorteio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Checagem Diaria Aniversarios (09:00)": {
+      "main": [
+        [
+          {
+            "node": "Buscar Aniversariantes do Dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Aniversariantes do Dia": {
+      "main": [
+        [
+          {
+            "node": "Montar Parabens Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Parabens Discord": {
+      "main": [
+        [
+          {
+            "node": "Anunciar Aniversariante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checar Sorteios Encerrados (5 min)": {
+      "main": [
+        [
+          {
+            "node": "Encerrar Sorteios Vencidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encerrar Sorteios Vencidos": {
+      "main": [
+        [
+          {
+            "node": "Buscar Participantes Sorteio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Participantes Sorteio": {
+      "main": [
+        [
+          {
+            "node": "Sortear Vencedores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sortear Vencedores": {
+      "main": [
+        [
+          {
+            "node": "Anunciar Vencedor Sorteio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

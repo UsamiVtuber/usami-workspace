@@ -44,6 +44,12 @@ services:
       N8N_INSTANCE_AI_SANDBOX_PROVIDER: n8n-sandbox
       N8N_SANDBOX_SERVICE_URL: http://n8n-sandbox-api:8080
       N8N_SANDBOX_SERVICE_API_KEY: ${N8N_SANDBOX_SERVICE_API_KEY:?defina em ~/n8n/.env}
+      # Observabilidade e canais Discord dedicados (usados pelos workflows).
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
+      N8N_OBSERVABILITY_API_KEY: ${N8N_OBSERVABILITY_API_KEY:-}
+      DISCORD_OBS_ERRORS_CHANNEL_ID: ${DISCORD_OBS_ERRORS_CHANNEL_ID:-}
+      DISCORD_OBS_SUMMARY_CHANNEL_ID: ${DISCORD_OBS_SUMMARY_CHANNEL_ID:-}
     volumes:
       # OS TRES MOUNTS SAO OBRIGATORIOS. Sem eles o n8n sobe num banco vazio dentro
       # do container e parece funcionar normalmente -- foi uma regressao real de 2026-10-25.
@@ -77,6 +83,58 @@ services:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?defina em ~/n8n/.env}
     volumes:
       - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - n8n
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: n8n-usami-postgres
+    restart: unless-stopped
+    # Banco de aplicacao na rede interna (bot Discord + observabilidade).
+    # O proprio n8n continua usando /home/node/.n8n/database.sqlite para preservar
+    # credenciais e workflows existentes.
+    environment:
+      POSTGRES_DB: usami
+      POSTGRES_USER: usami
+      POSTGRES_PASSWORD: ${USAMI_POSTGRES_PASSWORD:?defina em ~/n8n/.env}
+    volumes:
+      - type: bind
+        source: /dados/n8n/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usami -d usami"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - n8n
+
+  discord-bridge:
+    build: ./discord-bridge
+    container_name: n8n-discord-bridge
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_started
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_CHAT_CHANNEL_ID: ${DISCORD_CHAT_CHANNEL_ID:-}
+      DISCORD_WELCOME_CHANNEL_ID: ${DISCORD_WELCOME_CHANNEL_ID:-}
+      DISCORD_SUGGESTIONS_CHANNEL_ID: ${DISCORD_SUGGESTIONS_CHANNEL_ID:-}
+      DISCORD_MOD_LOG_CHANNEL_ID: ${DISCORD_MOD_LOG_CHANNEL_ID:-}
+      DISCORD_TICKET_CATEGORY_ID: ${DISCORD_TICKET_CATEGORY_ID:-}
+      DISCORD_OBS_ERRORS_CHANNEL_ID: ${DISCORD_OBS_ERRORS_CHANNEL_ID:-}
+      DISCORD_OBS_SUMMARY_CHANNEL_ID: ${DISCORD_OBS_SUMMARY_CHANNEL_ID:-}
+      N8N_DISCORD_CHAT_WEBHOOK: http://n8n:5678/webhook/usami-discord-chat
+      N8N_DISCORD_COMMUNITY_WEBHOOK: http://n8n:5678/webhook/usami-discord-community
+      N8N_DISCORD_MOD_WEBHOOK: http://n8n:5678/webhook/usami-discord-mod
+      N8N_OBSERVABILITY_WEBHOOK: http://n8n:5678/webhook/usami-observability
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
     networks:
       - n8n
 

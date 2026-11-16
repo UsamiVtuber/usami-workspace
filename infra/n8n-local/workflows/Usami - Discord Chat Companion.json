@@ -1,0 +1,186 @@
+{
+  "name": "Usami - Discord Chat Companion",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-discord-chat",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "dc-chat-0001-4000-8000-000000000001",
+      "name": "Receber Mensagem Discord",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-discord-chat-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst content = String(body.content || '').trim();\nconst author = body.author || {};\nconst authorName = String(author.globalName || author.username || 'amigo').trim();\nconst channelId = String(body.channelId || '').trim();\nconst messageId = String(body.messageId || '').trim();\nconst guildId = body.guildId ? String(body.guildId) : null;\nconst isDm = Boolean(body.isDm || !guildId);\n\nif (!content || !channelId) {\n  throw new Error('Evento discord.chat_message sem content ou channelId.');\n}\n\nconst usamiMessage = `[Discord | ${authorName}]: ${content}`.slice(0, 1800);\n\nreturn [{\n  json: {\n    channelId,\n    messageId,\n    guildId,\n    isDm,\n    authorName,\n    content,\n    usamiMessage\n  }\n}];"
+      },
+      "id": "dc-chat-0002-4000-8000-000000000002",
+      "name": "Extrair Mensagem Discord",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "url": "http://10.42.0.1:8787/api/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Origin",
+              "value": "http://127.0.0.1:5173"
+            },
+            {
+              "name": "x-usami-client",
+              "value": "={{ 'discord-' + $json.channelId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: $json.usamiMessage }) }}",
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "id": "dc-chat-0003-4000-8000-000000000003",
+      "name": "Chamar API Usami (/api/chat)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const apiRes = $input.first().json || {};\nconst ctx = $('Extrair Mensagem Discord').item.json;\n\nconst rawReply = typeof apiRes.reply === 'string' ? apiRes.reply.trim() : '';\nconst isOffline = Boolean(apiRes.error || !rawReply);\n\nconst cleanReply = rawReply\n  .replace(/<(laugh|chuckle|sigh|short pause)>/gi, '')\n  .replace(/\\[(risada|suspiro)\\]/gi, '')\n  .trim();\n\nconst finalText = !isOffline && cleanReply\n  ? cleanReply.slice(0, 1950)\n  : `Oi ${ctx.authorName}! Meu PC principal parece estar descansando agora e não consegui acessar meu núcleo de voz/memória. Tenta de novo daqui a pouquinho, tá?`;\n\nconst discordBody = {\n  content: finalText,\n  allowed_mentions: { replied_user: false }\n};\nif (!ctx.isDm && ctx.messageId) {\n  discordBody.message_reference = {\n    message_id: ctx.messageId,\n    fail_if_not_exists: false\n  };\n}\n\nreturn [{\n  json: {\n    channelId: ctx.channelId,\n    isOffline,\n    discordBody\n  }\n}];"
+      },
+      "id": "dc-chat-0004-4000-8000-000000000004",
+      "name": "Formatar Resposta ou Fallback Offline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $json.channelId + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.discordBody) }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-chat-0005-4000-8000-000000000005",
+      "name": "Responder no Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        300
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receber Mensagem Discord": {
+      "main": [
+        [
+          {
+            "node": "Extrair Mensagem Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Mensagem Discord": {
+      "main": [
+        [
+          {
+            "node": "Chamar API Usami (/api/chat)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chamar API Usami (/api/chat)": {
+      "main": [
+        [
+          {
+            "node": "Formatar Resposta ou Fallback Offline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Resposta ou Fallback Offline": {
+      "main": [
+        [
+          {
+            "node": "Responder no Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

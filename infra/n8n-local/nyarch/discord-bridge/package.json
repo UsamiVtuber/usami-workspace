@@ -1,0 +1,13 @@
+{
+  "name": "usami-discord-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Micro-bridge Discord Gateway para rotear eventos e slash commands da Usami ao n8n.",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  }
+}

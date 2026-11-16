@@ -1,0 +1,357 @@
+{
+  "name": "Usami - Monitor de Erros e Execucoes n8n",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "obs-n8n-0001-4000-8000-000000000001",
+      "name": "Error Trigger Global",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst execution = item.execution || {};\nconst workflow = item.workflow || {};\n\nfunction redact(val) {\n  if (val === null || val === undefined) return '';\n  return String(val)\n    .replace(/Bearer\\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')\n    .replace(/\\b(nvapi|sk|ghp|gho|xoxb|xoxp|AIza)[A-Za-z0-9_-]{8,}\\b/g, '[REDACTED_KEY]')\n    .replace(/((?:x-usami-token|authorization|api[-_]?key|secret|password|token)\\s*[:=]\\s*)([\"']?)[^\\s,\"';&}]+\\2/gi, '$1[REDACTED]')\n    .slice(0, 500);\n}\n\nconst workflowId = String(workflow.id || 'desconhecido');\nconst workflowName = String(workflow.name || 'Workflow sem nome');\nconst executionId = String(execution.id || ('err-' + Date.now()));\nconst mode = String(execution.mode || 'unknown');\nconst lastNode = execution.lastNodeExecuted ? String(execution.lastNodeExecuted) : null;\nconst rawErrorMsg = execution.error?.message || execution.error?.description || 'Falha desconhecida no n8n';\nconst errorMessage = redact(rawErrorMsg);\nconst timestamp = new Date().toISOString();\n\nlet envChannel = '';\ntry {\n  envChannel = ($env && $env.DISCORD_OBS_ERRORS_CHANNEL_ID) ? String($env.DISCORD_OBS_ERRORS_CHANNEL_ID).trim() : '';\n} catch {\n  envChannel = '';\n}\nconst hasErrorsChannel = Boolean(envChannel && !envChannel.startsWith('CONFIGURE_'));\n\nconst record = {\n  timestamp,\n  executionId,\n  workflowId,\n  workflowName,\n  mode,\n  lastNode,\n  errorMessage,\n  executionUrl: execution.url || null\n};\n\nconst discordPayload = {\n  embeds: [{\n    title: `⚠️ Falha em Workflow n8n: ${workflowName}`,\n    description: errorMessage,\n    color: 15548997,\n    fields: [\n      { name: 'Workflow ID', value: workflowId, inline: true },\n      { name: 'Execução ID', value: executionId, inline: true },\n      { name: 'Último Nó', value: lastNode || 'N/D', inline: true },\n      { name: 'Modo', value: mode, inline: true }\n    ],\n    timestamp\n  }]\n};\n\nreturn [{\n  json: {\n    record,\n    payloadB64: Buffer.from(JSON.stringify(record), 'utf8').toString('base64'),\n    obsErrorsChannelId: envChannel,\n    hasErrorsChannel,\n    discordPayload\n  }\n}];"
+      },
+      "id": "obs-n8n-0002-4000-8000-000000000002",
+      "name": "Formatar Erro do n8n",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (\n  SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j\n),\nins_err AS (\n  INSERT INTO obs_error_logs (created_at, source, route_or_workflow, status_code, error_code, error_message, metadata)\n  SELECT\n    COALESCE((p.j->>'timestamp')::timestamptz, NOW()),\n    'n8n-workflow',\n    COALESCE(p.j->>'workflowName', p.j->>'workflowId'),\n    500,\n    p.j->>'mode',\n    COALESCE(p.j->>'errorMessage', 'Falha no workflow n8n'),\n    jsonb_build_object('workflowId', p.j->>'workflowId', 'executionId', p.j->>'executionId', 'lastNode', p.j->>'lastNode')\n  FROM p\n)\nINSERT INTO obs_n8n_executions (execution_id, created_at, workflow_id, workflow_name, status, mode, error_message)\nSELECT\n  p.j->>'executionId',\n  COALESCE((p.j->>'timestamp')::timestamptz, NOW()),\n  p.j->>'workflowId',\n  p.j->>'workflowName',\n  'error',\n  p.j->>'mode',\n  p.j->>'errorMessage'\nFROM p\nON CONFLICT (execution_id) DO UPDATE SET\n  status = EXCLUDED.status,\n  error_message = EXCLUDED.error_message;",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "obs-n8n-0003-4000-8000-000000000003",
+      "name": "Registrar Erro n8n",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Formatar Erro do n8n').item.json.hasErrorsChannel }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "obs-n8n-0004-4000-8000-000000000004",
+      "name": "Canal de Erros Configurado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $('Formatar Erro do n8n').item.json.obsErrorsChannelId + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Formatar Erro do n8n').item.json.discordPayload) }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "obs-n8n-0005-4000-8000-000000000005",
+      "name": "Alerta Discord (#usami-erros)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        140
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "obs-n8n-0006-4000-8000-000000000006",
+      "name": "Coleta Periodica (15 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "GET",
+        "url": "http://127.0.0.1:5678/api/v1/executions?limit=50&includeData=false",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "obs-n8n-0007-4000-8000-000000000007",
+      "name": "Listar Execucoes n8n",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "usami-n8n-api",
+          "name": "n8n API Key"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $input.first().json || {};\nif (first.error) {\n  return [{ json: { hasRows: false, rowsB64: 'W10=', apiError: String(first.error.message || first.error).slice(0, 300) } }];\n}\n\nconst list = Array.isArray(first.data) ? first.data : (Array.isArray(first) ? first : []);\nconst rows = [];\n\nfor (const exec of list) {\n  if (!exec || !exec.id) continue;\n  const started = exec.startedAt ? new Date(exec.startedAt).getTime() : NaN;\n  const stopped = exec.stoppedAt ? new Date(exec.stoppedAt).getTime() : NaN;\n  const durationMs = (Number.isFinite(started) && Number.isFinite(stopped) && stopped >= started)\n    ? Math.round(stopped - started)\n    : null;\n  rows.push({\n    execution_id: String(exec.id),\n    created_at: exec.startedAt || new Date().toISOString(),\n    workflow_id: exec.workflowId ? String(exec.workflowId) : null,\n    workflow_name: exec.workflowName ? String(exec.workflowName) : null,\n    status: String(exec.status || (exec.finished ? 'success' : 'running')),\n    mode: exec.mode ? String(exec.mode) : null,\n    duration_ms: durationMs,\n    error_message: null\n  });\n}\n\nreturn [{\n  json: {\n    hasRows: rows.length > 0,\n    count: rows.length,\n    rowsB64: Buffer.from(JSON.stringify(rows), 'utf8').toString('base64')\n  }\n}];"
+      },
+      "id": "obs-n8n-0008-4000-8000-000000000008",
+      "name": "Consolidar Chamadas n8n",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasRows }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "obs-n8n-0009-4000-8000-000000000009",
+      "name": "Tem Execucoes para Upsert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH rows AS (\n  SELECT * FROM jsonb_to_recordset(convert_from(decode($1, 'base64'), 'UTF8')::jsonb) AS x(\n    execution_id TEXT,\n    created_at TIMESTAMPTZ,\n    workflow_id TEXT,\n    workflow_name TEXT,\n    status TEXT,\n    mode TEXT,\n    duration_ms INT,\n    error_message TEXT\n  )\n)\nINSERT INTO obs_n8n_executions (\n  execution_id, created_at, workflow_id, workflow_name, status, mode, duration_ms, error_message\n)\nSELECT execution_id, created_at, workflow_id, workflow_name, status, mode, duration_ms, error_message\nFROM rows\nON CONFLICT (execution_id) DO UPDATE SET\n  workflow_name = COALESCE(EXCLUDED.workflow_name, obs_n8n_executions.workflow_name),\n  status = EXCLUDED.status,\n  duration_ms = COALESCE(EXCLUDED.duration_ms, obs_n8n_executions.duration_ms),\n  error_message = COALESCE(obs_n8n_executions.error_message, EXCLUDED.error_message);",
+        "options": {
+          "queryReplacement": "={{ $json.rowsB64 }}"
+        }
+      },
+      "id": "obs-n8n-0010-4000-8000-000000000010",
+      "name": "Upsert Execucoes n8n",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1160,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "obs-n8n-0011-4000-8000-000000000011",
+      "name": "Nada a Registrar",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        620
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger Global": {
+      "main": [
+        [
+          {
+            "node": "Formatar Erro do n8n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Erro do n8n": {
+      "main": [
+        [
+          {
+            "node": "Registrar Erro n8n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Erro n8n": {
+      "main": [
+        [
+          {
+            "node": "Canal de Erros Configurado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Canal de Erros Configurado?": {
+      "main": [
+        [
+          {
+            "node": "Alerta Discord (#usami-erros)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nada a Registrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coleta Periodica (15 min)": {
+      "main": [
+        [
+          {
+            "node": "Listar Execucoes n8n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listar Execucoes n8n": {
+      "main": [
+        [
+          {
+            "node": "Consolidar Chamadas n8n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar Chamadas n8n": {
+      "main": [
+        [
+          {
+            "node": "Tem Execucoes para Upsert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Execucoes para Upsert?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Execucoes n8n",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nada a Registrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

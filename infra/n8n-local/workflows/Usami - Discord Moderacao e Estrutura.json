@@ -1,0 +1,437 @@
+{
+  "name": "Usami - Discord Moderacao e Estrutura",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-discord-mod",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "dc-mod-0001-4000-8000-000000000001",
+      "name": "Receber Evento Moderacao",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ],
+      "webhookId": "usami-discord-mod-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst event = String(body.event || '');\nconst channels = body.channelsConfig || {};\nconst b64 = obj => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\n// 1. Checagem de Auto-Mod + Comando !custom + Sticky Message\nif (event === 'discord.mod_check') {\n  const guildId = String(body.guildId || '');\n  const channelId = String(body.channelId || '');\n  const messageId = String(body.messageId || '');\n  const content = String(body.content || '');\n  const commandName = body.commandName ? String(body.commandName).toLowerCase() : null;\n  const author = body.author || {};\n  const isMod = Boolean(author.isMod);\n\n  let violationReason = null;\n  if (!isMod) {\n    if (/(discord\\.gg\\/|discord\\.com\\/invite\\/)/i.test(content)) {\n      violationReason = 'Link de convite do Discord não autorizado (Auto-Mod)';\n    } else if (/@(everyone|here)/i.test(content)) {\n      violationReason = 'Menção em massa não autorizada (Auto-Mod)';\n    } else if (/(free\\s+nitro|steam\\s+gift|airdrop\\s+crypto)/i.test(content)) {\n      violationReason = 'Padrão suspeito de spam/golpe (Auto-Mod)';\n    }\n  }\n\n  const payload = {\n    guildId,\n    channelId,\n    userId: String(author.id || ''),\n    commandName,\n    violationReason\n  };\n\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n    ins_log AS (\n      INSERT INTO discord_mod_logs (guild_id, user_id, moderator_id, action, reason)\n      SELECT p.j->>'guildId', p.j->>'userId', 'usami-automod', 'delete_message', p.j->>'violationReason'\n      FROM p\n      WHERE COALESCE(p.j->>'violationReason', '') <> ''\n      RETURNING id\n    ),\n    cmd AS (\n      SELECT command_name, response_text\n      FROM discord_custom_commands\n      WHERE guild_id = (SELECT p.j->>'guildId' FROM p)\n        AND command_name = (SELECT p.j->>'commandName' FROM p)\n      LIMIT 1\n    ),\n    sticky AS (\n      SELECT channel_id, content, last_message_id\n      FROM discord_sticky_messages\n      WHERE channel_id = (SELECT p.j->>'channelId' FROM p)\n      LIMIT 1\n    )\n    SELECT jsonb_build_object(\n      'action', 'mod_check',\n      'loggedId', (SELECT id FROM ins_log LIMIT 1),\n      'customCmd', (SELECT row_to_json(cmd) FROM cmd LIMIT 1),\n      'sticky', (SELECT row_to_json(sticky) FROM sticky LIMIT 1)\n    ) AS result;\n  `;\n\n  return [{ json: { mode: 'mod_check', event, body, channels, violationReason, sql, payloadB64: b64(payload) } }];\n}\n\n// 2. Reaction Roles\nif (event === 'discord.reaction_add' || event === 'discord.reaction_remove') {\n  const payload = {\n    messageId: String(body.messageId || ''),\n    emoji: String(body.emoji || '')\n  };\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n    rr AS (\n      SELECT role_id, guild_id\n      FROM discord_reaction_roles\n      WHERE message_id = (SELECT p.j->>'messageId' FROM p)\n        AND emoji = (SELECT p.j->>'emoji' FROM p)\n      LIMIT 1\n    )\n    SELECT jsonb_build_object(\n      'action', 'reaction_role',\n      'role', (SELECT row_to_json(rr) FROM rr LIMIT 1)\n    ) AS result;\n  `;\n  return [{ json: { mode: 'reaction', event, body, channels, sql, payloadB64: b64(payload) } }];\n}\n\n// 3. Slash Commands de Moderacao & Estrutura\nif (event === 'discord.slash_command') {\n  const cmd = String(body.commandName || '');\n  const opts = body.options || {};\n  const user = body.user || {};\n  const guildId = String(body.guildId || '');\n  const channelId = String(body.channelId || '');\n  const userId = String(user.id || '');\n  const username = String(user.globalName || user.username || 'usuário');\n\n  if (cmd === 'cmd') {\n    const acao = String(opts.acao || 'listar');\n    const nome = String(opts.nome || '').trim().replace(/^!/, '').toLowerCase().slice(0, 50);\n    const resposta = String(opts.resposta || '').trim().slice(0, 1500);\n    const payload = { acao, guildId, nome, resposta, userId };\n    let sql = '';\n    if (acao === 'criar') {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        up AS (\n          INSERT INTO discord_custom_commands (guild_id, command_name, response_text, created_by)\n          SELECT p.j->>'guildId', p.j->>'nome', p.j->>'resposta', p.j->>'userId' FROM p\n          WHERE COALESCE(p.j->>'nome', '') <> '' AND COALESCE(p.j->>'resposta', '') <> ''\n          ON CONFLICT (guild_id, command_name) DO UPDATE SET response_text = EXCLUDED.response_text\n          RETURNING command_name\n        )\n        SELECT jsonb_build_object('action', 'cmd_criar', 'saved', (SELECT command_name FROM up LIMIT 1)) AS result;\n      `;\n    } else if (acao === 'remover') {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        del AS (\n          DELETE FROM discord_custom_commands\n          WHERE guild_id = (SELECT p.j->>'guildId' FROM p) AND command_name = (SELECT p.j->>'nome' FROM p)\n          RETURNING command_name\n        )\n        SELECT jsonb_build_object('action', 'cmd_remover', 'deleted', (SELECT command_name FROM del LIMIT 1)) AS result;\n      `;\n    } else {\n      sql = `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        rows AS (\n          SELECT command_name, LEFT(response_text, 60) AS preview\n          FROM discord_custom_commands\n          WHERE guild_id = (SELECT p.j->>'guildId' FROM p)\n          ORDER BY command_name LIMIT 25\n        )\n        SELECT jsonb_build_object('action', 'cmd_listar', 'list', COALESCE((SELECT jsonb_agg(row_to_json(rows)) FROM rows), '[]'::jsonb)) AS result;\n      `;\n    }\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'sticky') {\n    const acao = String(opts.acao || 'definir');\n    const texto = String(opts.texto || '').trim().slice(0, 1500);\n    const payload = { acao, guildId, channelId, texto };\n    const sql = acao === 'remover'\n      ? `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        del AS (DELETE FROM discord_sticky_messages WHERE channel_id = (SELECT p.j->>'channelId' FROM p) RETURNING last_message_id)\n        SELECT jsonb_build_object('action', 'sticky_remover', 'deleted', (SELECT row_to_json(del) FROM del LIMIT 1)) AS result;\n      `\n      : `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        up AS (\n          INSERT INTO discord_sticky_messages (channel_id, guild_id, content, updated_at)\n          SELECT p.j->>'channelId', p.j->>'guildId', p.j->>'texto', NOW() FROM p\n          WHERE COALESCE(p.j->>'texto', '') <> ''\n          ON CONFLICT (channel_id) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()\n          RETURNING channel_id, content, last_message_id\n        )\n        SELECT jsonb_build_object('action', 'sticky_definir', 'sticky', (SELECT row_to_json(up) FROM up LIMIT 1)) AS result;\n      `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'reactionrole') {\n    const messageId = String(opts.message_id || '').trim();\n    const emoji = String(opts.emoji || '').trim();\n    const roleId = String(opts.role || '').trim();\n    const payload = { guildId, channelId, messageId, emoji, roleId };\n    const sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      up AS (\n        INSERT INTO discord_reaction_roles (guild_id, channel_id, message_id, emoji, role_id)\n        SELECT p.j->>'guildId', p.j->>'channelId', p.j->>'messageId', p.j->>'emoji', p.j->>'roleId' FROM p\n        ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id\n        RETURNING id, message_id, emoji, role_id\n      )\n      SELECT jsonb_build_object('action', 'reactionrole', 'saved', (SELECT row_to_json(up) FROM up LIMIT 1)) AS result;\n    `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n\n  if (cmd === 'ticket') {\n    const acao = String(opts.acao || 'abrir');\n    const assunto = String(opts.assunto || 'Suporte Geral').trim().slice(0, 120);\n    const payload = { acao, guildId, channelId, userId, username, assunto };\n    const sql = acao === 'fechar'\n      ? `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n        cl AS (\n          UPDATE discord_tickets SET status = 'closed', closed_at = NOW()\n          WHERE channel_id = (SELECT p.j->>'channelId' FROM p) AND status = 'open'\n          RETURNING id, channel_id, topic\n        )\n        SELECT jsonb_build_object('action', 'ticket_fechar', 'closed', (SELECT row_to_json(cl) FROM cl LIMIT 1)) AS result;\n      `\n      : `\n        WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\n        SELECT jsonb_build_object(\n          'action', 'ticket_abrir',\n          'openCount', (SELECT COUNT(*) FROM discord_tickets WHERE guild_id = (SELECT p.j->>'guildId' FROM p) AND user_id = (SELECT p.j->>'userId' FROM p) AND status = 'open')\n        ) AS result;\n      `;\n    return [{ json: { mode: 'slash', commandName: cmd, body, channels, sql, payloadB64: b64(payload) } }];\n  }\n}\n\nthrow new Error(`Evento de moderação não reconhecido: ${event}`);"
+      },
+      "id": "dc-mod-0002-4000-8000-000000000002",
+      "name": "Avaliar Moderacao e Estrutura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "dc-mod-0003-4000-8000-000000000003",
+      "name": "Persistir Estado Moderacao",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        320
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Avaliar Moderacao e Estrutura').item.json;\nconst res = ($input.first().json && $input.first().json.result) || {};\nconst body = ctx.body || {};\nconst channels = ctx.channels || {};\nconst calls = [];\n\nconst addCall = (method, url, payload = null, meta = {}) => {\n  calls.push({\n    json: {\n      method,\n      url,\n      hasBody: payload !== null,\n      bodyJson: payload !== null ? JSON.stringify(payload) : '',\n      meta\n    }\n  });\n};\n\nif (ctx.mode === 'mod_check') {\n  if (ctx.violationReason) {\n    addCall('DELETE', `https://discord.com/api/v10/channels/${body.channelId}/messages/${body.messageId}`);\n    addCall('POST', `https://discord.com/api/v10/channels/${body.channelId}/messages`, {\n      content: `⚠️ <@${body.author.id}>, sua mensagem foi removida: **${ctx.violationReason}**.`\n    });\n    if (channels.modLogChannelId) {\n      addCall('POST', `https://discord.com/api/v10/channels/${channels.modLogChannelId}/messages`, {\n        embeds: [{\n          title: '🛡️ Ação de Auto-Moderação',\n          color: 15548997,\n          fields: [\n            { name: 'Usuário', value: `<@${body.author.id}> (${body.author.username})`, inline: true },\n            { name: 'Canal', value: `<#${body.channelId}>`, inline: true },\n            { name: 'Motivo', value: ctx.violationReason, inline: false }\n          ],\n          timestamp: new Date().toISOString()\n        }]\n      });\n    }\n    return calls;\n  }\n\n  if (res.customCmd && res.customCmd.response_text) {\n    addCall('POST', `https://discord.com/api/v10/channels/${body.channelId}/messages`, {\n      content: res.customCmd.response_text\n    });\n  }\n\n  if (res.sticky && res.sticky.content) {\n    if (res.sticky.last_message_id) {\n      addCall('DELETE', `https://discord.com/api/v10/channels/${body.channelId}/messages/${res.sticky.last_message_id}`);\n    }\n    addCall('POST', `https://discord.com/api/v10/channels/${body.channelId}/messages`, {\n      embeds: [{\n        title: '📌 Mensagem Fixada',\n        description: res.sticky.content,\n        color: 16754377\n      }]\n    }, { updateStickyChannelId: body.channelId });\n  }\n}\n\nif (ctx.mode === 'reaction') {\n  const role = res.role;\n  if (role && role.role_id) {\n    const method = ctx.event === 'discord.reaction_add' ? 'PUT' : 'DELETE';\n    addCall(method, `https://discord.com/api/v10/guilds/${body.guildId}/members/${body.userId}/roles/${role.role_id}`);\n  }\n}\n\nif (ctx.mode === 'slash') {\n  const cmd = ctx.commandName;\n  const patchUrl = body.webhookPatchUrl;\n  if (cmd === 'cmd') {\n    if (res.action === 'cmd_criar') {\n      addCall('PATCH', patchUrl, {\n        content: res.saved ? `✅ Comando customizado \\`!${res.saved}\\` salvo!` : 'Informe `nome` e `resposta` para criar o comando.'\n      });\n    } else if (res.action === 'cmd_remover') {\n      addCall('PATCH', patchUrl, {\n        content: res.deleted ? `🗑️ Comando \\`!${res.deleted}\\` removido.` : 'Comando não encontrado.'\n      });\n    } else {\n      const list = Array.isArray(res.list) ? res.list : [];\n      const desc = list.length\n        ? list.map(c => `• \\`!${c.command_name}\\` — ${c.preview}`).join('\\n')\n        : 'Nenhum comando customizado configurado ainda.';\n      addCall('PATCH', patchUrl, { embeds: [{ title: '⚡ Comandos Customizados', description: desc, color: 16735870 }] });\n    }\n  } else if (cmd === 'sticky') {\n    if (res.action === 'sticky_remover') {\n      if (res.deleted?.last_message_id) {\n        addCall('DELETE', `https://discord.com/api/v10/channels/${body.channelId}/messages/${res.deleted.last_message_id}`);\n      }\n      addCall('PATCH', patchUrl, { content: '📌 Sticky message removida deste canal.' });\n    } else if (res.sticky) {\n      if (res.sticky.last_message_id) {\n        addCall('DELETE', `https://discord.com/api/v10/channels/${body.channelId}/messages/${res.sticky.last_message_id}`);\n      }\n      addCall('PATCH', patchUrl, { content: '📌 Sticky message ativada neste canal!' });\n      addCall('POST', `https://discord.com/api/v10/channels/${body.channelId}/messages`, {\n        embeds: [{ title: '📌 Mensagem Fixada', description: res.sticky.content, color: 16754377 }]\n      }, { updateStickyChannelId: body.channelId });\n    } else {\n      addCall('PATCH', patchUrl, { content: 'Informe o `texto` da sticky message.' });\n    }\n  } else if (cmd === 'reactionrole') {\n    const s = res.saved || {};\n    addCall('PATCH', patchUrl, {\n      content: `🎭 Reaction Role configurado: reagir com ${s.emoji} na mensagem \\`${s.message_id}\\` atribui <@&${s.role_id}>.`\n    });\n    if (s.message_id && s.emoji) {\n      addCall('PUT', `https://discord.com/api/v10/channels/${body.channelId}/messages/${s.message_id}/reactions/${encodeURIComponent(s.emoji)}/@me`);\n    }\n  } else if (cmd === 'ticket') {\n    if (res.action === 'ticket_fechar') {\n      if (res.closed) {\n        addCall('PATCH', patchUrl, { content: `🔒 Ticket **#${res.closed.id}** encerrado. Este canal será removido em instantes.` });\n        addCall('DELETE', `https://discord.com/api/v10/channels/${body.channelId}`);\n      } else {\n        addCall('PATCH', patchUrl, { content: 'Este canal não é um ticket aberto.' });\n      }\n    } else {\n      if (Number(res.openCount || 0) >= 3) {\n        addCall('PATCH', patchUrl, { content: 'Você já possui 3 tickets abertos. Feche um antes de abrir outro.' });\n      } else {\n        const topic = String(body.options?.assunto || 'Suporte Geral').slice(0, 120);\n        const safeUser = String(body.user?.username || 'membro').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 18) || 'membro';\n        const channelPayload = {\n          name: `ticket-${safeUser}`,\n          type: 0,\n          topic: `Ticket de ${body.user?.username || 'membro'} | ${topic}`,\n          permission_overwrites: [\n            { id: body.guildId, type: 0, deny: '1024' },\n            { id: body.user?.id, type: 1, allow: '68608' }\n          ]\n        };\n        if (channels.ticketCategoryId) channelPayload.parent_id = channels.ticketCategoryId;\n        addCall('POST', `https://discord.com/api/v10/guilds/${body.guildId}/channels`, channelPayload, {\n          createdTicket: true,\n          guildId: body.guildId,\n          userId: body.user?.id,\n          username: body.user?.globalName || body.user?.username || 'membro',\n          topic,\n          patchUrl\n        });\n      }\n    }\n  }\n}\n\nreturn calls;"
+      },
+      "id": "dc-mod-0004-4000-8000-000000000004",
+      "name": "Montar Acoes Moderacao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasBody }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "dc-mod-0005-4000-8000-000000000005",
+      "name": "Tem Body JSON?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-mod-0006-4000-8000-000000000006",
+      "name": "Executar Discord REST (Com Body)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        220
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 5000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-mod-0007-4000-8000-000000000007",
+      "name": "Executar Discord REST (Sem Body)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        440
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const responses = $input.all();\nconst allCalls = $('Montar Acoes Moderacao').all().filter(c => c.json.hasBody);\nconst out = [];\n\nfor (let i = 0; i < responses.length; i++) {\n  const res = responses[i].json || {};\n  const meta = (allCalls[i] && allCalls[i].json && allCalls[i].json.meta) || {};\n  if (meta.updateStickyChannelId && res.id) {\n    const p = { channelId: meta.updateStickyChannelId, messageId: String(res.id) };\n    out.push({\n      json: {\n        sql: `WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j) UPDATE discord_sticky_messages SET last_message_id = p.j->>'messageId', updated_at = NOW() FROM p WHERE channel_id = p.j->>'channelId';`,\n        payloadB64: Buffer.from(JSON.stringify(p), 'utf8').toString('base64'),\n        discordFollowups: []\n      }\n    });\n  }\n  if (meta.createdTicket && res.id) {\n    const p = {\n      guildId: meta.guildId,\n      channelId: String(res.id),\n      userId: meta.userId,\n      username: meta.username,\n      topic: meta.topic\n    };\n    out.push({\n      json: {\n        sql: `WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j) INSERT INTO discord_tickets (guild_id, channel_id, user_id, username, topic) SELECT p.j->>'guildId', p.j->>'channelId', p.j->>'userId', p.j->>'username', p.j->>'topic' FROM p;`,\n        payloadB64: Buffer.from(JSON.stringify(p), 'utf8').toString('base64'),\n        patchUrl: meta.patchUrl,\n        patchBody: JSON.stringify({ content: `🎫 Ticket criado com sucesso em <#${res.id}>!` }),\n        ticketChannelUrl: `https://discord.com/api/v10/channels/${res.id}/messages`,\n        ticketWelcomeBody: JSON.stringify({\n          content: `<@${meta.userId}>`,\n          embeds: [{\n            title: '🎫 Ticket de Suporte',\n            description: `Assunto: **${meta.topic}**\\nDescreva como podemos ajudar. Quando terminar, use \\`/ticket fechar\\`.`,\n            color: 16735870\n          }]\n        })\n      }\n    });\n  }\n}\nreturn out;"
+      },
+      "id": "dc-mod-0008-4000-8000-000000000008",
+      "name": "Preparar Pos-Processamento Mod",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "dc-mod-0009-4000-8000-000000000009",
+      "name": "Atualizar Postgres Pos-Acao",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        220
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($('Preparar Pos-Processamento Mod').item.json.ticketChannelUrl) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "dc-mod-0010-4000-8000-000000000010",
+      "name": "Novo Canal de Ticket?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2120,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Preparar Pos-Processamento Mod').item.json.ticketChannelUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Preparar Pos-Processamento Mod').item.json.ticketWelcomeBody }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-mod-0011-4000-8000-000000000011",
+      "name": "Enviar Boas-Vindas no Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2360,
+        140
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Preparar Pos-Processamento Mod').item.json.patchUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Preparar Pos-Processamento Mod').item.json.patchBody }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-mod-0012-4000-8000-000000000012",
+      "name": "Confirmar Ticket na Interacao",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2360,
+        320
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receber Evento Moderacao": {
+      "main": [
+        [
+          {
+            "node": "Avaliar Moderacao e Estrutura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avaliar Moderacao e Estrutura": {
+      "main": [
+        [
+          {
+            "node": "Persistir Estado Moderacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persistir Estado Moderacao": {
+      "main": [
+        [
+          {
+            "node": "Montar Acoes Moderacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Acoes Moderacao": {
+      "main": [
+        [
+          {
+            "node": "Tem Body JSON?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Body JSON?": {
+      "main": [
+        [
+          {
+            "node": "Executar Discord REST (Com Body)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Discord REST (Sem Body)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar Discord REST (Com Body)": {
+      "main": [
+        [
+          {
+            "node": "Preparar Pos-Processamento Mod",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Pos-Processamento Mod": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Postgres Pos-Acao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Postgres Pos-Acao": {
+      "main": [
+        [
+          {
+            "node": "Novo Canal de Ticket?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Novo Canal de Ticket?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Boas-Vindas no Ticket",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Confirmar Ticket na Interacao",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

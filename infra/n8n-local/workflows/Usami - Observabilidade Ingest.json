@@ -1,0 +1,282 @@
+{
+  "name": "Usami - Observabilidade Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-observability",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "obs-ingest-0001-4000-8000-000000000001",
+      "name": "Receber Evento de Observabilidade",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-observability-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawInput = $input.first().json;\nconst body = (rawInput && typeof rawInput.body === 'object' && rawInput.body !== null) ? rawInput.body : rawInput;\n\nfunction redact(val) {\n  if (val === null || val === undefined) return null;\n  return String(val)\n    .replace(/Bearer\\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')\n    .replace(/\\b(nvapi|sk|ghp|gho|xoxb|xoxp|AIza)[A-Za-z0-9_-]{8,}\\b/g, '[REDACTED_KEY]')\n    .replace(/((?:x-usami-token|authorization|api[-_]?key|secret|password|token)\\s*[:=]\\s*)([\"']?)[^\\s,\"';&}]+\\2/gi, '$1[REDACTED]')\n    .slice(0, 500);\n}\n\nconst forbidden = new Set(['userMessage', 'reply', 'prompt', 'output', 'messages', 'parameters', 'result', 'authorization', 'cookie', 'x-usami-token']);\nfunction cleanMeta(obj) {\n  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};\n  const out = {};\n  for (const [k, v] of Object.entries(obj)) {\n    if (forbidden.has(k) || forbidden.has(k.toLowerCase())) continue;\n    if (typeof v === 'string') out[k] = redact(v);\n    else if (typeof v === 'number' || typeof v === 'boolean' || v === null) out[k] = v;\n    else if (typeof v === 'object') out[k] = cleanMeta(v);\n  }\n  return out;\n}\n\nconst statusCode = Number.isFinite(Number(body.statusCode)) ? Number(body.statusCode) : null;\nconst durationMs = Number.isFinite(Number(body.durationMs)) ? Math.round(Number(body.durationMs)) : null;\nconst kind = String(body.kind || 'api_call');\nconst source = String(body.source || 'usami-api');\nconst method = body.method ? String(body.method).toUpperCase() : null;\nconst route = body.route ? redact(String(body.route).split('?')[0]) : null;\nconst provider = body.provider ? redact(body.provider) : null;\nconst model = body.model ? redact(body.model) : null;\nconst clientId = body.clientId ? redact(body.clientId).slice(0, 64) : null;\nconst errorCode = body.errorCode ? redact(body.errorCode).slice(0, 64) : null;\nconst errorMessage = body.errorMessage ? redact(body.errorMessage) : null;\nconst isError = Boolean(body.isError || (statusCode !== null && statusCode >= 400) || kind === 'error' || errorMessage);\nconst shouldAlert = Boolean(kind === 'error' || (statusCode !== null && statusCode >= 500) || (isError && source !== 'usami-api') || (statusCode !== null && statusCode >= 400 && source !== 'usami-api'));\nconst timestamp = body.timestamp ? new Date(body.timestamp).toISOString() : new Date().toISOString();\n\nconst record = {\n  timestamp,\n  kind,\n  source,\n  method,\n  route,\n  statusCode,\n  durationMs,\n  provider,\n  model,\n  clientId,\n  isError,\n  errorCode,\n  errorMessage: errorMessage || (statusCode >= 400 ? `HTTP ${statusCode} em ${method || 'REQ'} ${route || '/'}` : null),\n  metadata: cleanMeta(body.metadata)\n};\n\nlet envChannel = '';\ntry {\n  envChannel = ($env && $env.DISCORD_OBS_ERRORS_CHANNEL_ID) ? String($env.DISCORD_OBS_ERRORS_CHANNEL_ID).trim() : '';\n} catch {\n  envChannel = '';\n}\nconst obsErrorsChannelId = envChannel || String(body.channelsConfig?.obsErrorsChannelId || '').trim();\nconst hasErrorsChannel = Boolean(obsErrorsChannelId && !obsErrorsChannelId.startsWith('CONFIGURE_'));\n\nconst discordPayload = {\n  embeds: [{\n    title: `🚨 Erro de Observabilidade (${source})`,\n    description: record.errorMessage || 'Erro registrado sem mensagem detalhada.',\n    color: (statusCode && statusCode < 500) ? 16753920 : 15548997,\n    fields: [\n      { name: 'Origem', value: source, inline: true },\n      { name: 'Rota / Fluxo', value: `${method ? method + ' ' : ''}${route || 'N/D'}`, inline: true },\n      { name: 'Status', value: statusCode !== null ? String(statusCode) : 'N/D', inline: true },\n      { name: 'Latência', value: durationMs !== null ? `${durationMs} ms` : 'N/D', inline: true },\n      { name: 'Modelo / Provedor', value: [provider, model].filter(Boolean).join(' / ') || 'N/D', inline: true }\n    ],\n    timestamp\n  }]\n};\n\nconst payloadB64 = Buffer.from(JSON.stringify(record), 'utf8').toString('base64');\n\nreturn [{\n  json: {\n    record,\n    payloadB64,\n    shouldAlert,\n    obsErrorsChannelId,\n    hasErrorsChannel,\n    discordPayload\n  }\n}];"
+      },
+      "id": "obs-ingest-0002-4000-8000-000000000002",
+      "name": "Sanitizar e Classificar Evento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (\n  SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j\n)\nINSERT INTO obs_api_logs (\n  created_at, event_type, method, route, status_code, duration_ms, provider, model, client_id, is_error, metadata\n)\nSELECT\n  COALESCE((p.j->>'timestamp')::timestamptz, NOW()),\n  COALESCE(p.j->>'kind', 'api_call'),\n  p.j->>'method',\n  p.j->>'route',\n  (p.j->>'statusCode')::int,\n  (p.j->>'durationMs')::int,\n  p.j->>'provider',\n  p.j->>'model',\n  p.j->>'clientId',\n  COALESCE((p.j->>'isError')::boolean, FALSE),\n  COALESCE(p.j->'metadata', '{}'::jsonb)\nFROM p\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "obs-ingest-0003-4000-8000-000000000003",
+      "name": "Gravar Log de API",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Sanitizar e Classificar Evento').item.json.shouldAlert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "obs-ingest-0004-4000-8000-000000000004",
+      "name": "Eh Erro ou Falha?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (\n  SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j\n)\nINSERT INTO obs_error_logs (\n  created_at, source, route_or_workflow, status_code, error_code, error_message, metadata\n)\nSELECT\n  COALESCE((p.j->>'timestamp')::timestamptz, NOW()),\n  COALESCE(p.j->>'source', 'usami-api'),\n  p.j->>'route',\n  (p.j->>'statusCode')::int,\n  p.j->>'errorCode',\n  COALESCE(p.j->>'errorMessage', 'Erro sem mensagem'),\n  COALESCE(p.j->'metadata', '{}'::jsonb)\nFROM p\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $('Sanitizar e Classificar Evento').item.json.payloadB64 }}"
+        }
+      },
+      "id": "obs-ingest-0005-4000-8000-000000000005",
+      "name": "Gravar Log de Erro",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1160,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Sanitizar e Classificar Evento').item.json.hasErrorsChannel }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "obs-ingest-0006-4000-8000-000000000006",
+      "name": "Canal de Erros Configurado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://discord.com/api/v10/channels/' + $('Sanitizar e Classificar Evento').item.json.obsErrorsChannelId + '/messages' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Sanitizar e Classificar Evento').item.json.discordPayload) }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "obs-ingest-0007-4000-8000-000000000007",
+      "name": "Alerta Discord (#usami-erros)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1640,
+        180
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "obs-ingest-0008-4000-8000-000000000008",
+      "name": "Sem Alerta Necessario",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Receber Evento de Observabilidade": {
+      "main": [
+        [
+          {
+            "node": "Sanitizar e Classificar Evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitizar e Classificar Evento": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log de API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log de API": {
+      "main": [
+        [
+          {
+            "node": "Eh Erro ou Falha?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eh Erro ou Falha?": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log de Erro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sem Alerta Necessario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log de Erro": {
+      "main": [
+        [
+          {
+            "node": "Canal de Erros Configurado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Canal de Erros Configurado?": {
+      "main": [
+        [
+          {
+            "node": "Alerta Discord (#usami-erros)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sem Alerta Necessario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

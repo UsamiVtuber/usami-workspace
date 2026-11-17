@@ -57,7 +57,7 @@ Sua tarefa: fazer **code review completo** da PR #${PR_NUMBER} e emitir veredito
 - Arquivos alterados: ${prInfo.files.map(f => f.path).join(', ')}
 
 ## Regras de review (AGENTS.md da raiz)
-1. **Segurança e privacidade**: nunca vazar segredos (`.env`, chaves, tokens, dados pessoais); \`vault/\` é privado — leitura em lote ou alteração fora das pastas de automação documentadas é bloqueio.
+1. **Segurança e privacidade**: nunca vazar segredos (\`.env\`, chaves, tokens, dados pessoais); \`vault/\` é privado — leitura em lote ou alteração fora das pastas de automação documentadas é bloqueio.
 2. **Operações locais**: não abrir portas, publicar serviços, alterar túneis nem remover volumes/backups Docker sem autorização explícita.
 3. **Menor mudança**: diff focado no componente certo (\`usami/\`, \`usami-desktop/\`, \`infra/n8n-local/\`, \`usami-monitor/\`), sem refatorações fora do escopo.
 4. **Componente**: \`usami/\` segue \`usami/AGENTS.md\`; \`usami-desktop/\` não pode regredir erros de \`usami-desktop/docs/KNOWN_ERRORS.md\`; \`infra/n8n-local/\` segue os READMEs e o export não pode divergir da instância ativa sem nota.

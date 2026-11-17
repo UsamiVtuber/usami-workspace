@@ -7,6 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import https from 'node:https';
+import { pathToFileURL } from 'node:url';
 
 const PR_NUMBER = process.argv[2];
 const REPO = 'UsamiVtuber/usami-workspace';
@@ -14,11 +15,6 @@ const MAX_DIFF_CHARS = 120000;
 // O fetch do Node (undici) desiste em 300 s sem o primeiro byte; o Nemotron
 // Ultra demora mais que isso para começar a responder sem streaming.
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
-
-if (!PR_NUMBER) {
-  console.error('Uso: node scripts/qa-review.mjs <PR_NUMBER>');
-  process.exit(1);
-}
 
 async function runGh(args) {
   return new Promise((resolve, reject) => {
@@ -100,57 +96,95 @@ async function callBrainModel(prompt) {
 
   const model = process.env.BRAIN_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
 
-  const { status, body } = await postJson(
+  const { status, content, raw } = await requestStreaming(
     'https://integrate.api.nvidia.com/v1/chat/completions',
     {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'Accept': 'application/json'
+      'Accept': 'text/event-stream'
     },
     JSON.stringify({
       model,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
       temperature: 0.2,
-      max_tokens: 3000
+      max_tokens: 3000,
+      stream: true
     })
   );
 
   if (status < 200 || status >= 300) {
-    throw new Error(`NVIDIA API ${status}: ${body.slice(0, 500)}`);
+    throw new Error(`NVIDIA API ${status}: ${raw.slice(0, 500)}`);
   }
-
-  let data;
-  try {
-    data = JSON.parse(body);
-  } catch {
-    throw new Error(`Resposta não-JSON da API (${body.length} bytes)`);
-  }
-
-  const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('Resposta vazia do modelo');
-  return JSON.parse(content);
+  return parseJsonLoose(content);
 }
 
-function postJson(url, headers, body) {
+// O modelo de raciocínio pode passar minutos gerando antes do primeiro token.
+// Sem streaming a conexão fica muda e morre (headersTimeout de 300 s no fetch,
+// ou ETIMEDOUT de socket); com streaming os eventos chegam enquanto ele pensa.
+export function requestStreaming(url, headers, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const req = https.request({
       hostname: target.hostname,
+      port: target.port || 443,
       path: target.pathname + target.search,
       method: 'POST',
       headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
-      timeout: REQUEST_TIMEOUT_MS
+      timeout: timeoutMs
     }, (res) => {
-      let data = '';
+      let raw = '';
+      let deltas = '';
+      let buffer = '';
+      const consume = (line) => {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) return;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        try {
+          deltas += JSON.parse(payload).choices?.[0]?.delta?.content || '';
+        } catch {
+          // evento cortado no meio do chunk: o próximo pedaço completa
+        }
+      };
       res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      res.on('data', (chunk) => {
+        raw += chunk;
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        lines.forEach(consume);
+      });
+      res.on('end', () => {
+        if (buffer) consume(buffer);
+        if (deltas) return resolve({ status: res.statusCode, content: deltas, raw });
+        let content = '';
+        try {
+          content = JSON.parse(raw).choices?.[0]?.message?.content || '';
+        } catch {
+          // resposta não-JSON com erro HTTP cai no raw do chamador
+        }
+        resolve({ status: res.statusCode, content, raw });
+      });
     });
-    req.on('timeout', () => req.destroy(new Error(`Timeout de ${REQUEST_TIMEOUT_MS / 60000} min na API NVIDIA`)));
+    req.on('timeout', () => req.destroy(new Error(`Timeout de ${Math.round(timeoutMs / 60000)} min na API NVIDIA`)));
     req.on('error', reject);
     req.end(body);
   });
+}
+
+export function parseJsonLoose(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenced) return JSON.parse(fenced[1]);
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+    throw new Error('Resposta do modelo não é JSON');
+  }
 }
 
 function formatComment(review) {
@@ -194,6 +228,10 @@ function formatComment(review) {
 }
 
 async function main() {
+  if (!PR_NUMBER) {
+    console.error('Uso: node scripts/qa-review.mjs <PR_NUMBER>');
+    process.exit(1);
+  }
   console.log(`🔍 Iniciando QA Review da PR #${PR_NUMBER}...`);
 
   try {
@@ -222,4 +260,6 @@ async function main() {
   }
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

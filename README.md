@@ -119,6 +119,32 @@ Rotas de memória, personagem, agente, STT, mídia e telemetria exigem `x-usami-
 | `usami-desktop/` | `cargo test` | 51 testes: contratos de chat/TTS/STT/mídia/agente, WAV do gravador, cadeado do microfone, despedida, Central do Agente, módulo LoL e resolução de assets |
 | `usami-monitor/` | `python -m pytest tests -q` | guardas do painel (argv sem shell, contenção de caminho, CSRF); no Windows uma asserção de caminho falha pelo separador `\` — rode no notebook Linux |
 
+## QA review pela Usami (CI)
+
+Cada PR para `master` recebe um review automático da **Usami** (`.github/workflows/qa-review.yml`
++ `scripts/qa-review.mjs`): o diff vai para o `BRAIN_MODEL` (NVIDIA Nemotron 3 Ultra, via API
+NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua sendo do mantenedor.
+
+- **Runner**: self-hosted no notebook Linux, labels `[self-hosted, linux, usami-notebook]`,
+  `timeout-minutes: 25`. O job usa o `gh` autenticado como **Usamiin** no keychain do SO —
+  nenhum token do GitHub fica no CI.
+- **Provisionar o runner**: registre no nível da organização com
+  `./config.sh --url https://github.com/UsamiVtuber --token <token da UI> --name luke --labels linux,usami-notebook --unattended --replace`
+  (o comando que a UI gera não inclui `--name`/`--labels`, e sem `usami-notebook` nenhum job casa).
+  O serviço é `actions.runner.UsamiVtuber.luke.service`, sem `Restart=always` — confira se está
+  ativo depois de reiniciar o notebook.
+- **Runner group `Default`**: precisa de **"Allow public repositories"** marcado
+  (Settings → Actions → Runner groups). Com essa opção desligada o runner aparece **Idle** e os
+  jobs deste repositório público ficam `queued` para sempre, sem erro visível.
+- **Host**: Node.js 22+ e `gh` autenticado como Usamiin (`gh auth status` roda como primeiro check
+  e falha o job se o login não estiver lá).
+- **Secret**: `NVIDIA_API_KEY` como secret no nível da organização (ou do repo) com acesso a este
+  repositório; o workflow o expõe só ao job (`${{ secrets.NVIDIA_API_KEY }}`). O modelo vem da
+  variável `BRAIN_MODEL` no próprio workflow.
+- **Re-run manual**: `gh workflow run qa-review.yml -f pr_number=5`. Enquanto o workflow ainda não
+  estiver na `master`, acrescente `--ref feat/qa-review-workspace` (ou a branch que o contém).
+  Um push novo na PR cancela o review em andamento (`concurrency`).
+
 ## Releases
 
 - **Desktop**: publicação **local**, sem PAT em CI, via `usami-desktop/scripts/release.ps1`

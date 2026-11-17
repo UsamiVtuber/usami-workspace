@@ -12,6 +12,13 @@ on:
 
 # Roda APENAS no self-hosted runner do notebook Linux (label: usami-notebook)
 # O gh CLI usa token do keychain do SO (DPAPI/libsecret) — NÃO env vars
+#
+# Um push novo na mesma PR cancela o review em andamento: o veredito antigo
+# sairia sobre um diff que já não existe.
+concurrency:
+  group: qa-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
 jobs:
   qa-review:
     name: Usami QA Review

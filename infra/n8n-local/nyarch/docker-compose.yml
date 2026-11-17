@@ -51,6 +51,10 @@ services:
       N8N_OBSERVABILITY_API_KEY: ${N8N_OBSERVABILITY_API_KEY:-}
       DISCORD_OBS_ERRORS_CHANNEL_ID: ${DISCORD_OBS_ERRORS_CHANNEL_ID:-}
       DISCORD_OBS_SUMMARY_CHANNEL_ID: ${DISCORD_OBS_SUMMARY_CHANNEL_ID:-}
+      # Webhook do canal de vagas, lido pelo workflow "Busca e Matching de Vagas"
+      # como {{ $env.DISCORD_VAGAS_WEBHOOK_URL }}. Nunca cole a URL no export:
+      # ate 2026-11-17 ela estava inline e vazou num repositorio publico.
+      DISCORD_VAGAS_WEBHOOK_URL: ${DISCORD_VAGAS_WEBHOOK_URL:-}
     volumes:
       # OS TRES MOUNTS SAO OBRIGATORIOS. Sem eles o n8n sobe num banco vazio dentro
       # do container e parece funcionar normalmente -- foi uma regressao real de 2026-10-25.

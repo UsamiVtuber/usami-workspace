@@ -1,0 +1,58 @@
+name: QA Review (Usami)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Número da PR para revisar (re-run manual)'
+        required: true
+        type: string
+
+# Roda APENAS no self-hosted runner do notebook Linux (label: usami-notebook)
+# O gh CLI usa token do keychain do SO (DPAPI/libsecret) — NÃO env vars
+jobs:
+  qa-review:
+    name: Usami QA Review
+    runs-on: [self-hosted, linux, usami-notebook]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write  # para gh pr comment
+
+    env:
+      # Modelo de raciocínio profundo (NVIDIA Nemotron 3 Ultra via API NVIDIA direta)
+      BRAIN_MODEL: nvidia/nemotron-3-ultra-550b-a55b
+      # Chave da NVIDIA (organization secret: Settings → Secrets → Actions → Organization secrets)
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # histórico completo para diff
+
+      - name: Verifica gh autenticado como Usamiin
+        run: |
+          gh auth status --hostname github.com
+          echo "✅ gh CLI autenticado (token no keychain do SO)"
+
+      - name: Roda QA Review
+        id: review
+        run: |
+          PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          echo "🔍 Revisando PR #$PR_NUM..."
+          node scripts/qa-review.mjs "$PR_NUM"
+        shell: bash
+
+      - name: Falha se veredito = PRECISA_AJUSTES
+        if: failure() && steps.review.outcome == 'failure'
+        run: |
+          echo "⚠️ Usami pediu ajustes — ver comentário na PR"
+          exit 1
+
+      - name: Sucesso se veredito = APROVADO
+        if: success()
+        run: |
+          echo "🎉 Usami aprovou a PR — pronto para merge"

@@ -6,10 +6,14 @@
  */
 
 import { spawn } from 'node:child_process';
+import https from 'node:https';
 
 const PR_NUMBER = process.argv[2];
 const REPO = 'UsamiVtuber/usami-workspace';
 const MAX_DIFF_CHARS = 120000;
+// O fetch do Node (undici) desiste em 300 s sem o primeiro byte; o Nemotron
+// Ultra demora mais que isso para começar a responder sem streaming.
+const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 
 if (!PR_NUMBER) {
   console.error('Uso: node scripts/qa-review.mjs <PR_NUMBER>');
@@ -96,31 +100,57 @@ async function callBrainModel(prompt) {
 
   const model = process.env.BRAIN_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
 
-  const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
+  const { status, body } = await postJson(
+    'https://integrate.api.nvidia.com/v1/chat/completions',
+    {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify({
+    JSON.stringify({
       model,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
       temperature: 0.2,
       max_tokens: 3000
     })
-  });
+  );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`NVIDIA API ${res.status}: ${err}`);
+  if (status < 200 || status >= 300) {
+    throw new Error(`NVIDIA API ${status}: ${body.slice(0, 500)}`);
   }
 
-  const data = await res.json();
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error(`Resposta não-JSON da API (${body.length} bytes)`);
+  }
+
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('Resposta vazia do modelo');
   return JSON.parse(content);
+}
+
+function postJson(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+      timeout: REQUEST_TIMEOUT_MS
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on('timeout', () => req.destroy(new Error(`Timeout de ${REQUEST_TIMEOUT_MS / 60000} min na API NVIDIA`)));
+    req.on('error', reject);
+    req.end(body);
+  });
 }
 
 function formatComment(review) {

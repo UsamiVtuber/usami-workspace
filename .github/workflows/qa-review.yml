@@ -16,7 +16,7 @@ jobs:
   qa-review:
     name: Usami QA Review
     runs-on: [self-hosted, linux, usami-notebook]
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write  # para gh pr comment

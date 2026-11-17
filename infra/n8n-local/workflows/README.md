@@ -71,9 +71,9 @@ Regra de ouro: **o n8n não move o avatar diretamente.** Estes workflows só faz
 tarefas assíncronas/agendadas de casa (receber evento, listar/consolidar, escrever
 nota) e, no máximo, **enfileiram** um comando para o cliente aplicar; nenhum
 controla osso/frame-loop. Dois deles (`Daily Briefing` e `Relatorio Financeiro`)
-têm nó HTTP em `POST /api/n8n/command` com credencial `Usami Token`, mas enviam
-`{ text, gesture }` enquanto o contrato atual exige `type`
-(`say`/`proactive_say`/...): hoje a API responde 400 e nada entra na fila.
+têm nós HTTP em `POST /api/n8n/command` com credencial `Usami Token`: um envia
+`{ type: 'proactive_say', message }` e o outro `{ type: 'gesture', name }`, porque
+a fila aceita **um** comando por POST e exige `type`.
 Aprovar técnica (proposta → validada) continua sendo decisão de uma PESSOA.
 
 Regra de escrita no vault: automações só gravam nas pastas de automação
@@ -132,9 +132,9 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 ## Usami - Daily Briefing (agendado - Fase 2)
 - **Arquivo:** `Usami - Daily Briefing (agendado).json`.
 - **Gatilho:** Schedule Trigger diário às **07:30** (`America/Sao_Paulo`).
-- **Nós:** Schedule → HTTP Request (Open-Meteo Clima) → Code (Formatar Nota de Briefing) → Convert to File → Read/Write File (`Inbox/Automations/briefing-AAAA-MM-DD.md`) → HTTP Request (`POST /api/n8n/command`).
-- **Papel:** Gera o resumo matinal no Obsidian com dados de clima e foco do dia antes do usuário abrir o app e tenta enfileirar uma saudação com gesto de aceno (`wave`).
-- **Atenção (verificado no export e na instância):** o nó final envia `{ text, gesture }` para `http://10.42.0.1:8787/api/n8n/command` com credencial `Usami Token`, mas o contrato da fila exige `type` — a API responde 400 e nada é enfileirado (bug de contrato ainda em aberto). Em 2026-11-17 o draft foi publicado como versão ativa (`ea97a937-...`), substituindo a `8be67225-...` que gravava em `$env.USAMI_VAULT_PATH/Inbox/Automations` e chamava `127.0.0.1:8787`.
+- **Nós:** Schedule → HTTP Request (Open-Meteo Clima) → Code (Formatar Nota de Briefing) → Convert to File → Read/Write File (`Inbox/Automations/briefing-AAAA-MM-DD.md`) → HTTP Request (`POST /api/n8n/command`, fala) → HTTP Request (`POST /api/n8n/command`, gesto).
+- **Papel:** Gera o resumo matinal no Obsidian com dados de clima e foco do dia antes do usuário abrir o app e enfileira uma saudação com gesto de aceno (`wave`).
+- **Contrato da fila (corrigido em 2026-11-17):** `/api/n8n/command` aceita **um** comando por POST e exige `type`; o corpo antigo (`{ text, gesture }`) respondia 400. Agora são dois nós: `{ type: 'proactive_say', message: proactiveSay }` (timeout 10 s) e `{ type: 'gesture', name: 'wave' }`. Validado na instância com execução manual (exec 16413): `ok:true` nos dois comandos. O publish de 2026-11-17 (`5b6bf120-...`) substituiu a versão ativa `8be67225-...`, que gravava em `$env.USAMI_VAULT_PATH/Inbox/Automations` e chamava `127.0.0.1:8787`.
 - **Segurança:** Apenas usa a API pública e aberta do Open-Meteo (zero chave/custo) e grava estritamente em `Inbox/Automations/`.
 
 ## Usami - Consolidacao Noturna (agendado - Fase 4)
@@ -148,9 +148,9 @@ apenas pelo workflow de respostas, conforme já estabelecido.
 ## Usami - Relatorio Financeiro (agendado - Fase 3)
 - **Arquivo:** `Usami - Relatorio Financeiro (agendado).json`.
 - **Gatilho:** Schedule Trigger diário às **08:00** (`America/Sao_Paulo`).
-- **Nós:** Schedule → HTTP Request (`POST http://10.42.0.1:8787/api/agent/tools/finance.transactions`, credencial `Usami Token`) → Code (Processar Extrato e Alertas) → Convert to File → Read/Write File (`/files/obsidian/usami/Inbox/Automations/financas-AAAA-MM.md`) → HTTP Request (`POST /api/n8n/command`).
-- **Papel:** Consulta transações e saldos do Open Finance (Pluggy / Belvo) em modo somente leitura via API de ferramentas da Usami, consolida em relatório mensal no Obsidian e tenta avisar com gesto `surprised` se alguma transação de saída passar de R$ 500 ou com gesto `nod` na atualização normal.
-- **Atenção:** o nó final envia o mesmo corpo inválido do briefing (`{ text, gesture }` sem `type`), então a API responde 400 e o aviso não entra na fila.
+- **Nós:** Schedule → HTTP Request (`POST http://10.42.0.1:8787/api/agent/tools/finance.transactions`, credencial `Usami Token`) → Code (Processar Extrato e Alertas) → Convert to File → Read/Write File (`/files/obsidian/usami/Inbox/Automations/financas-AAAA-MM.md`) → HTTP Request (`POST /api/n8n/command`, fala) → HTTP Request (`POST /api/n8n/command`, gesto).
+- **Papel:** Consulta transações e saldos do Open Finance (Pluggy / Belvo) em modo somente leitura via API de ferramentas da Usami, consolida em relatório mensal no Obsidian e avisa com gesto `surprised` se alguma transação de saída passar de R$ 500, ou com gesto `nod` na atualização normal.
+- **Contrato da fila (corrigido em 2026-11-17):** dois nós, como no briefing: `{ type: 'proactive_say', message: proactiveSay }` (timeout 10 s) e `{ type: 'gesture', name: <surprised|nod> }`. Validado com execução manual (exec 16401): `ok:true` nos dois. Sem credenciais do Open Finance a consulta responde 404 e a nota sai como "indisponível" (o nó Code já trata isso).
 - **Segurança:** Somente leitura, token protegido e escrita exclusiva em `Inbox/Automations/`.
 
 ## Observabilidade e Bot Discord da Usami (modulares)

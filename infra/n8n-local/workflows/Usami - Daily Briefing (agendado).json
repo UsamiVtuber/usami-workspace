@@ -105,17 +105,17 @@
         "bodyParameters": {
           "parameters": [
             {
-              "name": "text",
-              "value": "={{ $('Gerar Nota de Briefing').item.json.proactiveSay }}"
+              "name": "type",
+              "value": "proactive_say"
             },
             {
-              "name": "gesture",
-              "value": "wave"
+              "name": "message",
+              "value": "={{ $('Gerar Nota de Briefing').item.json.proactiveSay }}"
             }
           ]
         },
         "options": {
-          "timeout": 3000
+          "timeout": 10000
         }
       },
       "id": "e1f2a3b4-0006-4000-8000-000000000006",
@@ -132,6 +132,54 @@
           "name": "Usami Token"
         },
         "genericAuth": {
+          "id": "wDuW9xOBtCooZtN2",
+          "name": "Usami Token"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "url": "http://10.42.0.1:8787/api/n8n/command",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "gesture"
+            },
+            {
+              "name": "name",
+              "value": "wave"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 3000
+        }
+      },
+      "id": "e1f2a3b4-0007-4000-8000-000000000007",
+      "name": "Notificar Usami (Gesto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
           "id": "wDuW9xOBtCooZtN2",
           "name": "Usami Token"
         }
@@ -189,6 +237,17 @@
         [
           {
             "node": "Notificar Usami (Fila de Comandos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Usami (Fila de Comandos)": {
+      "main": [
+        [
+          {
+            "node": "Notificar Usami (Gesto)",
             "type": "main",
             "index": 0
           }

@@ -267,7 +267,7 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "https://discord.com/api/webhooks/1571902797819936960/6Gzbk_ZBQC9pBmpqZ043DeJQRAEuSyOHPMXv16lieB-p4WaDla7UgN8WLvMAp8yjuvMU",
+        "url": "={{ $env.DISCORD_VAGAS_WEBHOOK_URL }}",
         "authentication": "none",
         "sendBody": true,
         "contentType": "json",

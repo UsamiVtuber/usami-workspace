@@ -7,6 +7,19 @@ Nada aqui é publicado/ativado automaticamente. Os exports atuais vêm com
 estado da instância quando foram gerados), mas importar não ativa nada: publicar
 é passo manual (ou pelo MCP).
 
+## Segredos em workflows
+
+Nunca cole token, senha ou URL de webhook no JSON do export. O webhook do
+Discord do workflow de vagas ficou inline e foi para `origin/master` de um
+repositório público (commit `317c62e`, 2026-11-16); em 2026-11-17 ele foi
+trocado por `{{ $env.DISCORD_VAGAS_WEBHOOK_URL }}` e a URL antiga deve ser
+tratada como **comprometida**: regenere o webhook no Discord e nunca reative a
+antiga. Reescrever o histórico não apaga o valor — a contenção é a rotação.
+
+Nós que precisam de segredo leem `{{ $env.NOME }}` (a instância do Nyarch roda
+com `N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"`); o valor vive só em `~/n8n/.env` e
+o `nyarch/docker-compose.yml` o repassa como variável do container.
+
 ## Instância autoritativa e URL real
 
 A instância que vale é a do **Nyarch** (`http://10.42.0.1:5678`; é para onde o
@@ -165,5 +178,6 @@ Credenciais necessárias no n8n após importar os JSONs:
 - **Gatilho:** Schedule Trigger diário às **09:00** (`America/Sao_Paulo`).
 - **Nós:** Schedule → HTTP Request (`GET https://remoteok.com/api`) → Code (`Extrair Vagas`) → Code (`Calcular Score ATS`) → Code (`Filtrar Score >= 10`) → Data Table (`Filtrar Vagas Ineditas` via `rowNotExists` em `candidatura_id`) → Data Table (`Registrar na Tabela`, status `Nova`) → Wait (5s) → Code (`Preparar Mensagem Discord`) → HTTP Request (`Notificar Discord` via Webhook).
 - **Papel:** Varre vagas remotas públicas, calcula pontuação de afinidade ATS para o perfil de Engenharia de Software / IA / Backend, desduplica contra a Data Table local `controle_candidaturas` para reter apenas vagas inéditas, cadastra com status `Nova` e envia alerta formatado no Discord com link direto para candidatura manual.
+- **Webhook do Discord:** o nó `Notificar Discord` usa `{{ $env.DISCORD_VAGAS_WEBHOOK_URL }}`. Defina a URL em `~/n8n/.env` e recrie o container (`docker compose up -d n8n`); variável vazia faz o nó falhar com erro visível na observabilidade, em vez de sumir em silêncio.
 - **Segurança & Idempotência:** Não realiza submissões/candidaturas automáticas (apenas triagem e notificação informativa). Idempotência garantida pelo nó nativo `rowNotExists` que impede alertas repetidos ou re-cadastro de IDs já processados.
 

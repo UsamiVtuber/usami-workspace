@@ -1,0 +1,128 @@
+{
+  "name": "Usami - Spotify Scrobbler (agendado)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "spotify-scrobble-0001-4000-8000-000000000001",
+      "name": "A cada 2 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://10.42.0.91:8787/api/connectors/spotify/now-playing",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Origin",
+              "value": "http://127.0.0.1:5173"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "spotify-scrobble-0002-4000-8000-000000000002",
+      "name": "Consultar Now Playing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nif (!data || data.error || !data.ok || !data.connected || !data.playing || !data.track || !data.track.id) {\n  return [];\n}\n\nconst track = data.track;\nconst progressMs = Number(data.progressMs || 0);\nconst durationMs = Number(track.durationMs || 0);\n\n// Regra estilo Last.fm: só faz scrobble após 20s (ou em faixas curtas <40s)\nif (durationMs >= 40000 && progressMs < 20000) {\n  return [];\n}\n\nconst state = $getWorkflowStaticData('global');\nconst nowMs = Date.now();\nconst minCooldownMs = Math.max(30000, Math.round((durationMs || 180000) * 0.5));\nconst sameTrack = state.lastTrackId === track.id;\nconst restarted = sameTrack && Number.isFinite(state.lastProgressMs) && progressMs + 15000 < state.lastProgressMs;\n\nif (sameTrack && !restarted && (nowMs - Number(state.lastScrobbleAt || 0)) < minCooldownMs) {\n  state.lastProgressMs = progressMs;\n  return [];\n}\n\nstate.lastTrackId = track.id;\nstate.lastProgressMs = progressMs;\nstate.lastScrobbleAt = nowMs;\n\nconst record = {\n  playedAt: new Date(nowMs).toISOString(),\n  trackId: String(track.id),\n  trackUri: track.uri ? String(track.uri) : null,\n  trackName: String(track.name || 'Faixa desconhecida').slice(0, 250),\n  artists: Array.isArray(track.artists) ? track.artists.map(a => String(a).slice(0, 120)) : [],\n  album: track.album ? String(track.album).slice(0, 250) : null,\n  durationMs: Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs) : null,\n  progressMs: Number.isFinite(progressMs) ? Math.round(progressMs) : 0,\n  deviceName: data.device && data.device.name ? String(data.device.name).slice(0, 120) : null\n};\n\nreturn [{\n  json: {\n    record,\n    payloadB64: Buffer.from(JSON.stringify(record), 'utf8').toString('base64')\n  }\n}];"
+      },
+      "id": "spotify-scrobble-0003-4000-8000-000000000003",
+      "name": "Avaliar Scrobble",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS spotify_scrobbles (\n  id BIGSERIAL PRIMARY KEY,\n  played_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n  track_id TEXT NOT NULL,\n  track_uri TEXT,\n  track_name TEXT NOT NULL,\n  artists JSONB NOT NULL DEFAULT '[]'::jsonb,\n  album TEXT,\n  duration_ms INT,\n  progress_ms INT,\n  device_name TEXT\n);\nCREATE INDEX IF NOT EXISTS idx_spotify_scrobbles_played_at ON spotify_scrobbles (played_at DESC);\nCREATE INDEX IF NOT EXISTS idx_spotify_scrobbles_track_id ON spotify_scrobbles (track_id);\n\nWITH p AS (\n  SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j\n)\nINSERT INTO spotify_scrobbles (\n  played_at, track_id, track_uri, track_name, artists, album, duration_ms, progress_ms, device_name\n)\nSELECT\n  COALESCE((p.j->>'playedAt')::timestamptz, NOW()),\n  p.j->>'trackId',\n  p.j->>'trackUri',\n  p.j->>'trackName',\n  COALESCE(p.j->'artists', '[]'::jsonb),\n  p.j->>'album',\n  (p.j->>'durationMs')::int,\n  (p.j->>'progressMs')::int,\n  p.j->>'deviceName'\nFROM p\nRETURNING id, track_name, played_at;",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "spotify-scrobble-0004-4000-8000-000000000004",
+      "name": "Gravar Scrobble no Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "A cada 2 minutos": {
+      "main": [
+        [
+          {
+            "node": "Consultar Now Playing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Now Playing": {
+      "main": [
+        [
+          {
+            "node": "Avaliar Scrobble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avaliar Scrobble": {
+      "main": [
+        [
+          {
+            "node": "Gravar Scrobble no Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

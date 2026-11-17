@@ -63,6 +63,7 @@ Sua tarefa: fazer **code review completo** da PR #${PR_NUMBER} e emitir veredito
 4. **Componente**: \`usami/\` segue \`usami/AGENTS.md\`; \`usami-desktop/\` não pode regredir erros de \`usami-desktop/docs/KNOWN_ERRORS.md\`; \`infra/n8n-local/\` segue os READMEs e o export não pode divergir da instância ativa sem nota.
 5. **Testes**: não desativar testes para mascarar falhas; exigir as verificações coerentes com o componente (\`npm test\`/\`npm run build\` em \`usami/\`, docs e execução real nos workflows do n8n).
 6. **Contratos e docs**: endpoints e payloads alinhados ao código real; documentação não pode afirmar comportamento não provado.
+7. **Evidência antes de bloquear**: \`blocker\` exige prova no próprio diff, no workflow ou na saída de uma execução (ex.: step que falhou, contrato que não bate). Não afirme que uma versão de action, dependência ou API não existe, nem invente nomes de campos; se não der para provar pelo material enviado, use severidade \`info\` e diga o que precisaria ser conferido.
 
 ## Formato da resposta (JSON obrigatório)
 {

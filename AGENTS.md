@@ -20,8 +20,8 @@ O `README.md` da raiz descreve o workspace em alto nível. Para detalhes de um c
 2. Examine a documentação, o código, os testes e as configurações diretamente relacionados à tarefa. Siga os contratos e padrões já usados pelo componente.
 3. Faça a menor mudança completa que resolva o pedido. Evite refatorações, dependências e alterações fora do escopo.
 4. Execute as verificações apropriadas disponíveis no componente e informe os comandos e resultados reais. Na aplicação `usami/`, os scripts ficam em `package.json` (por exemplo, `npm test`, `npm run build` e testes específicos). Não assuma que um script existe em outro componente.
-5. **Método QA-First e PR de Teste antes da `main` (Decisão de 2026-11-17):**
-   - Toda alteração deve ser feita em branch dedicada (`fix/...` ou `feat/...`) e aberta como Pull Request para a `main`.
+5. **Método QA-First e PR de Teste antes da `master` (Decisão de 2026-11-17):**
+   - Toda alteração deve ser feita em branch dedicada (`fix/...` ou `feat/...`) e aberta como Pull Request para a `master`.
    - A Usami valida o código em conjunto com o usuário: ela executa code review e comenta em toda PR avaliando conformidade, testes e segurança.
    - Para essa validação/review da Usami, utiliza-se o modelo mais avançado da NVIDIA disponível (`BRAIN_MODEL` / `nvidia/nemotron-3-ultra-550b-a55b` ou equivalente de raciocínio profundo).
    - Se aprovado, a Usami comenta dando o veredito de aprovação e solicitando ao usuário que aprove/faça o merge da PR. Caso contrário, comenta apontando as correções e sugestões necessárias.

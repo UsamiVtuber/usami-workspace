@@ -45,6 +45,7 @@ services:
       N8N_SANDBOX_SERVICE_URL: http://n8n-sandbox-api:8080
       N8N_SANDBOX_SERVICE_API_KEY: ${N8N_SANDBOX_SERVICE_API_KEY:?defina em ~/n8n/.env}
       # Observabilidade e canais Discord dedicados (usados pelos workflows).
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
       N8N_OBSERVABILITY_API_KEY: ${N8N_OBSERVABILITY_API_KEY:-}

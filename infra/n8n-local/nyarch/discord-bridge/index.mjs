@@ -355,66 +355,83 @@ client.on('messageCreate', async message => {
       const isPdf = mime === 'application/pdf' || ext === 'pdf';
       const isTxt = mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml' || TEXT_EXTENSIONS.has(ext);
 
-      if (att.size <= 25 * 1024 * 1024) {
-        try {
-          const res = await fetch(att.url, { signal: AbortSignal.timeout(25000) });
-          if (res.ok) {
-            const arrayBuf = await res.arrayBuffer();
-            const buffer = Buffer.from(arrayBuf);
+      if (att.size <= 100 * 1024 * 1024) {
+        if (isVid) {
+          // Vídeos: envia diretamente a URL do CDN do Discord para a Usami baixar localmente,
+          // evitando estourar o limite de webhook do n8n com dezenas de MBs em base64.
+          media = {
+            url: att.url,
+            mimeType: att.contentType || guessMimeType(att.name),
+            filename: att.name,
+            size: att.size,
+          };
+        } else {
+          try {
+            const res = await fetch(att.url, { signal: AbortSignal.timeout(25000) });
+            if (res.ok) {
+              const arrayBuf = await res.arrayBuffer();
+              const buffer = Buffer.from(arrayBuf);
 
-            if (isImg) {
-              media = {
-                mimeType: att.contentType || guessMimeType(att.name),
-                data: buffer.toString('base64'),
-                filename: att.name,
-              };
-            } else if (isVid) {
-              media = {
-                mimeType: att.contentType || guessMimeType(att.name),
-                data: buffer.toString('base64'),
-                filename: att.name,
-              };
-            } else if (isAud) {
-              media = {
-                mimeType: att.contentType || (ext === 'ogg' || ext === 'opus' ? 'audio/ogg' : (ext === 'wav' ? 'audio/wav' : 'audio/mp3')),
-                data: buffer.toString('base64'),
-                filename: att.name,
-              };
-            } else if (isPdf) {
-              const pdfText = await extractPdfText(buffer);
-              const contentToEncode = pdfText || '[PDF sem texto selecionável ou digitalizado como imagem]';
-              media = {
-                mimeType: 'text/plain',
-                data: Buffer.from(contentToEncode, 'utf8').toString('base64'),
-                filename: att.name,
-              };
-            } else if (isTxt) {
-              const fileText = buffer.toString('utf8');
-              media = {
-                mimeType: 'text/plain',
-                data: Buffer.from(fileText, 'utf8').toString('base64'),
-                filename: att.name,
-              };
-            } else {
-              // Outros arquivos: tenta ler como UTF-8 se for texto
-              try {
-                const genericText = buffer.toString('utf8');
-                if (/^[\x09\x0A\x0D\x20-\x7E\xC2-\xF4]*$/.test(genericText.slice(0, 1000))) {
-                  media = {
-                    mimeType: 'text/plain',
-                    data: Buffer.from(genericText, 'utf8').toString('base64'),
-                    filename: att.name,
-                  };
-                } else {
-                  cleanContent += `\n\n[Arquivo recebido: ${att.name} (${(att.size / 1024).toFixed(1)} KB) - formato não suportado diretamente]`;
+              if (isImg) {
+                media = {
+                  url: att.url,
+                  mimeType: att.contentType || guessMimeType(att.name),
+                  data: buffer.toString('base64'),
+                  filename: att.name,
+                };
+              } else if (isAud) {
+                media = {
+                  url: att.url,
+                  mimeType: att.contentType || (ext === 'ogg' || ext === 'opus' ? 'audio/ogg' : (ext === 'wav' ? 'audio/wav' : 'audio/mp3')),
+                  data: buffer.toString('base64'),
+                  filename: att.name,
+                };
+              } else if (isPdf) {
+                const pdfText = await extractPdfText(buffer);
+                const contentToEncode = pdfText || '[PDF sem texto selecionável ou digitalizado como imagem]';
+                media = {
+                  url: att.url,
+                  mimeType: 'text/plain',
+                  data: Buffer.from(contentToEncode, 'utf8').toString('base64'),
+                  filename: att.name,
+                };
+              } else if (isTxt) {
+                const fileText = buffer.toString('utf8');
+                media = {
+                  url: att.url,
+                  mimeType: 'text/plain',
+                  data: Buffer.from(fileText, 'utf8').toString('base64'),
+                  filename: att.name,
+                };
+              } else {
+                // Outros arquivos: tenta ler como UTF-8 se for texto
+                try {
+                  const genericText = buffer.toString('utf8');
+                  if (/^[\x09\x0A\x0D\x20-\x7E\xC2-\xF4]*$/.test(genericText.slice(0, 1000))) {
+                    media = {
+                      url: att.url,
+                      mimeType: 'text/plain',
+                      data: Buffer.from(genericText, 'utf8').toString('base64'),
+                      filename: att.name,
+                    };
+                  } else {
+                    cleanContent += `\n\n[Arquivo recebido: ${att.name} (${(att.size / 1024).toFixed(1)} KB) - formato não suportado diretamente]`;
+                  }
+                } catch {
+                  cleanContent += `\n\n[Arquivo recebido: ${att.name}]`;
                 }
-              } catch {
-                cleanContent += `\n\n[Arquivo recebido: ${att.name}]`;
               }
             }
+          } catch (err) {
+            console.warn('[discord-bridge] Falha ao processar anexo:', redactSecrets(err?.message || err));
+            // Fallback para URL direta
+            media = {
+              url: att.url,
+              mimeType: att.contentType || guessMimeType(att.name),
+              filename: att.name,
+              size: att.size,
+            };
           }
-        } catch (err) {
-          console.warn('[discord-bridge] Falha ao processar anexo:', redactSecrets(err?.message || err));
         }
       }
     }

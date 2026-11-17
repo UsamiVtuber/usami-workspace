@@ -1,5 +1,11 @@
 {
+  "updatedAt": "2026-11-16T15:03:14.000Z",
+  "createdAt": "2026-11-16T04:15:06.089Z",
+  "id": "8fRPLku2ViH8VutQ",
   "name": "Usami - Discord Chat Companion",
+  "description": null,
+  "active": true,
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -20,7 +26,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst content = String(body.content || '').trim();\nconst author = body.author || {};\nconst authorName = String(author.globalName || author.username || 'amigo').trim();\nconst channelId = String(body.channelId || '').trim();\nconst messageId = String(body.messageId || '').trim();\nconst guildId = body.guildId ? String(body.guildId) : null;\nconst isDm = Boolean(body.isDm || !guildId);\nconst media = (body.media && typeof body.media === 'object' && body.media.data) ? body.media : null;\n\nif (!content && !media) {\n  throw new Error('Evento discord.chat_message sem content nem media.');\n}\nif (!channelId) {\n  throw new Error('Evento discord.chat_message sem channelId.');\n}\n\nconst userText = content || (media ? 'Dá uma olhada nisso aqui!' : '');\nconst usamiMessage = `[Discord | ${authorName}]: ${userText}`.slice(0, 1800);\n\nreturn [{\n  json: {\n    channelId,\n    messageId,\n    guildId,\n    isDm,\n    authorName,\n    content: userText,\n    usamiMessage,\n    hasMedia: Boolean(media),\n    media\n  }\n}];"
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst content = String(body.content || '').trim();\nconst author = body.author || {};\nconst authorName = String(author.globalName || author.username || 'amigo').trim();\nconst channelId = String(body.channelId || '').trim();\nconst messageId = String(body.messageId || '').trim();\nconst guildId = body.guildId ? String(body.guildId) : null;\nconst isDm = Boolean(body.isDm || !guildId);\nconst media = (body.media && typeof body.media === 'object' && (body.media.data || body.media.url)) ? body.media : null;\n\nif (!content && !media) {\n  throw new Error('Evento discord.chat_message sem content nem media.');\n}\nif (!channelId) {\n  throw new Error('Evento discord.chat_message sem channelId.');\n}\n\nconst userText = content || (media ? 'Dá uma olhada nisso aqui!' : '');\nconst usamiMessage = `[Discord | ${authorName}]: ${userText}`.slice(0, 1800);\n\nreturn [{\n  json: {\n    channelId,\n    messageId,\n    guildId,\n    isDm,\n    authorName,\n    content: userText,\n    usamiMessage,\n    hasMedia: Boolean(media),\n    media\n  }\n}];"
       },
       "id": "dc-chat-0002-4000-8000-000000000002",
       "name": "Extrair Mensagem Discord",
@@ -56,9 +62,9 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.hasMedia ? { mimeType: $json.media.mimeType, data: $json.media.data, filename: $json.media.filename, prompt: $json.usamiMessage } : { message: $json.usamiMessage }) }}",
+        "jsonBody": "={{ JSON.stringify($json.hasMedia ? { mimeType: $json.media.mimeType, data: $json.media.data, url: $json.media.url, filename: $json.media.filename, prompt: $json.usamiMessage } : { message: $json.usamiMessage }) }}",
         "options": {
-          "timeout": 45000
+          "timeout": 90000
         }
       },
       "id": "dc-chat-0003-4000-8000-000000000003",
@@ -175,12 +181,43 @@
       ]
     }
   },
-  "active": false,
   "settings": {
     "executionOrder": "v1"
   },
+  "staticData": null,
   "meta": {
     "templateCredsSetupCompleted": false
   },
-  "pinData": {}
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "f5518f89-2867-472f-9892-9577c0fa7c15",
+  "activeVersionId": "f5518f89-2867-472f-9892-9577c0fa7c15",
+  "versionCounter": 8,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-11-16T04:15:06.091Z",
+      "createdAt": "2026-11-16T04:15:06.091Z",
+      "role": "workflow:owner",
+      "workflowId": "8fRPLku2ViH8VutQ",
+      "projectId": "bU03fbzx13pIqr6r",
+      "project": {
+        "updatedAt": "2026-10-24T22:42:53.444Z",
+        "createdAt": "2026-10-24T22:31:45.277Z",
+        "id": "bU03fbzx13pIqr6r",
+        "name": "Lucas Frischeisen <devreskyume@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "860e97f9-e2b0-490f-8758-f18e56ffd952"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
 }

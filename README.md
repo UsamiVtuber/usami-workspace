@@ -131,8 +131,9 @@ NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua 
 - **Provisionar o runner**: registre no nível da organização com
   `./config.sh --url https://github.com/UsamiVtuber --token <token da UI> --name luke --labels linux,usami-notebook --unattended --replace`
   (o comando que a UI gera não inclui `--name`/`--labels`, e sem `usami-notebook` nenhum job casa).
-  O serviço é `actions.runner.UsamiVtuber.luke.service`, sem `Restart=always` — confira se está
-  ativo depois de reiniciar o notebook.
+  O serviço é `actions.runner.UsamiVtuber.luke.service`, sem `Restart=always` — depois de reiniciar
+  o notebook, garanta que ele volta com
+  `sudo systemctl enable --now actions.runner.UsamiVtuber.luke.service`.
 - **Runner group `Default`**: precisa de **"Allow public repositories"** marcado
   (Settings → Actions → Runner groups). Com essa opção desligada o runner aparece **Idle** e os
   jobs deste repositório público ficam `queued` para sempre, sem erro visível.

@@ -36,9 +36,15 @@ jobs:
 
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # histórico completo para diff
+
+      - name: Verifica Node 22+
+        run: |
+          node --version
+          node -e "const [major] = process.versions.node.split('.').map(Number); if (major < 22) { console.error('Node 22+ é necessário para rodar o review'); process.exit(1); }"
+        shell: bash
 
       - name: Verifica gh autenticado como Usamiin
         run: |
@@ -46,18 +52,11 @@ jobs:
           echo "✅ gh CLI autenticado (token no keychain do SO)"
 
       - name: Roda QA Review
-        id: review
         run: |
           PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           echo "🔍 Revisando PR #$PR_NUM..."
           node scripts/qa-review.mjs "$PR_NUM"
         shell: bash
-
-      - name: Falha se veredito = PRECISA_AJUSTES
-        if: failure() && steps.review.outcome == 'failure'
-        run: |
-          echo "⚠️ Usami pediu ajustes — ver comentário na PR"
-          exit 1
 
       - name: Sucesso se veredito = APROVADO
         if: success()

@@ -142,6 +142,10 @@ NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua 
 - **Secret**: `NVIDIA_API_KEY` como secret no nível da organização (ou do repo) com acesso a este
   repositório; o workflow o expõe só ao job (`${{ secrets.NVIDIA_API_KEY }}`). O modelo vem da
   variável `BRAIN_MODEL` no próprio workflow.
+- **Scan de segredos (opcional)**: antes da chamada ao modelo, o diff passa por `gitleaks`
+  (`ghcr.io/gitleaks/gitleaks:v8.30.1` via `docker run`, sem instalar nada no runner). Não bloqueia:
+  se acusar algo, o step emite um `::warning` com os valores redigidos e o review continua. Isso
+  importa porque o texto do diff inteiro é enviado à API externa da NVIDIA.
 - **Re-run manual**: `gh workflow run qa-review.yml -f pr_number=5`. Enquanto o workflow ainda não
   estiver na `master`, acrescente `--ref feat/qa-review-workspace` (ou a branch que o contém).
   Um push novo na PR cancela o review em andamento (`concurrency`).

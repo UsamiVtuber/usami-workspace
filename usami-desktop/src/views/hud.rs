@@ -228,6 +228,7 @@ impl UsamiApp {
                                         })
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                             this.os_shell.toggle_window("connectors");
+                                            this.refresh_spotify_connector(cx);
                                             this.poke(cx);
                                             cx.notify();
                                         }))

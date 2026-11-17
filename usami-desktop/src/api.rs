@@ -1935,6 +1935,57 @@ impl UsamiApiClient {
         )
         .await
     }
+
+    pub async fn get_spotify_status(&self) -> Result<SpotifyStatusResponse, String> {
+        self.send_agent_get(
+            "/api/connectors/spotify/status".into(),
+            "Falha ao consultar status do Spotify",
+        )
+        .await
+    }
+
+    pub async fn connect_spotify(&self) -> Result<SpotifyConnectResponse, String> {
+        self.send_agent_post(
+            "/api/connectors/spotify/connect".into(),
+            serde_json::json!({}),
+            "Falha ao iniciar conexão com o Spotify",
+        )
+        .await
+    }
+
+    pub async fn disconnect_spotify(&self) -> Result<SpotifyDisconnectResponse, String> {
+        self.send_agent_post(
+            "/api/connectors/spotify/disconnect".into(),
+            serde_json::json!({}),
+            "Falha ao desconectar Spotify",
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyStatusResponse {
+    pub ok: bool,
+    pub configured: bool,
+    pub connected: bool,
+    pub redirect_uri: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyConnectResponse {
+    pub ok: bool,
+    pub authorize_url: String,
+    pub redirect_uri: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyDisconnectResponse {
+    pub ok: bool,
+    pub connected: bool,
 }
 
 /// Resposta do `/api/tts` com `stream:true`: PCM cru quando o provedor entrega

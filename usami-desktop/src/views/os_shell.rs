@@ -5,10 +5,11 @@
 //!  - `.id(...)` explícito em containers de scroll;
 //!  - largura definida em textos dentro de scroll para evitar colisão em 1 linha.
 
-use crate::theme;
 use crate::UsamiApp;
+use crate::theme;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct FloatingWindowState {
@@ -36,6 +37,7 @@ pub struct ConnectorTile {
 pub struct OsShellState {
     pub windows: Vec<FloatingWindowState>,
     pub connectors: Vec<ConnectorTile>,
+    pub connector_status: Option<String>,
     next_z: u32,
 }
 
@@ -83,6 +85,7 @@ impl Default for OsShellState {
                     enabled: true,
                 },
             ],
+            connector_status: None,
             next_z: 2,
         }
     }
@@ -131,19 +134,143 @@ impl OsShellState {
         }
     }
 
+    pub fn set_connector_status(&mut self, id: &str, connected: bool, enabled: bool) {
+        if let Some(c) = self.connectors.iter_mut().find(|c| c.id == id) {
+            c.connected = connected;
+            c.enabled = enabled;
+        }
+    }
+
     pub fn ordered_visible_windows(&self) -> Vec<FloatingWindowState> {
-        let mut list: Vec<FloatingWindowState> = self
-            .windows
-            .iter()
-            .filter(|w| w.visible)
-            .cloned()
-            .collect();
+        let mut list: Vec<FloatingWindowState> =
+            self.windows.iter().filter(|w| w.visible).cloned().collect();
         list.sort_by_key(|w| w.z_order);
         list
     }
 }
 
 impl UsamiApp {
+    pub(crate) fn refresh_spotify_connector(&mut self, cx: &mut Context<Self>) {
+        let api = Arc::clone(&self.api_client);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(status) = api.get_spotify_status().await {
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |app, cx| {
+                                app.os_shell.set_connector_status(
+                                    "spotify",
+                                    status.connected,
+                                    status.connected,
+                                );
+                                cx.notify();
+                            });
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn handle_connector_click(&mut self, id: &str, cx: &mut Context<Self>) {
+        if id != "spotify" {
+            self.os_shell.toggle_connector(id);
+            cx.notify();
+            return;
+        }
+
+        let is_connected = self
+            .os_shell
+            .connectors
+            .iter()
+            .find(|c| c.id == "spotify")
+            .map(|c| c.connected)
+            .unwrap_or(false);
+
+        self.os_shell.connector_status = Some("Conectando ao Spotify...".into());
+        cx.notify();
+
+        let api = Arc::clone(&self.api_client);
+        if is_connected {
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let res = api.disconnect_spotify().await;
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |app, cx| {
+                                match res {
+                                    Ok(_) => {
+                                        app.os_shell.set_connector_status("spotify", false, false);
+                                        app.os_shell.connector_status = None;
+                                    }
+                                    Err(err) => {
+                                        app.os_shell.connector_status = Some(err);
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }
+                    });
+                }
+            })
+            .detach();
+            return;
+        }
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let flow = match api.connect_spotify().await {
+                    Ok(f) => f,
+                    Err(err) => {
+                        let _ = cx.update(|cx: &mut App| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |app, cx| {
+                                    app.os_shell.connector_status = Some(err);
+                                    cx.notify();
+                                });
+                            }
+                        });
+                        return;
+                    }
+                };
+                let _ = cx.update(|cx: &mut App| {
+                    cx.open_url(&flow.authorize_url);
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |app, cx| {
+                            app.os_shell.connector_status =
+                                Some("Autorize no navegador para concluir...".into());
+                            cx.notify();
+                        });
+                    }
+                });
+                for _ in 0..30 {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    if let Ok(status) = api.get_spotify_status().await {
+                        if status.connected {
+                            let _ = cx.update(|cx: &mut App| {
+                                if let Some(this) = this.upgrade() {
+                                    this.update(cx, |app, cx| {
+                                        app.os_shell.set_connector_status("spotify", true, true);
+                                        app.os_shell.connector_status = None;
+                                        cx.notify();
+                                    });
+                                }
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     pub(crate) fn render_os_shell_layer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme::theme();
         let c = t.color;
@@ -151,89 +278,93 @@ impl UsamiApp {
         let ty = t.text;
         let visible_windows = self.os_shell.ordered_visible_windows();
         let connectors = self.os_shell.connectors.clone();
+        let connector_status = self.os_shell.connector_status.clone();
 
-        div()
-            .children(visible_windows.into_iter().map(|win| {
-                let win_id = win.id.clone();
-                let focus_id = win.id.clone();
-                let min_id = win.id.clone();
-                let close_id = win.id.clone();
-                let body_h = if win.minimized { 0.0 } else { win.height };
+        div().children(visible_windows.into_iter().map(|win| {
+            let win_id = win.id.clone();
+            let focus_id = win.id.clone();
+            let min_id = win.id.clone();
+            let close_id = win.id.clone();
+            let body_h = if win.minimized { 0.0 } else { win.height };
 
-                div()
-                    .id(SharedString::from(format!("os-win-{win_id}")))
-                    .absolute()
-                    .left(px(win.x))
-                    .top(px(win.y))
-                    .w(px(win.width))
-                    .rounded(px(14.0))
-                    .bg(c.panel)
-                    .border_1()
-                    .border_color(c.line_strong)
-                    .shadow(t.shadow.drawer.clone())
-                    .occlude()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.os_shell.focus_window(&focus_id);
-                            cx.notify();
-                        }),
-                    )
-                    .child(
-                        div()
-                            .px(px(sp.s3))
-                            .py(px(sp.s2))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .border_b_1()
-                            .border_color(c.line)
-                            .child(
-                                div()
-                                    .text_size(px(ty.sm))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(c.pearl)
-                                    .child(win.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("os-min-{min_id}")))
-                                            .px(px(7.0))
-                                            .py(px(2.0))
-                                            .rounded(px(6.0))
-                                            .bg(c.surface_soft)
-                                            .cursor_pointer()
-                                            .text_size(px(ty.xs))
-                                            .text_color(c.muted)
-                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            div()
+                .id(SharedString::from(format!("os-win-{win_id}")))
+                .absolute()
+                .left(px(win.x))
+                .top(px(win.y))
+                .w(px(win.width))
+                .rounded(px(14.0))
+                .bg(c.panel)
+                .border_1()
+                .border_color(c.line_strong)
+                .shadow(t.shadow.drawer.clone())
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.os_shell.focus_window(&focus_id);
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .px(px(sp.s3))
+                        .py(px(sp.s2))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .border_b_1()
+                        .border_color(c.line)
+                        .child(
+                            div()
+                                .text_size(px(ty.sm))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c.pearl)
+                                .child(win.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("os-min-{min_id}")))
+                                        .px(px(7.0))
+                                        .py(px(2.0))
+                                        .rounded(px(6.0))
+                                        .bg(c.surface_soft)
+                                        .cursor_pointer()
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.muted)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
                                                 this.os_shell.toggle_minimized(&min_id);
                                                 cx.notify();
-                                            }))
-                                            .child(if win.minimized { "+" } else { "–" }),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("os-close-{close_id}")))
-                                            .px(px(7.0))
-                                            .py(px(2.0))
-                                            .rounded(px(6.0))
-                                            .bg(c.surface_soft)
-                                            .cursor_pointer()
-                                            .text_size(px(ty.xs))
-                                            .text_color(c.muted)
-                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            },
+                                        ))
+                                        .child(if win.minimized { "+" } else { "–" }),
+                                )
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("os-close-{close_id}")))
+                                        .px(px(7.0))
+                                        .py(px(2.0))
+                                        .rounded(px(6.0))
+                                        .bg(c.surface_soft)
+                                        .cursor_pointer()
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.muted)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
                                                 this.os_shell.set_window_visible(&close_id, false);
                                                 cx.notify();
-                                            }))
-                                            .child("×"),
-                                    ),
-                            ),
-                    )
+                                            },
+                                        ))
+                                        .child("×"),
+                                ),
+                        ),
+                )
                     .when(!win.minimized, |parent| {
                         parent.child(
                             div()
@@ -244,6 +375,21 @@ impl UsamiApp {
                                 .flex()
                                 .flex_col()
                                 .gap(px(sp.s2))
+                                .when_some(connector_status.clone(), |el, note| {
+                                    el.child(
+                                        div()
+                                            .w(px(win.width - 36.0))
+                                            .px(px(sp.s2_5))
+                                            .py(px(sp.s2))
+                                            .rounded(px(8.0))
+                                            .bg(c.surface_soft)
+                                            .border_1()
+                                            .border_color(c.accent)
+                                            .text_size(px(ty.xs))
+                                            .text_color(c.pearl)
+                                            .child(note),
+                                    )
+                                })
                                 .children(connectors.iter().cloned().map(|conn| {
                                     let conn_id = conn.id.clone();
                                     let pill_bg = if conn.enabled { c.accent } else { c.surface_soft };
@@ -293,15 +439,25 @@ impl UsamiApp {
                                                 .text_size(px(ty.xs))
                                                 .text_color(c.pearl)
                                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                    this.os_shell.toggle_connector(&conn_id);
-                                                    cx.notify();
-                                                }))
-                                                .child(if conn.enabled { "Ativo" } else { "Off" }),
-                                        )
-                                })),
-                        )
-                    })
-            }))
+                                                    this.handle_connector_click(&conn_id, cx);
+                                                },
+                                            ))
+                                            .child(if conn.id == "spotify" {
+                                                if conn.connected {
+                                                    "Conectado"
+                                                } else {
+                                                    "Conectar"
+                                                }
+                                            } else if conn.enabled {
+                                                "Ativo"
+                                            } else {
+                                                "Off"
+                                            }),
+                                    )
+                            })),
+                    )
+                })
+        }))
     }
 }
 
@@ -335,9 +491,19 @@ mod tests {
     #[::core::prelude::v1::test]
     fn toggle_connector_flips_enabled_state() {
         let mut shell = OsShellState::default();
-        let before = shell.connectors.iter().find(|c| c.id == "spotify").unwrap().enabled;
+        let before = shell
+            .connectors
+            .iter()
+            .find(|c| c.id == "spotify")
+            .unwrap()
+            .enabled;
         shell.toggle_connector("spotify");
-        let after = shell.connectors.iter().find(|c| c.id == "spotify").unwrap().enabled;
+        let after = shell
+            .connectors
+            .iter()
+            .find(|c| c.id == "spotify")
+            .unwrap()
+            .enabled;
         assert_eq!(after, !before);
     }
 }

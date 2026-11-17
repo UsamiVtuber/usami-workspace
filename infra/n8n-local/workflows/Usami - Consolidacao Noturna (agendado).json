@@ -27,7 +27,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://10.42.0.91:8787/api/memory/maintenance",
+        "url": "http://10.42.0.1:8787/api/memory/maintenance",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

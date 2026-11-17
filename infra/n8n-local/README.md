@@ -74,8 +74,10 @@ segunda cópia com outros ids (ver `workflows/README.md`).
 ### n8n → Usami (controle de avatar)
 
 A Usami expõe endpoints para o n8n enviar comandos de volta. A API escuta em
-`0.0.0.0:8787` por padrão (`USAMI_API_HOST`), então o n8n do Nyarch a alcança em
-`http://10.42.0.91:8787`; da própria máquina, `127.0.0.1:8787`. As rotas de fila
+`0.0.0.0:8787` por padrão (`USAMI_API_HOST`), então o n8n do Nyarch a alcança
+pelo bridge em `http://10.42.0.1:8787` (o `usami-api-bridge.service` repassa
+para `10.42.0.91:8787` pela `enp2s0`); o IP do Windows direto não é alcançável
+de dentro do container. Da própria máquina, `127.0.0.1:8787`. As rotas de fila
 passam pela allowlist de Host/Origin e **sempre exigem `x-usami-token`** — sem
 `USAMI_API_TOKEN` no `.env` elas respondem 503 (fail-closed); com o token
 definido, use a credencial HTTP Header Auth do n8n.
@@ -97,7 +99,7 @@ definido, use a credencial HTTP Header Auth do n8n.
 
 Exemplo de nó HTTP Request no n8n para acionar um gesto:
 - Método: POST
-- URL: `http://10.42.0.91:8787/api/n8n/command`
+- URL: `http://10.42.0.1:8787/api/n8n/command`
 - Credencial: HTTP Header Auth com `x-usami-token`
 - Body JSON: `{ "type": "gesture", "name": "wave" }`
 

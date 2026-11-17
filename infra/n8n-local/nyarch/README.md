@@ -37,12 +37,14 @@ Editor: http://10.42.0.1:5678
    respostas (`Inbox/Responses`) e das automações que gravam em `Inbox/Automations` por
    esse caminho.
 3. **`~/n8n/.env`** — veja `.env.example`. Os segredos nunca entram neste repositório.
-4. **API da Usami no Windows** — os workflows agendados chamam a API pela rede do link
-   (`http://10.42.0.91:8787/...`, com credencial `Usami Token`), e o Chat Companion usa
-   `http://10.42.0.1:8787/api/chat`. Para garantir conectividade direta sem problemas de
-   roteamento entre sub-redes Docker e Windows, o serviço systemd de usuário
-   `usami-api-bridge.service` roda no Nyarch escutando em `10.42.0.1:8787` e repassando
-   transparentemente para `10.42.0.91:8787` pela interface física `enp2s0`.
+4. **API da Usami no Windows** — de dentro do n8n use sempre `http://10.42.0.1:8787`
+   (com credencial `Usami Token` nos endpoints protegidos). Esse é o
+   `usami-api-bridge.service`, systemd de usuário no Nyarch que escuta em
+   `10.42.0.1:8787` e repassa para `10.42.0.91:8787` pela interface física
+   `enp2s0`. Chamar o IP do Windows direto (`.91`) de dentro do container falha
+   com `ECONNREFUSED` — foi o que derrubou as execuções de 2026-11-17 às 04:00 —
+   por isso os workflows agendados e o Chat Companion
+   (`http://10.42.0.1:8787/api/chat`) usam o bridge.
    Se a API estiver parada, os nós HTTP falham conforme o `onError` de cada workflow.
 
 ## Travas conhecidas

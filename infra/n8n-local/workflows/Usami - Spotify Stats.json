@@ -1,0 +1,136 @@
+{
+  "name": "Usami - Spotify Stats",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-spotify-stats",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "spotify-stats-0001-4000-8000-000000000001",
+      "name": "Webhook Spotify Stats",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-spotify-stats-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json || {};\nconst body = (raw.body && typeof raw.body === 'object') ? raw.body : raw;\nconst query = (raw.query && typeof raw.query === 'object') ? raw.query : {};\nconst periodRaw = String(body.period || query.period || '7d').trim().toLowerCase();\nconst daysMap = { '24h': 1, '1d': 1, '7d': 7, '30d': 30, 'all': 36500 };\nconst days = daysMap[periodRaw] || 7;\nconst period = daysMap[periodRaw] ? periodRaw : '7d';\nconst limitNum = Number(body.limit || query.limit || 5);\nconst limit = Number.isFinite(limitNum) ? Math.min(Math.max(Math.round(limitNum), 1), 20) : 5;\nreturn [{ json: { period, days, limit } }];"
+      },
+      "id": "spotify-stats-0002-4000-8000-000000000002",
+      "name": "Normalizar Filtros",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS spotify_scrobbles (\n  id BIGSERIAL PRIMARY KEY,\n  played_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n  track_id TEXT NOT NULL,\n  track_uri TEXT,\n  track_name TEXT NOT NULL,\n  artists JSONB NOT NULL DEFAULT '[]'::jsonb,\n  album TEXT,\n  duration_ms INT,\n  progress_ms INT,\n  device_name TEXT\n);\n\nWITH win AS (\n  SELECT *\n  FROM spotify_scrobbles\n  WHERE played_at >= NOW() - make_interval(days => $1::int)\n),\nsummary AS (\n  SELECT COUNT(*)::int AS total_scrobbles, COUNT(DISTINCT track_id)::int AS unique_tracks FROM win\n),\ntop_tracks AS (\n  SELECT track_id, MAX(track_name) AS name, MAX(artists::text)::jsonb AS artists, COUNT(*)::int AS plays\n  FROM win\n  GROUP BY track_id\n  ORDER BY plays DESC, MAX(played_at) DESC\n  LIMIT $2::int\n),\ntop_artists AS (\n  SELECT artist, COUNT(*)::int AS plays\n  FROM win, LATERAL jsonb_array_elements_text(artists) AS artist\n  GROUP BY artist\n  ORDER BY plays DESC\n  LIMIT $2::int\n),\nrecent AS (\n  SELECT track_id, track_name AS name, artists, album, played_at\n  FROM win\n  ORDER BY played_at DESC\n  LIMIT $2::int\n)\nSELECT\n  (SELECT total_scrobbles FROM summary) AS total_scrobbles,\n  (SELECT unique_tracks FROM summary) AS unique_tracks,\n  COALESCE((SELECT jsonb_agg(to_jsonb(t)) FROM top_tracks t), '[]'::jsonb) AS top_tracks,\n  COALESCE((SELECT jsonb_agg(to_jsonb(a)) FROM top_artists a), '[]'::jsonb) AS top_artists,\n  COALESCE((SELECT jsonb_agg(to_jsonb(r)) FROM recent r), '[]'::jsonb) AS recent;",
+        "options": {
+          "queryReplacement": "={{ $json.days }},{{ $json.limit }}"
+        }
+      },
+      "id": "spotify-stats-0003-4000-8000-000000000003",
+      "name": "Consultar Scrobbles no Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\nconst filters = $('Normalizar Filtros').first().json || { period: '7d', limit: 5 };\nreturn [{\n  json: {\n    ok: true,\n    period: filters.period,\n    totalScrobbles: Number(row.total_scrobbles || 0),\n    uniqueTracks: Number(row.unique_tracks || 0),\n    topTracks: Array.isArray(row.top_tracks) ? row.top_tracks : [],\n    topArtists: Array.isArray(row.top_artists) ? row.top_artists : [],\n    recent: Array.isArray(row.recent) ? row.recent : []\n  }\n}];"
+      },
+      "id": "spotify-stats-0004-4000-8000-000000000004",
+      "name": "Formatar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "spotify-stats-0005-4000-8000-000000000005",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Spotify Stats": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Filtros",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Filtros": {
+      "main": [
+        [
+          {
+            "node": "Consultar Scrobbles no Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Scrobbles no Postgres": {
+      "main": [
+        [
+          {
+            "node": "Formatar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Resposta": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

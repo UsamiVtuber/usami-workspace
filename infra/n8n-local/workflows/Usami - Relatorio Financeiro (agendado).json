@@ -27,7 +27,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://10.42.0.91:8787/api/agent/tools/finance.transactions",
+        "url": "http://10.42.0.1:8787/api/agent/tools/finance.transactions",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -131,7 +131,7 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "method": "POST",
-        "url": "http://10.42.0.91:8787/api/n8n/command",
+        "url": "http://10.42.0.1:8787/api/n8n/command",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

@@ -653,6 +653,7 @@ impl UsamiApp {
     #[cfg(target_os = "windows")]
     pub(crate) fn attach_presence(&mut self, window: &Window, cx: &mut Context<Self>) {
         presence::start(window);
+        presence::set_emotion_icon(&self.last_emotion);
         self.presence_subscription = Some(cx.on_window_closed(|_| presence::shutdown()));
     }
 
@@ -844,6 +845,8 @@ impl UsamiApp {
                                         let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
                                         view.last_reply = sanitize_speech_text(&response.reply).into();
                                         view.last_emotion = emotion.clone().into();
+                                        #[cfg(target_os = "windows")]
+                                        crate::presence::set_emotion_icon(&emotion);
                                         view.show_bubble = true;
                                         view.status_text = if view.is_calling {
                                             "EM CHAMADA".into()
@@ -1008,6 +1011,8 @@ impl UsamiApp {
                                     let emotion = response.gesture.clone().unwrap_or_else(|| "tsundere".into());
                                     view.last_reply = sanitize_speech_text(&response.reply).into();
                                     view.last_emotion = emotion.clone().into();
+                                    #[cfg(target_os = "windows")]
+                                    crate::presence::set_emotion_icon(&emotion);
                                     view.show_bubble = true;
                                     view.status_text = if view.is_calling {
                                         "EM CHAMADA".into()
@@ -1218,6 +1223,8 @@ impl UsamiApp {
                 self.lol_last_expression = expressao;
                 let vrm_emotion = expressao.to_vrm_emotion();
                 self.last_emotion = vrm_emotion.into();
+                #[cfg(target_os = "windows")]
+                crate::presence::set_emotion_icon(vrm_emotion);
                 self.show_bubble = true;
                 self.vrm_controller
                     .set_emotion_with_options(vrm_emotion, 6.0, false);

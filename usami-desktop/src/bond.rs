@@ -150,6 +150,8 @@ impl UsamiApp {
                                             false,
                                         );
                                     }
+                                    #[cfg(target_os = "windows")]
+                                    crate::presence::set_emotion_icon(&resp.mood.vrm_emotion);
                                     view.mood = Some(resp.mood);
                                 }
                                 Err(error) => eprintln!("[Humor] indisponível: {error}"),
@@ -173,6 +175,8 @@ impl UsamiApp {
         self.vrm_controller
             .set_emotion_with_options(emotion, 8.0, false);
         self.last_emotion = emotion.into();
+        #[cfg(target_os = "windows")]
+        crate::presence::set_emotion_icon(emotion);
         self.poke(cx);
         cx.notify();
 

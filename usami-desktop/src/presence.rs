@@ -10,6 +10,7 @@
 
 #![cfg(target_os = "windows")]
 
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
@@ -33,18 +34,20 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_U,
 };
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
     GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST,
-    IDI_APPLICATION, IsIconic, IsWindowVisible, LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowPos,
-    ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL,
-    WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTSIZE,
+    LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG,
+    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
+    SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK,
+    WM_NULL, WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
@@ -269,6 +272,138 @@ pub fn app_is_minimized_or_hidden() -> bool {
         return false;
     }
     unsafe { IsIconic(hwnd) != 0 || IsWindowVisible(hwnd) == 0 }
+}
+
+static EMOTION_CACHE: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+
+/// Categoriza a tag de emoção em um dos 7 humores base com ícone correspondente
+/// e devolve o nome do arquivo (`category`) e rótulo amigável para o tooltip.
+pub fn categorize_emotion(emotion: &str) -> (&'static str, &'static str) {
+    let lower = emotion.to_lowercase();
+    if lower.contains("laugh")
+        || lower.contains("happy")
+        || lower.contains("smile")
+        || lower.contains("joy")
+        || lower.contains("playful")
+        || lower.contains("caring")
+    {
+        ("happy", "Feliz")
+    } else if lower.contains("angry")
+        || lower.contains("rage")
+        || lower.contains("frustrat")
+        || lower.contains("cold")
+        || lower.contains("tsundere")
+    {
+        ("angry", "Brava")
+    } else if lower.contains("sad")
+        || lower.contains("cry")
+        || lower.contains("tear")
+        || lower.contains("tired")
+        || lower.contains("depress")
+    {
+        ("sad", "Triste")
+    } else if lower.contains("awkward")
+        || lower.contains("embarrass")
+        || lower.contains("shy")
+        || lower.contains("blush")
+    {
+        ("awkward", "Sem jeito")
+    } else if lower.contains("startle")
+        || lower.contains("surpris")
+        || lower.contains("fear")
+        || lower.contains("shock")
+        || lower.contains("emoji")
+    {
+        ("surprised", "Surpresa")
+    } else if lower.contains("doubt")
+        || lower.contains("think")
+        || lower.contains("worr")
+        || lower.contains("mumble")
+    {
+        ("doubt", "Pensativa")
+    } else {
+        ("neutral", "Normal")
+    }
+}
+
+fn load_emotion_icon(category: &str) -> *mut core::ffi::c_void {
+    let mut guard = match EMOTION_CACHE.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let map = guard.get_or_insert_with(HashMap::new);
+    if let Some(&hicon) = map.get(category) {
+        return hicon as *mut core::ffi::c_void;
+    }
+
+    let path = crate::assets::asset_path(&format!("assets/icons/emotions/{category}.ico"));
+    let mut hicon = std::ptr::null_mut();
+    if path.exists() {
+        if let Some(s) = path.to_str() {
+            let wide_path = wide(s);
+            unsafe {
+                let handle = LoadImageW(
+                    std::ptr::null_mut(),
+                    wide_path.as_ptr(),
+                    IMAGE_ICON,
+                    0,
+                    0,
+                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
+                );
+                if !handle.is_null() {
+                    hicon = handle as *mut core::ffi::c_void;
+                }
+            }
+        }
+    }
+
+    if hicon.is_null() {
+        hicon = TRAY_ICON.load(Ordering::SeqCst) as *mut core::ffi::c_void;
+    }
+
+    if !hicon.is_null() {
+        map.insert(category.to_string(), hicon as usize);
+    }
+    hicon
+}
+
+/// Altera o ícone da Usami na Barra de Tarefas, Janela e Bandeja (Tray)
+/// de acordo com a emoção ou humor recebido.
+pub fn set_emotion_icon(emotion: &str) {
+    let (category, label) = categorize_emotion(emotion);
+    let hicon = load_emotion_icon(category);
+    if hicon.is_null() {
+        return;
+    }
+
+    TRAY_ICON.store(hicon as isize, Ordering::SeqCst);
+
+    let app = app_window();
+    if !app.is_null() {
+        unsafe {
+            SendMessageW(app, WM_SETICON, ICON_BIG as WPARAM, hicon as LPARAM);
+            SendMessageW(app, WM_SETICON, ICON_SMALL as WPARAM, hicon as LPARAM);
+        }
+    }
+
+    let hidden = HIDDEN_WINDOW.load(Ordering::SeqCst) as HWND;
+    if !hidden.is_null() {
+        let tooltip = format!("Usami Desktop [{label}] - Ctrl+Alt+U");
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hidden,
+            uID: TRAY_UID,
+            uFlags: NIF_ICON | NIF_TIP,
+            hIcon: hicon,
+            ..Default::default()
+        };
+        for (slot, unit) in nid.szTip.iter_mut().zip(tooltip.encode_utf16()) {
+            *slot = unit;
+        }
+        unsafe {
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
 }
 
 fn load_tray_icon(app: HWND) -> *mut core::ffi::c_void {
@@ -607,5 +742,19 @@ mod tests {
 
         let key = wide(TEST_KEY);
         unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr()) };
+    }
+
+    #[test]
+    fn categorize_emotion_maps_correctly() {
+        assert_eq!(categorize_emotion("casual_laughing"), ("happy", "Feliz"));
+        assert_eq!(categorize_emotion("polite_smile"), ("happy", "Feliz"));
+        assert_eq!(categorize_emotion("casual_angry"), ("angry", "Brava"));
+        assert_eq!(categorize_emotion("tsundere"), ("angry", "Brava"));
+        assert_eq!(categorize_emotion("casual_sad"), ("sad", "Triste"));
+        assert_eq!(categorize_emotion("casual_embarrassed"), ("awkward", "Sem jeito"));
+        assert_eq!(categorize_emotion("casual_surprise"), ("surprised", "Surpresa"));
+        assert_eq!(categorize_emotion("casual_worried"), ("doubt", "Pensativa"));
+        assert_eq!(categorize_emotion("neutral"), ("neutral", "Normal"));
+        assert_eq!(categorize_emotion("unknown_xyz"), ("neutral", "Normal"));
     }
 }

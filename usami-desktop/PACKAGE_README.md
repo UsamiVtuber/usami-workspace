@@ -53,6 +53,10 @@ O app fica na bandeja do sistema; `Ctrl+Alt+U` (ou duplo clique no ícone)
 mostra/esconde a janela. A engrenagem do topo abre os Ajustes rápidos dentro do
 celular; a página completa fica em Central de Vínculo → Ajustes.
 
+O executável possui ícone nativo embutido e, em tempo de execução, o ícone da
+janela, da barra de tarefas e da bandeja muda dinamicamente de acordo com o
+humor e as reações da Usami em tempo real (feliz, brava, tímida, surpresa, etc.).
+
 ## Privacidade
 
 Por padrão o app conversa com o core em `127.0.0.1:8787`; o chat, o TTS e o STT

@@ -7,7 +7,7 @@ com microfone, sem navegador embutido. Em volta do palco ficam o painel de
 conversa em formato de celular, a Central de Vínculo em estilo visual novel, a
 Central do Agente e um overlay para o League of Legends (Usami.GG).
 
-- **Versão atual:** 0.5.1 (`Cargo.toml`, seção Sistema do Ajustes).
+- **Versão atual:** 0.6.1 (`Cargo.toml`, seção Sistema do Ajustes).
 - **Canal de releases:** [`UsamiVtuber/usami-desktop`](https://github.com/UsamiVtuber/usami-desktop) (público).
 - **Distribuição:** zip Windows x64 com o executável e a pasta `assets/`. O
   pacote **não** inclui modelos `.vrm` (ver [Modelo e assets](#modelo-e-assets)).
@@ -16,6 +16,9 @@ Central do Agente e um overlay para o League of Legends (Usami.GG).
 
 - Renderiza o avatar VRM em um palco interativo (arrastar orbita; a rolagem
   aproxima e afasta).
+- Ícone nativo e reações de humor: o executável embute o ícone oficial (olhos `><`),
+  e durante a execução o ícone da janela, da barra de tarefas e da bandeja muda
+  dinamicamente conforme o humor e as reações da Usami em tempo real (`assets/icons/emotions/`).
 - Conversa com a API local (`/api/chat`) e exibe as mensagens em balão e no
   painel de conversa em formato de celular.
 - Mostra o que ela está fazendo durante o turno (`/api/chat/activity`):
@@ -136,6 +139,7 @@ e ao lado do `.exe`.
 | `src/agent_center_model.rs`, `src/views/agent_center.rs` | Central do Agente: agrupamento/formatação pura e abas de skills, execuções, permissões, confirmações e sugestões. |
 | `src/lol/` | Usami.GG: Live Client Data API, DataDragon com cache, fila de eventos, prompt do companion e overlay Win32. |
 | `src/media.rs` | Mídia anexada ao chat (preview e envio em base64). |
+| `build.rs` | Compilação de recursos PE do Windows e embutimento do ícone nativo (`winres`). |
 | `../gpui-vrm` | Crate local do motor VRM/glTF/VRMA (WGPU, MToon cel-shading, SpringBone, blendshapes, lipsync e look-at IK). |
 | `PACKAGE_README.md` | README que acompanha o zip de release (instalação, requisitos, aviso do SmartScreen). |
 | `scripts/release.ps1` | Build e publicação local da release no repo público. |
@@ -144,7 +148,8 @@ e ao lado do `.exe`.
 Principais dependências: `gpui` 0.2.2, `cpal` 0.18.2, `rodio` 0.23.0,
 `reqwest` 0.13.5 (`json`, `multipart`, `stream`), `tokio` 1.54.1, `serde`
 1.0.229, `serde_json` 1.0.154 e `thiserror` 2.0; no Windows, `windows-sys` 0.61
-(bandeja, atalhos, registro e janela) e `raw-window-handle` 0.6.
+(bandeja, atalhos, registro e janela), `raw-window-handle` 0.6 e `winres` 0.1
+(build-dependency para recursos nativos).
 
 ## Interface
 

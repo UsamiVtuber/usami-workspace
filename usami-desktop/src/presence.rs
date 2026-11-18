@@ -40,14 +40,15 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
-    GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST,
-    ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
-    SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
-    SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK,
-    WM_NULL, WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GWLP_WNDPROC, GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST,
+    HWND_TOPMOST, ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SC_MINIMIZE,
+    SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
+    WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
@@ -70,6 +71,9 @@ const MENU_EXIT: usize = 5;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
 
+const WM_MASCOT_TOGGLE: u32 = WM_APP + 2;
+
+static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 static APP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static HIDDEN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TRAY_ICON: AtomicIsize = AtomicIsize::new(0);
@@ -102,6 +106,17 @@ pub fn start(window: &Window) {
     }
 
     APP_WINDOW.store(app as isize, Ordering::SeqCst);
+    // Subclasseia a janela para interceptar WM_SYSCOMMAND (minimizar -> mascote)
+    unsafe {
+        let orig = SetWindowLongPtrW(
+            app,
+            GWLP_WNDPROC,
+            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as isize,
+        );
+        if orig != 0 {
+            ORIGINAL_WNDPROC.store(orig, Ordering::SeqCst);
+        }
+    }
     let app_id = app as isize;
     let (ready_tx, ready_rx) = mpsc::channel();
     match thread::Builder::new()
@@ -258,6 +273,26 @@ fn window_hwnd(window: &Window) -> Option<HWND> {
         RawWindowHandle::Win32(win32) => Some(win32.hwnd.get() as HWND),
         _ => None,
     }
+}
+
+unsafe extern "system" fn mascot_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE {
+        // Intercepta o botão de minimizar (-) e vira modo mascote
+        crate::mascot::request_toggle();
+        return 0;
+    }
+    let orig = ORIGINAL_WNDPROC.load(Ordering::SeqCst) as *const ();
+    if !orig.is_null() {
+        let orig_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+            std::mem::transmute(orig);
+        return orig_proc(hwnd, msg, wparam, lparam);
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 fn app_window() -> HWND {

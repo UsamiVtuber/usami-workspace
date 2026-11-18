@@ -4,6 +4,7 @@ pub(crate) mod controls;
 pub(crate) mod drawers;
 pub(crate) mod hud;
 pub(crate) mod lol_overlay;
+pub(crate) mod mascot;
 pub(crate) mod os_shell;
 pub(crate) mod phone;
 pub(crate) mod settings;

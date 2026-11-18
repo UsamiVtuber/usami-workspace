@@ -6,6 +6,7 @@ mod bond;
 mod input_editor;
 mod lifecycle;
 pub mod lol;
+mod mascot;
 mod media;
 mod memory_personality;
 mod model;
@@ -85,6 +86,14 @@ struct UsamiApp {
     idle_prods: u8,
     last_return_greeting: Instant,
     was_maximized: bool,
+    /// Modo mascote: janela pequena, sem moldura e sempre no topo.
+    mascot_mode: bool,
+    /// Deslocamento do cursor dentro da janela no início do arrasto.
+    mascot_grab: Option<(i32, i32)>,
+    /// Última geometria física da janela grande, para voltar do modo mascote.
+    last_normal_rect: Option<mascot::WinRect>,
+    /// Contador de "cutucadas" no avatar (varia as falas).
+    mascot_pokes: u8,
     last_maximize_line: Instant,
     /// Despedida ao fechar: a primeira tentativa segura a janela, a segunda
     /// libera; o tick fecha sozinho quando o áudio acaba (ou estoura o teto).
@@ -374,6 +383,18 @@ impl UsamiApp {
                     let should_poll = tick_counter % 30 == 1; // a cada ~15s (e no primeiro tick)
                     let should_present = tick_counter % 5 == 0; // a cada ~2.5s
                     let _ = cx.update(|cx: &mut App| {
+                        // Bandeja/atalho pedem o modo mascote pela thread de
+                        // presença; aqui viram troca de janela na UI.
+                        if crate::mascot::take_toggle_request() {
+                            if let Some(handle) = cx.windows().first().copied() {
+                                let this = this.clone();
+                                let _ = handle.update(cx, |_, window, cx| {
+                                    if let Some(view) = this.upgrade() {
+                                        view.update(cx, |view, cx| view.toggle_mascot(window, cx));
+                                    }
+                                });
+                            }
+                        }
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
                                 let mut changed = false;
@@ -537,6 +558,10 @@ impl UsamiApp {
             idle_prods: 0,
             last_return_greeting: Instant::now() - Duration::from_secs(300),
             was_maximized: false,
+            mascot_mode: false,
+            mascot_grab: None,
+            last_normal_rect: None,
+            mascot_pokes: 0,
             last_maximize_line: Instant::now() - Duration::from_secs(900),
             farewell_started_at: None,
             farewell_audio_done: Arc::new(AtomicBool::new(false)),
@@ -1193,7 +1218,7 @@ impl UsamiApp {
                 let should_overlay = in_match || loading || self.lol_manual_overlay;
                 self.mic_gate
                     .set_gamer_mode(in_match || loading || self.lol_manual_overlay);
-                if should_overlay != was_active {
+                if !self.mascot_mode && should_overlay != was_active {
                     self.lol_overlay_active = should_overlay;
                     if should_overlay {
                         self.active_drawer = ActiveDrawer::None;
@@ -1236,9 +1261,17 @@ impl UsamiApp {
                 cx.notify();
             }
             lol::ipc::LolUiCommand::ToggleClickThrough => {
-                if self.lol_in_match || self.lol_loading {
+                if self.mascot_mode {
+                    // No modo mascote não faz sentido mexer no click-through do LoL.
+                    cx.notify();
+                } else if self.lol_in_match || self.lol_loading {
                     self.lol_click_through = !self.lol_click_through;
                     self.lol_overlay_active = true;
+                    lol::overlay_win32::apply_overlay_styles(
+                        self.lol_overlay_active,
+                        self.lol_click_through,
+                    );
+                    cx.notify();
                 } else {
                     self.lol_manual_overlay = !self.lol_manual_overlay;
                     self.lol_overlay_active = self.lol_manual_overlay;
@@ -1255,12 +1288,12 @@ impl UsamiApp {
                         self.stop_listening();
                         self.mic_gate.set_gamer_mode(false);
                     }
+                    lol::overlay_win32::apply_overlay_styles(
+                        self.lol_overlay_active,
+                        self.lol_click_through,
+                    );
+                    cx.notify();
                 }
-                lol::overlay_win32::apply_overlay_styles(
-                    self.lol_overlay_active,
-                    self.lol_click_through,
-                );
-                cx.notify();
             }
         }
     }
@@ -1340,6 +1373,10 @@ impl Render for UsamiApp {
                 .font_family(theme::FONT_BODY)
                 .child(self.render_lol_overlay(cx))
                 .into_any_element();
+        }
+
+        if self.mascot_mode {
+            return self.render_mascot(cx).into_any_element();
         }
 
         let viewport_h = window.viewport_size().height;
@@ -1454,6 +1491,8 @@ fn main() {
         // para o primeiro frame já medir com as famílias certas.
         theme::load_fonts(cx, asset_base_dir());
         let prefs = storage::load_prefs();
+        #[cfg(target_os = "windows")]
+        let start_mascot = prefs.mascot;
         let bounds = prefs
             .window
             .filter(|window| window.is_sane())
@@ -1485,6 +1524,10 @@ fn main() {
                 view.update(cx, |this, cx| this.fetch_mood(cx));
                 #[cfg(target_os = "windows")]
                 view.update(cx, |this, cx| this.attach_presence(window, cx));
+                #[cfg(target_os = "windows")]
+                if start_mascot {
+                    view.update(cx, |this, cx| this.enter_mascot(window, cx));
+                }
                 view
             },
         )

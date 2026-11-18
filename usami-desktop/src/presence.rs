@@ -42,7 +42,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
     GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST,
     ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG,
+    LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
     SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
     SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
@@ -53,16 +53,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const HOTKEY_ID: i32 = 1;
 const HOTKEY_LOL_OVERLAY_ID: i32 = 2;
+const HOTKEY_MASCOT_ID: i32 = 3;
 const VK_L_KEY: u32 = 0x4C;
+const VK_M_KEY: u32 = 0x4D;
 const TRAY_UID: u32 = 1;
 const WINDOW_CLASS: &str = "UsamiPresenceWindow";
 const WINDOW_TITLE: &str = "Usami Presence";
 const TRAY_TOOLTIP: &str = "Usami Desktop - Ctrl+Alt+U";
 
 const MENU_TOGGLE_WINDOW: usize = 1;
-const MENU_TOPMOST: usize = 2;
-const MENU_AUTOSTART: usize = 3;
-const MENU_EXIT: usize = 4;
+const MENU_MASCOT: usize = 2;
+const MENU_TOPMOST: usize = 3;
+const MENU_AUTOSTART: usize = 4;
+const MENU_EXIT: usize = 5;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
@@ -179,6 +182,14 @@ fn run(app: isize, ready: Sender<Result<Ready, String>>) {
             HOTKEY_LOL_OVERLAY_ID,
             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
             VK_L_KEY,
+        )
+    } != 0;
+    let _mascot_hotkey = unsafe {
+        RegisterHotKey(
+            hidden,
+            HOTKEY_MASCOT_ID,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            VK_M_KEY,
         )
     } != 0;
 
@@ -470,11 +481,16 @@ unsafe extern "system" fn window_proc(
             crate::lol::notify_hotkey_toggle_click_through();
             0
         }
+        WM_HOTKEY if wparam as i32 == HOTKEY_MASCOT_ID => {
+            crate::mascot::request_toggle();
+            0
+        }
         WM_CLOSE => {
             unsafe {
                 remove_tray_icon(hwnd);
                 UnregisterHotKey(hwnd, HOTKEY_ID);
                 UnregisterHotKey(hwnd, HOTKEY_LOL_OVERLAY_ID);
+                UnregisterHotKey(hwnd, HOTKEY_MASCOT_ID);
                 DestroyWindow(hwnd);
             }
             0
@@ -504,6 +520,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let shown = unsafe { IsWindowVisible(app) != 0 && IsIconic(app) == 0 };
     let topmost = (unsafe { GetWindowLongPtrW(app, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST) != 0;
     let autostart = autostart_enabled();
+    let mascot_active = crate::mascot::is_active();
 
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
@@ -517,8 +534,17 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     });
     unsafe { AppendMenuW(menu, MF_STRING, MENU_TOGGLE_WINDOW, toggle.as_ptr()) };
 
+    let mascot_label = wide("Modo mascote (Ctrl+Alt+M)");
+    let mascot_flags = MF_STRING | if mascot_active { MF_CHECKED } else { 0 };
+    unsafe { AppendMenuW(menu, mascot_flags, MENU_MASCOT, mascot_label.as_ptr()) };
+
     let topmost_label = wide("Sempre no topo");
-    let topmost_flags = MF_STRING | if topmost { MF_CHECKED } else { 0 };
+    // No modo mascote a janela já é forçada no topo; desabilita o toggle.
+    let topmost_flags = if mascot_active {
+        MF_STRING | MF_GRAYED
+    } else {
+        MF_STRING | if topmost { MF_CHECKED } else { 0 }
+    };
     unsafe { AppendMenuW(menu, topmost_flags, MENU_TOPMOST, topmost_label.as_ptr()) };
 
     let autostart_label = wide("Iniciar com o Windows");
@@ -561,6 +587,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match command {
         MENU_TOGGLE_WINDOW => unsafe { toggle_window(app) },
+        MENU_MASCOT => crate::mascot::request_toggle(),
         MENU_TOPMOST => unsafe { toggle_topmost(app) },
         MENU_AUTOSTART => toggle_autostart(),
         MENU_EXIT => {

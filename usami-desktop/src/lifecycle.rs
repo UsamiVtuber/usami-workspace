@@ -1,6 +1,6 @@
 //! Ciclo de vida da aplicacao: observadores de janela, ausencia/retorno, despedida e ociosidade.
 
-use crate::model::{current_phone_time, ChatMessage, Sender};
+use crate::model::{ActiveDrawer, current_phone_time, ChatMessage, Sender};
 use crate::storage;
 use crate::UsamiApp;
 use gpui::*;
@@ -35,12 +35,28 @@ impl UsamiApp {
     pub(crate) fn attach_window_observers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let bounds_subscription = cx.observe_window_bounds(window, |view, window, cx| {
             let bounds = window.bounds();
+            let width: f32 = bounds.size.width.into();
+            let height: f32 = bounds.size.height.into();
+            // O modo mascote tem geometria própria: ela não deve virar a
+            // "janela lembrada" da próxima abertura.
+            if view.mascot_mode {
+                return;
+            }
+            // Encolher abaixo do mínimo utilizável é o segundo gatilho do modo
+            // mascote (o primeiro é bandeja/atalho).
+            if crate::mascot::should_snap(width, height) && !view.lol_overlay_active {
+                view.enter_mascot(window, cx);
+                return;
+            }
             view.prefs.window = Some(storage::WindowPrefs {
                 x: f32::from(bounds.origin.x),
                 y: f32::from(bounds.origin.y),
-                width: f32::from(bounds.size.width),
-                height: f32::from(bounds.size.height),
+                width,
+                height,
             });
+            if let Some(rect) = crate::mascot::current_rect() {
+                view.last_normal_rect = Some(rect);
+            }
             if view.last_prefs_save.elapsed() >= Duration::from_secs(2) {
                 view.persist_prefs();
             }
@@ -84,8 +100,106 @@ impl UsamiApp {
             width: f32::from(bounds.size.width),
             height: f32::from(bounds.size.height),
         });
+        if let Some(rect) = crate::mascot::current_rect() {
+            self.last_normal_rect = Some(rect);
+        }
         self.window_focused = window.is_window_active();
         self.was_maximized = window.is_maximized();
+    }
+
+    /// Alterna entre o app completo e a janelinha de mascote.
+    pub(crate) fn toggle_mascot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mascot_mode {
+            self.exit_mascot(window, cx);
+        } else {
+            self.enter_mascot(window, cx);
+        }
+    }
+
+    pub(crate) fn enter_mascot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mascot_mode || self.lol_overlay_active {
+            return;
+        }
+        // Marcado antes de mexer na janela: o observador de bounds reentra.
+        self.mascot_mode = true;
+        self.mascot_grab = None;
+        self.active_drawer = ActiveDrawer::None;
+        self.is_away = false;
+        self.away_since = None;
+        self.status_text = self.default_status();
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(restore) = crate::mascot::enter(window.scale_factor(), self.last_normal_rect)
+            {
+                self.last_normal_rect = Some(restore);
+            }
+            crate::mascot::set_active(true);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+        self.vrm_controller.set_portrait_enabled(true);
+        self.prefs.mascot = true;
+        self.persist_prefs();
+        cx.notify();
+    }
+
+    pub(crate) fn exit_mascot(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.mascot_mode {
+            return;
+        }
+        self.mascot_mode = false;
+        self.mascot_grab = None;
+        #[cfg(target_os = "windows")]
+        {
+            crate::mascot::exit();
+            crate::mascot::set_active(false);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+        self.is_ui_idle = false;
+        self.vrm_controller.set_portrait_enabled(true);
+        self.prefs.mascot = false;
+        self.persist_prefs();
+        self.is_away = false;
+        self.away_since = None;
+        self.status_text = self.default_status();
+        cx.notify();
+    }
+
+    pub(crate) fn mascot_mouse_down(&mut self) {
+        self.mascot_grab = crate::mascot::grab_offset();
+    }
+
+    pub(crate) fn mascot_mouse_move(&mut self, event: &MouseMoveEvent) {
+        if !self.mascot_mode || event.pressed_button != Some(MouseButton::Left) {
+            self.mascot_grab = None;
+            return;
+        }
+        if let Some(grab) = self.mascot_grab {
+            crate::mascot::move_with_cursor(grab);
+        }
+    }
+
+    pub(crate) fn mascot_click(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mascot_grab = None;
+        if event.click_count() >= 2 {
+            self.exit_mascot(window, cx);
+            return;
+        }
+        const LINES: [&str; 3] = [
+            "Ei! Não fica me cutucando assim, baka.",
+            "Tô aqui, tá? Pode continuar no seu jogo.",
+            "Hmph. Se quiser conversar de verdade, duplo clique em mim.",
+        ];
+        let line = LINES[self.mascot_pokes as usize % LINES.len()];
+        self.mascot_pokes = self.mascot_pokes.wrapping_add(1);
+        self.touch_ui(cx);
+        self.show_local_line(line, "tsundere", cx);
     }
 
     pub(crate) fn default_status(&self) -> SharedString {
@@ -102,7 +216,9 @@ impl UsamiApp {
     /// AUSENTE. Chamada e modo companhia são exceções — nessas horas o app pode
     /// ficar em segundo plano sem que ela "sinta" a ausência.
     pub(crate) fn refresh_away_state(&mut self, cx: &mut Context<Self>) {
-        let exempt = self.is_calling || self.sleep_companion_started_at.is_some();
+        // Modo mascote é presença: ela está no desktop mesmo sem foco.
+        let exempt =
+            self.is_calling || self.sleep_companion_started_at.is_some() || self.mascot_mode;
         let away = !exempt && (window_minimized_or_hidden() || !self.window_focused);
         if away == self.is_away {
             return;

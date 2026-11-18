@@ -3,6 +3,7 @@
 //! Reúne abas de Perfil, Memória, Personalidade, Proatividade, Sistema e Avançado.
 
 use crate::model::SettingsTab;
+use crate::storage;
 use crate::theme;
 use crate::ui::widgets::{
     settings_code, settings_danger_button, settings_dl_row, settings_h3, settings_hint,
@@ -952,6 +953,74 @@ impl UsamiApp {
                 .child(settings_p(
                     "Versão 0.5.1 — desktop companion nativo com avatar 3D/VRM e voz própria.",
                 ))
+                .child(settings_h3("MODO MASCOTE (DESKTOP MATE)"))
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .p(px(sp.s3))
+                        .rounded(px(r.md))
+                        .bg(c.card_bg)
+                        .border_1()
+                        .border_color(c.line)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(sp.s1))
+                                .child(
+                                    div()
+                                        .text_size(px(ty.md))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c.pearl)
+                                        .child("Permitir modo mascote"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(ty.sm))
+                                        .text_color(c.muted)
+                                        .child("Clique no botão de minimizar (–) vira avatar pequeno sempre no topo, fora da barra de tarefas. Ctrl+Alt+M alterna."),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("mascot-toggle")
+                                .w(px(52.0))
+                                .h(px(28.0))
+                                .rounded(px(999.0))
+                                .bg(if self.prefs.mascot { theme::Palette::emerald_soft() } else { rgba(0x88888822) })
+                                .border_1()
+                                .border_color(if self.prefs.mascot { theme::Palette::emerald_border() } else { rgba(0x88888866) })
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    let next = !this.prefs.mascot;
+                                    this.prefs.mascot = next;
+                                    storage::save_prefs(&this.prefs);
+                                    if next {
+                                        this.enter_mascot(window, cx);
+                                    } else {
+                                        this.exit_mascot(window, cx);
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size_full()
+                                        .child(
+                                            div()
+                                                .w(px(22.0))
+                                                .h(px(22.0))
+                                                .rounded(px(999.0))
+                                                .bg(if self.prefs.mascot { theme::Palette::emerald() } else { rgb(0x888888) })
+                                                .ml(if self.prefs.mascot { px(26.0) } else { px(4.0) }),
+                                        ),
+                                ),
+                        ),
+                )
                 .child(settings_h3("ARQUITETURA NATIVA"))
                 .child(settings_list_item("Desktop: Rust + GPUI 0.2.2 + WGPU 60 FPS"))
                 .child(settings_list_item("Avatar: 白ー (shiro) VRM 1.0 com renderização direta nativa"))

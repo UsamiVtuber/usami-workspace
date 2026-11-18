@@ -113,8 +113,12 @@ pub fn start(window: &Window) {
             GWLP_WNDPROC,
             mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as isize,
         );
-        if orig != 0 {
+        if orig == 0 {
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            eprintln!("[Usami Presence] Falha ao subclassear janela (SetWindowLongPtrW): erro {}", err);
+        } else {
             ORIGINAL_WNDPROC.store(orig, Ordering::SeqCst);
+            println!("[Usami Presence] WndProc subclasseado com sucesso para interceptar minimizar");
         }
     }
     let app_id = app as isize;
@@ -283,6 +287,7 @@ unsafe extern "system" fn mascot_wndproc(
 ) -> LRESULT {
     if msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE {
         // Intercepta o botão de minimizar (-) e vira modo mascote
+        println!("[Usami Presence] WM_SYSCOMMAND SC_MINIMIZE interceptado -> request_toggle()");
         crate::mascot::request_toggle();
         return 0;
     }

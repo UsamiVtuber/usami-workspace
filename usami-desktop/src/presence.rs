@@ -40,33 +40,38 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
-    GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST, HWND_TOPMOST,
-    ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_RESTORE,
-    SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
-    SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK,
-    WM_NULL, WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GWLP_WNDPROC, GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HTMINBUTTON,
+    HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic,
+    IsWindowVisible, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SC_MINIMIZE, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCLBUTTONUP, WM_NULL,
+    WM_RBUTTONUP, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const HOTKEY_ID: i32 = 1;
 const HOTKEY_LOL_OVERLAY_ID: i32 = 2;
+const HOTKEY_MASCOT_ID: i32 = 3;
 const VK_L_KEY: u32 = 0x4C;
+const VK_M_KEY: u32 = 0x4D;
 const TRAY_UID: u32 = 1;
 const WINDOW_CLASS: &str = "UsamiPresenceWindow";
 const WINDOW_TITLE: &str = "Usami Presence";
 const TRAY_TOOLTIP: &str = "Usami Desktop - Ctrl+Alt+U";
 
 const MENU_TOGGLE_WINDOW: usize = 1;
-const MENU_TOPMOST: usize = 2;
-const MENU_AUTOSTART: usize = 3;
-const MENU_EXIT: usize = 4;
+const MENU_MASCOT: usize = 2;
+const MENU_TOPMOST: usize = 3;
+const MENU_AUTOSTART: usize = 4;
+const MENU_EXIT: usize = 5;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
 
+static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 static APP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static HIDDEN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TRAY_ICON: AtomicIsize = AtomicIsize::new(0);
@@ -99,6 +104,21 @@ pub fn start(window: &Window) {
     }
 
     APP_WINDOW.store(app as isize, Ordering::SeqCst);
+    // Subclasseia a janela para interceptar WM_SYSCOMMAND (minimizar -> mascote)
+    unsafe {
+        let orig = SetWindowLongPtrW(
+            app,
+            GWLP_WNDPROC,
+            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as isize,
+        );
+        if orig == 0 {
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            eprintln!("[Usami Presence] Falha ao subclassear janela (SetWindowLongPtrW): erro {}", err);
+        } else {
+            ORIGINAL_WNDPROC.store(orig, Ordering::SeqCst);
+            println!("[Usami Presence] WndProc subclasseado com sucesso para interceptar minimizar");
+        }
+    }
     let app_id = app as isize;
     let (ready_tx, ready_rx) = mpsc::channel();
     match thread::Builder::new()
@@ -181,6 +201,14 @@ fn run(app: isize, ready: Sender<Result<Ready, String>>) {
             VK_L_KEY,
         )
     } != 0;
+    let _mascot_hotkey = unsafe {
+        RegisterHotKey(
+            hidden,
+            HOTKEY_MASCOT_ID,
+            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+            VK_M_KEY,
+        )
+    } != 0;
 
     unsafe {
         TASKBAR_CREATED.store(
@@ -247,6 +275,32 @@ fn window_hwnd(window: &Window) -> Option<HWND> {
         RawWindowHandle::Win32(win32) => Some(win32.hwnd.get() as HWND),
         _ => None,
     }
+}
+
+unsafe extern "system" fn mascot_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // O GPUI 0.2.2 não repassa o botão "-" nativo como WM_SYSCOMMAND: o
+    // wndproc dele trata WM_NCLBUTTONUP/HTMINBUTTON chamando
+    // ShowWindowAsync(SW_MINIMIZE) direto. Por isso interceptamos os dois
+    // caminhos (botão e menu do sistema/teclado) antes de chegar nele.
+    let minimize_click = msg == WM_NCLBUTTONUP && wparam as u32 == HTMINBUTTON;
+    let minimize_command = msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE;
+    if (minimize_click || minimize_command) && crate::mascot::is_enabled() {
+        println!("[Usami Presence] minimizar interceptado -> request_toggle()");
+        crate::mascot::request_toggle();
+        return 0;
+    }
+    let orig = ORIGINAL_WNDPROC.load(Ordering::SeqCst) as *const ();
+    if !orig.is_null() {
+        let orig_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+            std::mem::transmute(orig);
+        return orig_proc(hwnd, msg, wparam, lparam);
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 fn app_window() -> HWND {
@@ -470,11 +524,18 @@ unsafe extern "system" fn window_proc(
             crate::lol::notify_hotkey_toggle_click_through();
             0
         }
+        WM_HOTKEY if wparam as i32 == HOTKEY_MASCOT_ID => {
+            if crate::mascot::is_enabled() {
+                crate::mascot::request_toggle();
+            }
+            0
+        }
         WM_CLOSE => {
             unsafe {
                 remove_tray_icon(hwnd);
                 UnregisterHotKey(hwnd, HOTKEY_ID);
                 UnregisterHotKey(hwnd, HOTKEY_LOL_OVERLAY_ID);
+                UnregisterHotKey(hwnd, HOTKEY_MASCOT_ID);
                 DestroyWindow(hwnd);
             }
             0
@@ -504,6 +565,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let shown = unsafe { IsWindowVisible(app) != 0 && IsIconic(app) == 0 };
     let topmost = (unsafe { GetWindowLongPtrW(app, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST) != 0;
     let autostart = autostart_enabled();
+    let mascot_active = crate::mascot::is_active();
 
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
@@ -517,8 +579,19 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     });
     unsafe { AppendMenuW(menu, MF_STRING, MENU_TOGGLE_WINDOW, toggle.as_ptr()) };
 
+    let mascot_label = wide("Modo mascote (Ctrl+Alt+M)");
+    let mascot_flags = MF_STRING
+        | if mascot_active { MF_CHECKED } else { 0 }
+        | if crate::mascot::is_enabled() { 0 } else { MF_GRAYED };
+    unsafe { AppendMenuW(menu, mascot_flags, MENU_MASCOT, mascot_label.as_ptr()) };
+
     let topmost_label = wide("Sempre no topo");
-    let topmost_flags = MF_STRING | if topmost { MF_CHECKED } else { 0 };
+    // No modo mascote a janela já é forçada no topo; desabilita o toggle.
+    let topmost_flags = if mascot_active {
+        MF_STRING | MF_GRAYED
+    } else {
+        MF_STRING | if topmost { MF_CHECKED } else { 0 }
+    };
     unsafe { AppendMenuW(menu, topmost_flags, MENU_TOPMOST, topmost_label.as_ptr()) };
 
     let autostart_label = wide("Iniciar com o Windows");
@@ -561,6 +634,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match command {
         MENU_TOGGLE_WINDOW => unsafe { toggle_window(app) },
+        MENU_MASCOT => {
+            if crate::mascot::is_enabled() {
+                crate::mascot::request_toggle();
+            }
+        }
         MENU_TOPMOST => unsafe { toggle_topmost(app) },
         MENU_AUTOSTART => toggle_autostart(),
         MENU_EXIT => {

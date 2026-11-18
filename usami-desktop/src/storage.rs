@@ -80,6 +80,13 @@ pub struct UiPrefs {
     pub muted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowPrefs>,
+    /// Abrir já no modo mascote (janela pequena sem moldura).
+    #[serde(default)]
+    pub mascot: bool,
+    /// Botão minimizar (–) entra no modo mascote. Ligado por padrão;
+    /// as Configurações podem desligar.
+    #[serde(default = "default_true")]
+    pub mascot_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

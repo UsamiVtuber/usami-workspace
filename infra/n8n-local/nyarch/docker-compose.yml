@@ -109,6 +109,7 @@ services:
         bind:
           create_host_path: false
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./migrations/001_usami_principal_tables.sql:/docker-entrypoint-initdb.d/02-usami-principal.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U usami -d usami"]
       interval: 10s

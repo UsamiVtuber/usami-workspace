@@ -1,0 +1,164 @@
+{
+  "name": "Usami - Discord Usami Principal",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "usami-discord-usami",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "dc-usami-0001-4000-8000-000000000001",
+      "name": "Receber Comando Usami",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "usami-discord-usami-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = (raw && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\nconst event = String(body.event || '');\nconst channels = body.channelsConfig || {};\n\nconst b64 = obj => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');\n\nif (event !== 'discord.slash_command') {\n  throw new Error(`Evento não suportado no workflow Usami Principal: ${event}`);\n}\n\nconst cmd = String(body.commandName || '');\nconst opts = body.options || {};\nconst user = body.user || {};\nconst guildId = String(body.guildId || 'dm');\nconst channelId = String(body.channelId || '');\nconst userId = String(user.id || '');\nconst username = String(user.globalName || user.username || 'usuário');\nconst webhookPatchUrl = body.webhookPatchUrl || '';\n\n// Apenas processa o comando 'usami'\nif (cmd !== 'usami') {\n  throw new Error(`Comando não é /usami: ${cmd}`);\n}\n\nconst sub = String(opts.subcomando || opts.subcommand || '');\n\n// 1. Subcomando: chat\nif (sub === 'chat') {\n  const mensagem = String(opts.mensagem || '').trim().slice(0, 1800);\n  const criarThread = Boolean(opts.thread);\n  if (!mensagem) {\n    return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'chat', body, channels, sql: '', payloadB64: '', error: 'Mensagem é obrigatória para /usami chat', webhookPatchUrl } }];\n  }\n  // Encaminha para o workflow de chat existente via webhook interno\n  // Aqui apenas registramos a interação e retornamos sucesso\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n    st AS (\n      INSERT INTO discord_server_stats (guild_id, commands_count, updated_at)\n      SELECT p.j->>'guildId', 1, NOW() FROM p\n      ON CONFLICT (guild_id) DO UPDATE SET commands_count = discord_server_stats.commands_count + 1, updated_at = NOW()\n    ),\n    ins AS (\n      INSERT INTO usami_chat_log (guild_id, user_id, username, message, thread_created)\n      SELECT p.j->>'guildId', p.j->>'userId', p.j->>'username', p.j->>'mensagem', (p.j->>'criarThread')::bool FROM p\n      RETURNING id, created_at\n    )\n    SELECT jsonb_build_object(\n      'action', 'chat',\n      'logged', (SELECT row_to_json(ins) FROM ins LIMIT 1),\n      'webhookPatchUrl', (SELECT p.j->>'webhookPatchUrl' FROM p)\n    ) AS result;\n  `;\n  const payload = { guildId, userId, username, mensagem, criarThread, webhookPatchUrl };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'chat', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\n// 2. Subcomando: status\nif (sub === 'status') {\n  const sql = `\n    WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\n    SELECT jsonb_build_object(\n      'action', 'status',\n      'server', (SELECT row_to_json(s) FROM discord_server_stats s WHERE s.guild_id = (SELECT p.j->>'guildId' FROM p)),\n      'mood', (SELECT row_to_json(m) FROM usami_mood m WHERE m.guild_id = (SELECT p.j->>'guildId' FROM p) ORDER BY m.updated_at DESC LIMIT 1),\n      'affinity', (SELECT row_to_json(a) FROM usami_affinity a WHERE a.guild_id = (SELECT p.j->>'guildId' FROM p) ORDER BY a.updated_at DESC LIMIT 1),\n      'sleepMode', (SELECT row_to_json(s) FROM usami_sleep_mode s WHERE s.guild_id = (SELECT p.j->>'guildId' FROM p) AND s.active = TRUE LIMIT 1),\n      'presence', (SELECT jsonb_build_object(\n        'state', COALESCE(rp.state, 'idle'),\n        'details', COALESCE(rp.details, ''),\n        'largeImage', COALESCE(rp.large_image_key, ''),\n        'largeText', COALESCE(rp.large_image_text, ''),\n        'smallImage', COALESCE(rp.small_image_key, ''),\n        'smallText', COALESCE(rp.small_image_text, ''),\n        'startTimestamp', rp.start_timestamp,\n        'endTimestamp', rp.end_timestamp\n      ) FROM usami_rich_presence rp WHERE rp.guild_id = (SELECT p.j->>'guildId' FROM p) ORDER BY rp.updated_at DESC LIMIT 1)\n    ) AS result;\n  `;\n  const payload = { guildId };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'status', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\n// 3. Subcomando: memoria\nif (sub === 'memoria') {\n  const acao = String(opts.acao || 'ver');\n  const chave = String(opts.chave || '').trim();\n  \n  if (acao === 'limpar' && !chave) {\n    return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'memoria', body, channels, sql: '', payloadB64: '', error: 'Chave é obrigatória para limpar memória', webhookPatchUrl } }];\n  }\n\n  let sql = '';\n  if (acao === 'ver') {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      rows AS (\n        SELECT key, value, created_at, updated_at\n        FROM usami_memory\n        WHERE guild_id = (SELECT p.j->>'guildId' FROM p)\n          AND (p.j->>'chave' IS NULL OR p.j->>'chave' = '' OR key = (SELECT p.j->>'chave' FROM p))\n        ORDER BY updated_at DESC LIMIT 20\n      )\n      SELECT jsonb_build_object(\n        'action', 'memoria_ver',\n        'memories', COALESCE((SELECT jsonb_agg(row_to_json(rows)) FROM rows), '[]'::jsonb)\n      ) AS result;\n    `;\n  } else {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      del AS (\n        DELETE FROM usami_memory\n        WHERE guild_id = (SELECT p.j->>'guildId' FROM p)\n          AND key = (SELECT p.j->>'chave' FROM p)\n        RETURNING key, value\n      )\n      SELECT jsonb_build_object(\n        'action', 'memoria_limpar',\n        'deleted', COALESCE((SELECT jsonb_agg(row_to_json(del)) FROM del), '[]'::jsonb)\n      ) AS result;\n    `;\n  }\n  const payload = { guildId, userId, acao, chave };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'memoria', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\n// 4. Subcomando: humor\nif (sub === 'humor') {\n  const acao = String(opts.acao || 'ver');\n  const humor = String(opts.humor || '').trim();\n  const validMoods = ['happy', 'tsundere', 'surprised', 'thinking', 'neutral', 'sad', 'angry'];\n  \n  if (acao === 'definir' && !validMoods.includes(humor)) {\n    return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'humor', body, channels, sql: '', payloadB64: '', error: 'Humor inválido. Use: ' + validMoods.join(', '), webhookPatchUrl } }];\n  }\n\n  let sql = '';\n  if (acao === 'ver') {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\n      SELECT jsonb_build_object(\n        'action', 'humor_ver',\n        'current', (SELECT row_to_json(m) FROM usami_mood m WHERE m.guild_id = (SELECT p.j->>'guildId' FROM p) ORDER BY m.updated_at DESC LIMIT 1)\n      ) AS result;\n    `;\n  } else {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      up AS (\n        INSERT INTO usami_mood (guild_id, mood, set_by_user_id, set_by_username)\n        SELECT p.j->>'guildId', p.j->>'humor', p.j->>'userId', p.j->>'username' FROM p\n        ON CONFLICT (guild_id) DO UPDATE SET\n          mood = EXCLUDED.mood,\n          set_by_user_id = EXCLUDED.set_by_user_id,\n          set_by_username = EXCLUDED.set_by_username,\n          updated_at = NOW()\n        RETURNING mood, updated_at\n      )\n      SELECT jsonb_build_object(\n        'action', 'humor_definir',\n        'mood', (SELECT mood FROM up),\n        'updatedAt', (SELECT updated_at FROM up)\n      ) AS result;\n    `;\n  }\n  const payload = { guildId, userId, username, acao, humor };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'humor', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\n// 5. Subcomando: afinidade\nif (sub === 'afinidade') {\n  const acao = String(opts.acao || 'ver');\n  const estagio = String(opts.estagio || '').trim();\n  const validStages = ['Conhecida', 'Amiga', 'Amiga Íntima', 'Confidente', 'Alma Gêmea'];\n  \n  if (acao === 'definir' && !validStages.includes(estagio)) {\n    return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'afinidade', body, channels, sql: '', payloadB64: '', error: 'Estágio inválido. Use: ' + validStages.join(', '), webhookPatchUrl } }];\n  }\n\n  let sql = '';\n  if (acao === 'ver') {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j)\n      SELECT jsonb_build_object(\n        'action', 'afinidade_ver',\n        'current', (SELECT row_to_json(a) FROM usami_affinity a WHERE a.guild_id = (SELECT p.j->>'guildId' FROM p) ORDER BY a.updated_at DESC LIMIT 1)\n      ) AS result;\n    `;\n  } else {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      up AS (\n        INSERT INTO usami_affinity (guild_id, stage, set_by_user_id, set_by_username)\n        SELECT p.j->>'guildId', p.j->>'estagio', p.j->>'userId', p.j->>'username' FROM p\n        ON CONFLICT (guild_id) DO UPDATE SET\n          stage = EXCLUDED.stage,\n          set_by_user_id = EXCLUDED.set_by_user_id,\n          set_by_username = EXCLUDED.set_by_username,\n          updated_at = NOW()\n        RETURNING stage, updated_at\n      )\n      SELECT jsonb_build_object(\n        'action', 'afinidade_definir',\n        'stage', (SELECT stage FROM up),\n        'updatedAt', (SELECT updated_at FROM up)\n      ) AS result;\n    `;\n  }\n  const payload = { guildId, userId, username, acao, estagio };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'afinidade', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\n// 6. Subcomando: sono\nif (sub === 'sono') {\n  const acao = String(opts.acao || 'ativar');\n  \n  if (!['ativar', 'desativar'].includes(acao)) {\n    return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'sono', body, channels, sql: '', payloadB64: '', error: 'Ação deve ser ativar ou desativar', webhookPatchUrl } }];\n  }\n\n  let sql = '';\n  if (acao === 'ativar') {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      up AS (\n        INSERT INTO usami_sleep_mode (guild_id, channel_id, host_user_id, host_username, active, ends_at)\n        SELECT p.j->>'guildId', p.j->>'channelId', p.j->>'userId', p.j->>'username', TRUE, NOW() + INTERVAL '30 minutes' FROM p\n        ON CONFLICT (guild_id) DO UPDATE SET\n          channel_id = EXCLUDED.channel_id,\n          host_user_id = EXCLUDED.host_user_id,\n          host_username = EXCLUDED.host_username,\n          active = TRUE,\n          ends_at = NOW() + INTERVAL '30 minutes',\n          updated_at = NOW()\n        RETURNING ends_at\n      )\n      SELECT jsonb_build_object(\n        'action', 'sono_ativar',\n        'endsAt', (SELECT ends_at FROM up),\n        'durationMinutes', 30\n      ) AS result;\n    `;\n  } else {\n    sql = `\n      WITH p AS (SELECT convert_from(decode($1, 'base64'), 'UTF8')::jsonb AS j),\n      up AS (\n        UPDATE usami_sleep_mode\n        SET active = FALSE, updated_at = NOW()\n        WHERE guild_id = (SELECT p.j->>'guildId' FROM p) AND active = TRUE\n        RETURNING guild_id\n      )\n      SELECT jsonb_build_object(\n        'action', 'sono_desativar',\n        'deactivated', (SELECT COUNT(*) FROM up) > 0\n      ) AS result;\n    `;\n  }\n  const payload = { guildId, channelId, userId, username, acao };\n  return [{ json: { mode: 'slash', commandName: 'usami', subcommand: 'sono', body, channels, sql, payloadB64: b64(payload), webhookPatchUrl } }];\n}\n\nthrow new Error(`Subcomando /usami não reconhecido: ${sub}`);"
+      },
+      "id": "dc-usami-0002-4000-8000-000000000002",
+      "name": "Roteador Usami e SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": "={{ $json.payloadB64 }}"
+        }
+      },
+      "id": "dc-usami-0003-4000-8000-000000000003",
+      "name": "Executar Operacao Usami",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        300
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "JTjN8VkfEOGgwxqn",
+          "name": "Usami Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Roteador Usami e SQL').item.json;\nconst res = ($input.first().json && $input.first().json.result) || {};\nconst body = ctx.body || {};\nconst channels = ctx.channels || {};\nconst webhookPatchUrl = ctx.webhookPatchUrl || body.webhookPatchUrl || '';\n\nconst calls = [];\n\nconst addJsonCall = (method, url, payload, meta = {}) => {\n  calls.push({\n    json: {\n      method,\n      url,\n      hasBody: true,\n      bodyJson: JSON.stringify(payload),\n      meta\n    }\n  });\n};\n\n// Se houve erro no roteador, retorna erro\nif (ctx.error) {\n  addJsonCall('PATCH', webhookPatchUrl, {\n    content: `❌ ${ctx.error}`\n  });\n  return calls;\n}\n\nconst sub = ctx.subcommand;\n\nif (sub === 'chat') {\n  // Para chat, apenas confirma que a mensagem foi logada\n  // A resposta real vem do workflow de chat companion\n  if (res.logged) {\n    addJsonCall('PATCH', webhookPatchUrl, {\n      content: `💬 Mensagem enviada para a Usami! ${res.logged.thread_created ? '(Thread criada para conversa longa)' : ''}`\n    });\n  } else {\n    addJsonCall('PATCH', webhookPatchUrl, {\n      content: '💬 Mensagem processada!'\n    });\n  }\n}\nelse if (sub === 'status') {\n  const srv = res.server || {};\n  const mood = res.mood || {};\n  const affinity = res.affinity || {};\n  const sleep = res.sleepMode || {};\n  const presence = res.presence || {};\n\n  const moodLabels = {\n    happy: 'Alegre ✨',\n    tsundere: 'Tsundere 💢',\n    surprised: 'Surpresa 💡',\n    thinking: 'Pensativa 💭',\n    neutral: 'Neutro',\n    sad: 'Triste',\n    angry: 'Brava 💢'\n  };\n\n  const affinityLabels = {\n    'Conhecida': 'Conhecida 🤝',\n    'Amiga': 'Amiga 💜',\n    'Amiga Íntima': 'Amiga Íntima 💕',\n    'Confidente': 'Confidente 🤫',\n    'Alma Gêmea': 'Alma Gêmea 💖'\n  };\n\n  const fields = [\n    { name: 'Mensagens contadas', value: String(srv.messages_count || 0), inline: true },\n    { name: 'Comandos executados', value: String(srv.commands_count || 0), inline: true },\n    { name: 'Membros acolhidos', value: String(srv.members_joined || 0), inline: true }\n  ];\n\n  if (mood.mood) {\n    fields.push({ name: 'Humor atual', value: moodLabels[mood.mood] || mood.mood, inline: true });\n  }\n  if (affinity.stage) {\n    fields.push({ name: 'Afinidade', value: affinityLabels[affinity.stage] || affinity.stage, inline: true });\n  }\n  if (sleep.active) {\n    const endsUnix = sleep.ends_at ? Math.floor(new Date(sleep.ends_at).getTime() / 1000) : 0;\n    fields.push({ name: 'Modo Sono', value: `Ativo até <t:${endsUnix}:R>`, inline: true });\n  }\n  if (presence.state) {\n    fields.push({ name: 'Rich Presence', value: `${presence.details || presence.state}`, inline: true });\n  }\n\n  addJsonCall('PATCH', webhookPatchUrl, {\n    embeds: [{\n      title: '📊 Status da Usami Companion',\n      color: 16735870,\n      fields,\n      footer: { text: `Guild: ${body.guildId || 'DM'} • Atualizado agora` }\n    }]\n  });\n}\nelse if (sub === 'memoria') {\n  if (res.action === 'memoria_ver') {\n    const memories = Array.isArray(res.memories) ? res.memories : [];\n    if (memories.length === 0) {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: '🧠 Nenhuma memória encontrada para este servidor.'\n      });\n    } else {\n      const lines = memories.map(m => `• **${m.key}** — ${String(m.value).slice(0, 100)}${m.value.length > 100 ? '...' : ''} \n  \`${new Date(m.updated_at).toLocaleString('pt-BR')}\``).join('\\n\\n');\n      addJsonCall('PATCH', webhookPatchUrl, {\n        embeds: [{\n          title: '🧠 Memórias de Longo Prazo',\n          description: lines.slice(0, 4000),\n          color: 2633026,\n          footer: { text: `${memories.length} memória(s)` }\n        }]\n      });\n    }\n  } else if (res.action === 'memoria_limpar') {\n    const deleted = Array.isArray(res.deleted) ? res.deleted : [];\n    if (deleted.length > 0) {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: `🗑️ Memória **${deleted[0].key}** removida com sucesso!`\n      });\n    } else {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: 'Nenhuma memória encontrada com essa chave.'\n      });\n    }\n  }\n}\nelse if (sub === 'humor') {\n  if (res.action === 'humor_ver') {\n    const current = res.current || {};\n    const moodLabels = {\n      happy: 'Alegre ✨',\n      tsundere: 'Tsundere 💢',\n      surprised: 'Surpresa 💡',\n      thinking: 'Pensativa 💭',\n      neutral: 'Neutro',\n      sad: 'Triste',\n      angry: 'Brava 💢'\n    };\n    if (current.mood) {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        embeds: [{\n          title: '😊 Humor Atual da Usami',\n          description: `**${moodLabels[current.mood] || current.mood}**\nDefinido por <@${current.set_by_user_id || 'sistema'}> em ${new Date(current.updated_at).toLocaleString('pt-BR')}`,\n          color: 16754377\n        }]\n      });\n    } else {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: 'A Usami ainda não tem humor definido. Use `/usami humor definir`!' \n      });\n    }\n  } else if (res.action === 'humor_definir') {\n    const moodLabels = {\n      happy: 'Alegre ✨',\n      tsundere: 'Tsundere 💢',\n      surprised: 'Surpresa 💡',\n      thinking: 'Pensativa 💭',\n      neutral: 'Neutro',\n      sad: 'Triste',\n      angry: 'Brava 💢'\n    };\n    addJsonCall('PATCH', webhookPatchUrl, {\n      content: `😊 Humor da Usami alterado para **${moodLabels[res.mood] || res.mood}**!`\n    });\n  }\n}\nelse if (sub === 'afinidade') {\n  if (res.action === 'afinidade_ver') {\n    const current = res.current || {};\n    const affinityLabels = {\n      'Conhecida': 'Conhecida 🤝',\n      'Amiga': 'Amiga 💜',\n      'Amiga Íntima': 'Amiga Íntima 💕',\n      'Confidente': 'Confidente 🤫',\n      'Alma Gêmea': 'Alma Gêmea 💖'\n    };\n    if (current.stage) {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        embeds: [{\n          title: '💜 Nível de Afinidade',\n          description: `**${affinityLabels[current.stage] || current.stage}**\nDefinido por <@${current.set_by_user_id || 'sistema'}> em ${new Date(current.updated_at).toLocaleString('pt-BR')}`,\n          color: 16735870\n        }]\n      });\n    } else {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: 'Afinidade ainda não definida. Use `/usami afinidade definir`!' \n      });\n    }\n  } else if (res.action === 'afinidade_definir') {\n    const affinityLabels = {\n      'Conhecida': 'Conhecida 🤝',\n      'Amiga': 'Amiga 💜',\n      'Amiga Íntima': 'Amiga Íntima 💕',\n      'Confidente': 'Confidente 🤫',\n      'Alma Gêmea': 'Alma Gêmea 💖'\n    };\n    addJsonCall('PATCH', webhookPatchUrl, {\n      content: `💜 Afinidade alterada para **${affinityLabels[res.stage] || res.stage}**!`\n    });\n  }\n}\nelse if (sub === 'sono') {\n  if (res.action === 'sono_ativar') {\n    const endsUnix = res.endsAt ? Math.floor(new Date(res.endsAt).getTime() / 1000) : Math.floor(Date.now() / 1000 + 1800);\n    addJsonCall('PATCH', webhookPatchUrl, {\n      content: `🌙 Modo Sono ativado! A Usami vai fazer companhia por 30 minutos.`,\n      embeds: [{\n        title: '🌙 Modo Companhia para Dormir',\n        description: `A Usami vai ficar por perto enviando mensagens suaves e reagindo até <t:${endsUnix}:R>.\nUse \`/usami sono desativar\` para cancelar antes.`,\n        color: 5763719,\n        footer: { text: 'Duração: 30 minutos' }\n      }]\n    });\n  } else if (res.action === 'sono_desativar') {\n    if (res.deactivated) {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: '☀️ Modo Sono desativado. A Usami voltou ao normal!' \n      });\n    } else {\n      addJsonCall('PATCH', webhookPatchUrl, {\n        content: 'O modo sono já estava desativado.' \n      });\n    }\n  }\n}\n\nreturn calls;"
+      },
+      "id": "dc-usami-0004-4000-8000-000000000004",
+      "name": "Montar Respostas Usami",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 5000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "dc-usami-0005-4000-8000-000000000005",
+      "name": "Enviar Resposta Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        300
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receber Comando Usami": {
+      "main": [
+        [
+          {
+            "node": "Roteador Usami e SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteador Usami e SQL": {
+      "main": [
+        [
+          {
+            "node": "Executar Operacao Usami",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar Operacao Usami": {
+      "main": [
+        [
+          {
+            "node": "Montar Respostas Usami",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Respostas Usami": {
+      "main": [
+        [
+          {
+            "node": "Enviar Resposta Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

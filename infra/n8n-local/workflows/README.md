@@ -172,6 +172,13 @@ Credenciais necessárias no n8n após importar os JSONs:
 - **`Usami - Discord Chat Companion.json`** (`POST /webhook/usami-discord-chat`): responde menções `@Usami`, DMs e o canal `#usami-chat`. Suporta texto, leitura de arquivos anexados (`.txt`, `.py`, `.json`, etc.) e visão multimodal para imagens e vídeos via `POST http://10.42.0.1:8787/api/media/analyze` (ou `/api/chat` para conversas puramente textuais), com fallback amigável caso o PC Windows esteja offline.
 - **`Usami - Discord Engajamento e Utilidades.json`** (`POST /webhook/usami-discord-community` + `Schedule` 09:00 e 5 min): boas-vindas (`guildMemberAdd`), sistema AFK automático, aniversários (`/aniversario` + parabéns às 09:00), Notepad (`/nota`), sugestões com votação (`/sugestao`), sorteios (`/sorteio` + sorteio automático de vencedores), estatísticas (`/stats`) e resumo rápido de observabilidade (`/obs`).
 - **`Usami - Discord Moderacao e Estrutura.json`** (`POST /webhook/usami-discord-mod`): Auto-Mod (links de convite, menções em massa, golpes comuns + log em `#mod-logs`), Reaction Roles (`/reactionrole` + reações), Tickets de suporte privados (`/ticket`), Sticky Messages (`/sticky` + repostagem automática) e comandos customizados (`/cmd` + `!nome`).
+- **`Usami - Discord Usami Principal.json`** (`POST /webhook/usami-discord-usami`): comando unificado `/usami` com 6 subcomandos:
+  - `/usami chat <mensagem> [thread:true]` — conversa com a Usami (opcionalmente cria thread para conversas longas)
+  - `/usami status` — mostra Rich Presence, humor, afinidade, modo sono e estatísticas do servidor
+  - `/usami memoria ver [chave]` / `/usami memoria limpar <chave>` — gerencia memória de longo prazo por servidor
+  - `/usami humor ver` / `/usami humor definir <humor>` — define humor: `happy` (Alegre ✨), `tsundere` (Tsundere 💢), `surprised` (Surpresa 💡), `thinking` (Pensativa 💭), `neutral` (Neutro), `sad` (Triste), `angry` (Brava 💢)
+  - `/usami afinidade ver` / `/usami afinidade definir <estagio>` — define estágio: `Conhecida` 🤝, `Amiga` 💜, `Amiga Íntima` 💕, `Confidente` 🤫, `Alma Gêmea` 💖
+  - `/usami sono ativar` / `/usami sono desativar` — ativa modo companhia para dormir por 30 minutos (mensagens suaves periódicas)
 
 ## Usami - Busca e Matching de Vagas (agendado)
 - **Arquivo:** `Usami - Busca e Matching de Vagas (agendado).json` (id `UBTFGRMidGiVdbpu`).

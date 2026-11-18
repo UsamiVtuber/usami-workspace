@@ -40,15 +40,15 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
-    GWLP_WNDPROC, GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HWND_NOTOPMOST,
-    HWND_TOPMOST, ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic, IsWindowVisible,
-    LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SC_MINIMIZE,
-    SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
-    WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL, WM_RBUTTONUP, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GWLP_WNDPROC, GetClassLongPtrW, GetCursorPos, GetMessageW, GetWindowLongPtrW, HTMINBUTTON,
+    HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, IDI_APPLICATION, IMAGE_ICON, IsIconic,
+    IsWindowVisible, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadIconW, LoadImageW, MF_CHECKED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SC_MINIMIZE, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCLBUTTONUP, WM_NULL,
+    WM_RBUTTONUP, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
@@ -70,8 +70,6 @@ const MENU_EXIT: usize = 5;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
-
-const WM_MASCOT_TOGGLE: u32 = WM_APP + 2;
 
 static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 static APP_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -285,9 +283,14 @@ unsafe extern "system" fn mascot_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE {
-        // Intercepta o botão de minimizar (-) e vira modo mascote
-        println!("[Usami Presence] WM_SYSCOMMAND SC_MINIMIZE interceptado -> request_toggle()");
+    // O GPUI 0.2.2 não repassa o botão "-" nativo como WM_SYSCOMMAND: o
+    // wndproc dele trata WM_NCLBUTTONUP/HTMINBUTTON chamando
+    // ShowWindowAsync(SW_MINIMIZE) direto. Por isso interceptamos os dois
+    // caminhos (botão e menu do sistema/teclado) antes de chegar nele.
+    let minimize_click = msg == WM_NCLBUTTONUP && wparam as u32 == HTMINBUTTON;
+    let minimize_command = msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE;
+    if (minimize_click || minimize_command) && crate::mascot::is_enabled() {
+        println!("[Usami Presence] minimizar interceptado -> request_toggle()");
         crate::mascot::request_toggle();
         return 0;
     }
@@ -522,7 +525,9 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_HOTKEY if wparam as i32 == HOTKEY_MASCOT_ID => {
-            crate::mascot::request_toggle();
+            if crate::mascot::is_enabled() {
+                crate::mascot::request_toggle();
+            }
             0
         }
         WM_CLOSE => {
@@ -575,7 +580,9 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     unsafe { AppendMenuW(menu, MF_STRING, MENU_TOGGLE_WINDOW, toggle.as_ptr()) };
 
     let mascot_label = wide("Modo mascote (Ctrl+Alt+M)");
-    let mascot_flags = MF_STRING | if mascot_active { MF_CHECKED } else { 0 };
+    let mascot_flags = MF_STRING
+        | if mascot_active { MF_CHECKED } else { 0 }
+        | if crate::mascot::is_enabled() { 0 } else { MF_GRAYED };
     unsafe { AppendMenuW(menu, mascot_flags, MENU_MASCOT, mascot_label.as_ptr()) };
 
     let topmost_label = wide("Sempre no topo");
@@ -627,7 +634,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match command {
         MENU_TOGGLE_WINDOW => unsafe { toggle_window(app) },
-        MENU_MASCOT => crate::mascot::request_toggle(),
+        MENU_MASCOT => {
+            if crate::mascot::is_enabled() {
+                crate::mascot::request_toggle();
+            }
+        }
         MENU_TOPMOST => unsafe { toggle_topmost(app) },
         MENU_AUTOSTART => toggle_autostart(),
         MENU_EXIT => {

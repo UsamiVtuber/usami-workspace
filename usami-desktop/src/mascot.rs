@@ -22,9 +22,18 @@ pub(crate) const SNAP_HEIGHT: f32 = 480.0;
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(true);
 
 pub(crate) fn request_toggle() {
     TOGGLE_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub(crate) fn is_enabled() -> bool {
+    ENABLED.load(Ordering::SeqCst)
 }
 
 pub(crate) fn take_toggle_request() -> bool {

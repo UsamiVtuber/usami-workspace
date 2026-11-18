@@ -44,7 +44,10 @@ impl UsamiApp {
             }
             // Encolher abaixo do mínimo utilizável é o segundo gatilho do modo
             // mascote (o primeiro é bandeja/atalho).
-            if crate::mascot::should_snap(width, height) && !view.lol_overlay_active {
+            if crate::mascot::is_enabled()
+                && crate::mascot::should_snap(width, height)
+                && !view.lol_overlay_active
+            {
                 view.enter_mascot(window, cx);
                 return;
             }
@@ -111,6 +114,10 @@ impl UsamiApp {
     pub(crate) fn toggle_mascot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.mascot_mode {
             self.exit_mascot(window, cx);
+        } else if self.lol_overlay_active {
+            // Com a sobreposição do LoL ativa o mascote não entra; o clique
+            // em minimizar cai no comportamento padrão da janela.
+            window.minimize_window();
         } else {
             self.enter_mascot(window, cx);
         }

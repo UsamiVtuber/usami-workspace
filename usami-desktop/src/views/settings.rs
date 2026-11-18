@@ -980,7 +980,7 @@ impl UsamiApp {
                                     div()
                                         .text_size(px(ty.sm))
                                         .text_color(c.muted)
-                                        .child("Clique no botão de minimizar (–) vira avatar pequeno sempre no topo, fora da barra de tarefas. Ctrl+Alt+M alterna."),
+                                        .child("Clique no botão de minimizar (–) vira avatar pequeno sempre no topo, fora da barra de tarefas. Ctrl+Alt+M alterna; duplo clique no avatar volta."),
                                 ),
                         )
                         .child(
@@ -989,19 +989,18 @@ impl UsamiApp {
                                 .w(px(52.0))
                                 .h(px(28.0))
                                 .rounded(px(999.0))
-                                .bg(if self.prefs.mascot { theme::Palette::emerald_soft() } else { rgba(0x88888822) })
+                                .bg(if self.prefs.mascot_enabled { theme::Palette::emerald_soft() } else { rgba(0x88888822) })
                                 .border_1()
-                                .border_color(if self.prefs.mascot { theme::Palette::emerald_border() } else { rgba(0x88888866) })
+                                .border_color(if self.prefs.mascot_enabled { theme::Palette::emerald_border() } else { rgba(0x88888866) })
                                 .cursor_pointer()
                                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    let next = !this.prefs.mascot;
-                                    this.prefs.mascot = next;
-                                    storage::save_prefs(&this.prefs);
-                                    if next {
-                                        this.enter_mascot(window, cx);
-                                    } else {
+                                    let next = !this.prefs.mascot_enabled;
+                                    this.prefs.mascot_enabled = next;
+                                    crate::mascot::set_enabled(next);
+                                    if !next && this.mascot_mode {
                                         this.exit_mascot(window, cx);
                                     }
+                                    storage::save_prefs(&this.prefs);
                                     cx.notify();
                                 }))
                                 .child(
@@ -1015,8 +1014,8 @@ impl UsamiApp {
                                                 .w(px(22.0))
                                                 .h(px(22.0))
                                                 .rounded(px(999.0))
-                                                .bg(if self.prefs.mascot { theme::Palette::emerald() } else { rgb(0x888888) })
-                                                .ml(if self.prefs.mascot { px(26.0) } else { px(4.0) }),
+                                                .bg(if self.prefs.mascot_enabled { theme::Palette::emerald() } else { rgb(0x888888) })
+                                                .ml(if self.prefs.mascot_enabled { px(26.0) } else { px(4.0) }),
                                         ),
                                 ),
                         ),

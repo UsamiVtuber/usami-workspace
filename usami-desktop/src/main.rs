@@ -1492,7 +1492,8 @@ fn main() {
         theme::load_fonts(cx, asset_base_dir());
         let prefs = storage::load_prefs();
         #[cfg(target_os = "windows")]
-        let start_mascot = prefs.mascot;
+        let start_mascot = prefs.mascot && prefs.mascot_enabled;
+        let mascot_enabled = prefs.mascot_enabled;
         let bounds = prefs
             .window
             .filter(|window| window.is_sane())
@@ -1515,6 +1516,7 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                crate::mascot::set_enabled(mascot_enabled);
                 let view = cx.new(|cx| UsamiApp::new(cx, prefs));
                 window.focus(&view.read(cx).focus_handle);
                 view.update(cx, |this, cx| this.attach_window_observers(window, cx));

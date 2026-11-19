@@ -310,6 +310,39 @@ O `MicGate` fecha a captura enquanto a Usami pensa ou fala (a própria voz não
 vira transcrição), ao mutar e quando a escuta está desligada. Encerrar a
 chamada desliga escuta, áudio e microfone.
 
+### Detecção de PTT (Push-to-Talk) — requisito de thread
+
+No modo *gamer* (overlay LoL ativo + PTT requerido), a tecla de PTT (por
+padrão **V**, **Mouse X1** ou **Mouse X2**) é monitorada por uma task assíncrona
+no GPUI.
+
+**A task DEVE rodar no executor de foreground do GPUI (`cx.spawn`), não no
+`background_executor().spawn()`.**
+
+- `cx.spawn` agenda a closure no *event loop da UI thread* — a mesma thread
+  que possui a fila de mensagens da janela (`HWND`).
+- `GetAsyncKeyState` lê o bit `0x8000` ("pressionado agora"), que é **estado
+  global** no Windows; porém, o bit baixo ("pressionado desde a última
+  chamada") é por-thread. Para comportamento correto e previsível em todos os
+  cenários (incluindo hooks de teclado globais e futuras migrações para
+  `SetWindowsHookEx(WH_KEYBOARD_LL)`), a verificação precisa acontecer na UI
+  thread.
+- No `main.rs`, o padrão estabelecido é:
+  ```rust
+  cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+      let cx = cx.clone();
+      async move {
+          loop {
+              cx.background_executor().timer(Duration::from_millis(50)).await;
+              if stop.load(Ordering::Relaxed) { break; }
+              // ... GetAsyncKeyState aqui roda na UI thread
+          }
+      }
+  }).detach();
+  ```
+  O *sono* de 50 ms usa o background executor (thread pool), mas a checagem
+  das teclas roda na UI thread logo após o `await`.
+
 ## Build e testes
 
 ```powershell

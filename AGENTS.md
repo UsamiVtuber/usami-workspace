@@ -42,6 +42,20 @@ O `README.md` da raiz descreve o workspace em alto nível. Para detalhes de um c
 - Preserve a exposição local prevista pela documentação: não abra portas, publique serviços, altere túneis nem envie dados para serviços externos sem autorização explícita.
 - Não teste sistemas ou contas sem autorização, nem desative testes ou controles para mascarar falhas.
 
+## usami-desktop: requisito de thread para detecção de PTT
+
+Ao mexer na detecção de *Push-to-Talk* (arquivos `main.rs` → `start_ptt_detection`,
+`recorder.rs` → `MicGate`), a task de polling **deve rodar no executor de
+foreground do GPUI (`cx.spawn`)**, nunca em `background_executor().spawn()`.
+
+- `cx.spawn` executa na *UI thread* (a que possui a fila de mensagens do `HWND`).
+- `GetAsyncKeyState` lê o bit `0x8000` ("pressionado agora"), que é global, mas
+  o bit baixo ("pressionado desde a última chamada") é por-thread. Para
+  comportamento correto em todos os cenários (incluindo futura migração para
+  `SetWindowsHookEx(WH_KEYBOARD_LL)`), a verificação precisa ser na UI thread.
+- Padrão no `main.rs`: `cx.spawn(...)` com `cx.background_executor().timer(...)`
+  para o sono; a checagem das teclas roda após o `await`, na UI thread.
+
 ## Ao concluir
 
 Resuma a mudança e os arquivos afetados, indique as verificações executadas (ou não executadas) e registre limitações ou riscos que permaneçam. Não declare sucesso sem evidência.

@@ -127,7 +127,9 @@ impl UsamiApp {
                                         if let Some(this) = this.upgrade() {
                                             this.update(cx, |view, cx| {
                                                 if !view.is_listening
-                                                    || (!view.is_calling && !view.lol_overlay_active)
+                                                    || (!view.is_calling
+                                                        && !view.lol_overlay_active
+                                                        && !view.mascot_mode)
                                                     || view.listen_session != session
                                                 {
                                                     return false;
@@ -171,7 +173,11 @@ impl UsamiApp {
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
                                         this.update(cx, |view, cx| {
-                                            if !view.is_listening || (!view.is_calling && !view.lol_overlay_active) {
+                                            if !view.is_listening
+                                                || (!view.is_calling
+                                                    && !view.lol_overlay_active
+                                                    && !view.mascot_mode)
+                                            {
                                                 return false;
                                             }
                                             view.voice_turn_closed =
@@ -194,7 +200,11 @@ impl UsamiApp {
                                 .update(|cx: &mut App| {
                                     if let Some(this) = this.upgrade() {
                                         this.update(cx, |view, cx| {
-                                            if !view.is_listening || (!view.is_calling && !view.lol_overlay_active) {
+                                            if !view.is_listening
+                                                || (!view.is_calling
+                                                    && !view.lol_overlay_active
+                                                    && !view.mascot_mode)
+                                            {
                                                 return false;
                                             }
                                             match transcript {

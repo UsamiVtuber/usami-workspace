@@ -23,6 +23,7 @@ pub(crate) const SNAP_HEIGHT: f32 = 480.0;
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(true);
+static FOLLOW: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn request_toggle() {
     TOGGLE_REQUESTED.store(true, Ordering::SeqCst);
@@ -34,6 +35,16 @@ pub(crate) fn set_enabled(enabled: bool) {
 
 pub(crate) fn is_enabled() -> bool {
     ENABLED.load(Ordering::SeqCst)
+}
+
+/// Espelho em memória da preferência persistida: o laço de olhar roda fora da
+/// thread da UI e não pode consultar o `UiPrefs`.
+pub(crate) fn set_follow(follow: bool) {
+    FOLLOW.store(follow, Ordering::SeqCst);
+}
+
+pub(crate) fn follow_enabled() -> bool {
+    FOLLOW.load(Ordering::SeqCst)
 }
 
 pub(crate) fn take_toggle_request() -> bool {
@@ -60,15 +71,15 @@ mod win32 {
     use std::sync::atomic::{AtomicIsize, Ordering};
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-        HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsZoomed, SM_CXSCREEN, SM_CYSCREEN,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-        SW_RESTORE, SW_SHOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_CAPTION,
-        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-        WS_SYSMENU, WS_THICKFRAME,
+        GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
+        GetWindowRect, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
+        SM_CXSCREEN, SM_CYSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+        WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
     static SAVED_STYLE: AtomicIsize = AtomicIsize::new(0);
@@ -224,6 +235,31 @@ mod win32 {
         }
     }
 
+    /// Cursor em coordenadas normalizadas do conteúdo da janela (`-1..=1`),
+    /// a mesma convenção que o handler de mouse do `gpui-vrm` usa.
+    pub(super) fn cursor_gaze() -> Option<(f32, f32)> {
+        let hwnd = hwnd()?;
+        unsafe {
+            if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
+                return None;
+            }
+            let mut cursor: POINT = zeroed();
+            let mut client: RECT = zeroed();
+            if GetCursorPos(&mut cursor) == 0 || GetClientRect(hwnd, &mut client) == 0 {
+                return None;
+            }
+            let mut origin = POINT { x: 0, y: 0 };
+            if ClientToScreen(hwnd, &mut origin) == 0 {
+                return None;
+            }
+            let width = (client.right - client.left).max(1) as f32;
+            let height = (client.bottom - client.top).max(1) as f32;
+            let nx = (((cursor.x - origin.x) as f32 / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            let ny = (((cursor.y - origin.y) as f32 / height) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            Some((nx, ny))
+        }
+    }
+
     pub(super) fn move_with_cursor(grab: (i32, i32)) {
         let Some(hwnd) = hwnd() else {
             return;
@@ -292,6 +328,34 @@ pub(crate) fn move_with_cursor(grab: (i32, i32)) {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn move_with_cursor(_grab: (i32, i32)) {}
+
+/// Segue o cursor em toda a tela enquanto o mascote está ativo e a preferência
+/// está ligada. Roda fora da UI a ~60 fps: o `gpui-vrm` já suaviza o alvo no
+/// laço de render, então aqui basta amostrar e enviar.
+#[cfg(target_os = "windows")]
+pub(crate) fn start_gaze_loop(controller: gpui_vrm::VrmController) {
+    std::thread::Builder::new()
+        .name("usami-mascot-gaze".into())
+        .spawn(move || {
+            let mut following = false;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                if is_active() && follow_enabled() {
+                    if let Some((nx, ny)) = win32::cursor_gaze() {
+                        controller.look_at_normalized(nx, ny);
+                        following = true;
+                    }
+                } else if following {
+                    controller.look_at_normalized(0.0, 0.0);
+                    following = false;
+                }
+            }
+        })
+        .ok();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn start_gaze_loop(_controller: gpui_vrm::VrmController) {}
 
 #[cfg(test)]
 mod tests {

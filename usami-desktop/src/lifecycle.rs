@@ -130,6 +130,8 @@ impl UsamiApp {
         // Marcado antes de mexer na janela: o observador de bounds reentra.
         self.mascot_mode = true;
         self.mascot_grab = None;
+        self.mascot_menu_at = None;
+        self.mascot_settings_open = false;
         self.active_drawer = ActiveDrawer::None;
         self.is_away = false;
         self.away_since = None;
@@ -156,6 +158,13 @@ impl UsamiApp {
         }
         self.mascot_mode = false;
         self.mascot_grab = None;
+        self.mascot_menu_at = None;
+        self.mascot_settings_open = false;
+        // Fora do mascote os laços de STT encerram; sem isso `is_listening`
+        // ficaria preso em `true` e o microfone nunca fecharia de novo.
+        if self.is_listening && !self.is_calling && !self.lol_overlay_active {
+            self.stop_listening();
+        }
         #[cfg(target_os = "windows")]
         {
             crate::mascot::exit();
@@ -170,6 +179,59 @@ impl UsamiApp {
         self.is_away = false;
         self.away_since = None;
         self.status_text = self.default_status();
+        cx.notify();
+    }
+
+    pub(crate) fn mascot_open_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.mascot_menu_at = Some(at);
+        self.mascot_grab = None;
+        self.touch_ui(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn mascot_close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.mascot_menu_at.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn mascot_toggle_follow(&mut self, cx: &mut Context<Self>) {
+        let next = !self.prefs.mascot_follow;
+        self.prefs.mascot_follow = next;
+        crate::mascot::set_follow(next);
+        self.persist_prefs();
+        let line = if next {
+            "Hmph... vou ficar de olho onde você estiver. Não me julga."
+        } else {
+            "Tá, parei de te seguir. Mas eu ainda sei onde você está."
+        };
+        self.show_local_line(line, "tsundere", cx);
+    }
+
+    pub(crate) fn mascot_open_settings(&mut self, cx: &mut Context<Self>) {
+        self.mascot_menu_at = None;
+        self.mascot_settings_open = true;
+        self.load_settings_data(cx);
+        self.touch_ui(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn mascot_close_settings(&mut self, cx: &mut Context<Self>) {
+        self.mascot_settings_open = false;
+        self.touch_ui(cx);
+        cx.notify();
+    }
+
+    /// Sai do mascote já com o app completo na aba de ajustes.
+    pub(crate) fn mascot_open_settings_in_app(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mascot_settings_open = false;
+        self.exit_mascot(window, cx);
+        self.load_settings_data(cx);
+        self.active_drawer = ActiveDrawer::Settings;
         cx.notify();
     }
 
@@ -194,6 +256,13 @@ impl UsamiApp {
         cx: &mut Context<Self>,
     ) {
         self.mascot_grab = None;
+        if self.mascot_settings_open {
+            return;
+        }
+        if self.mascot_menu_at.is_some() {
+            self.mascot_close_menu(cx);
+            return;
+        }
         if event.click_count() >= 2 {
             self.exit_mascot(window, cx);
             return;

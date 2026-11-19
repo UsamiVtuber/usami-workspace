@@ -225,15 +225,15 @@ impl UsamiApp {
             )
             // ── MENU DE CONTEXTO (clique direito) ──
             .when_some(menu_at, |parent, at| {
-                let x = f32::from(at.x)
-                    .min(crate::mascot::MASCOT_WIDTH - MENU_WIDTH - 8.0)
-                    .max(8.0);
-                let y = if f32::from(at.y) + MENU_HEIGHT > crate::mascot::MASCOT_HEIGHT - 56.0 {
-                    f32::from(at.y) - MENU_HEIGHT
-                } else {
-                    f32::from(at.y)
-                };
-                let y = y.clamp(8.0, crate::mascot::MASCOT_HEIGHT - MENU_HEIGHT - 56.0);
+                let (x, y) = crate::mascot::menu_position(
+                    f32::from(at.x),
+                    f32::from(at.y),
+                    MENU_WIDTH,
+                    MENU_HEIGHT,
+                    crate::mascot::MASCOT_WIDTH,
+                    crate::mascot::MASCOT_HEIGHT,
+                    56.0,
+                );
 
                 parent
                     .child(

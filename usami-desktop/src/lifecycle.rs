@@ -172,6 +172,9 @@ impl UsamiApp {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = window;
+        // O laço de olhar só reseta quando percebe a troca; zerar aqui evita
+        // que o avatar fique vesgo até o próximo ciclo lento.
+        self.vrm_controller.look_at_normalized(0.0, 0.0);
         self.is_ui_idle = false;
         self.vrm_controller.set_portrait_enabled(true);
         self.prefs.mascot = false;

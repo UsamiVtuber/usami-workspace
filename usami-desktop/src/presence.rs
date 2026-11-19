@@ -154,6 +154,7 @@ pub fn start(window: &Window) {
 /// Encerra a thread de presença: remove o ícone, desregistra o atalho e fecha
 /// a janela oculta. Idempotente; pode ser chamado no fechamento da janela.
 pub fn shutdown() {
+    crate::mascot::stop_gaze_loop();
     let hidden = HIDDEN_WINDOW.swap(0, Ordering::SeqCst);
     if hidden != 0 {
         unsafe { PostMessageW(hidden as HWND, WM_CLOSE, 0, 0) };

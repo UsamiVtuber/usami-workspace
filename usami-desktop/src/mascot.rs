@@ -24,6 +24,9 @@ static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static FOLLOW: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static GAZE_STARTED: AtomicBool = AtomicBool::new(false);
+static GAZE_STOP: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn request_toggle() {
     TOGGLE_REQUESTED.store(true, Ordering::SeqCst);
@@ -45,6 +48,56 @@ pub(crate) fn set_follow(follow: bool) {
 
 pub(crate) fn follow_enabled() -> bool {
     FOLLOW.load(Ordering::SeqCst)
+}
+
+/// Uma única thread de olhar por processo; a partir da segunda chamada não
+/// cria nada.
+#[cfg(target_os = "windows")]
+fn claim_gaze_slot() -> bool {
+    !GAZE_STARTED.swap(true, Ordering::SeqCst)
+}
+
+/// Encerra o laço de olhar no fechamento do app (idempotente).
+pub(crate) fn stop_gaze_loop() {
+    GAZE_STOP.store(true, Ordering::SeqCst);
+}
+
+/// Converte o cursor da tela para a coordenada normalizada do conteúdo da
+/// janela (`-1..=1`), com clamp nas bordas.
+pub(crate) fn normalize_gaze(
+    cursor_x: i32,
+    cursor_y: i32,
+    origin_x: i32,
+    origin_y: i32,
+    width: i32,
+    height: i32,
+) -> (f32, f32) {
+    let width = width.max(1) as f32;
+    let height = height.max(1) as f32;
+    let nx = (((cursor_x - origin_x) as f32 / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
+    let ny = (((cursor_y - origin_y) as f32 / height) * 2.0 - 1.0).clamp(-1.0, 1.0);
+    (nx, ny)
+}
+
+/// Posição do menu de contexto: abre para cima perto da base e nunca sai da
+/// janela nem cobre a barra de mensagem.
+pub(crate) fn menu_position(
+    x: f32,
+    y: f32,
+    menu_w: f32,
+    menu_h: f32,
+    window_w: f32,
+    window_h: f32,
+    bottom_reserve: f32,
+) -> (f32, f32) {
+    let max_x = (window_w - menu_w - 8.0).max(8.0);
+    let max_y = (window_h - menu_h - bottom_reserve).max(8.0);
+    let y = if y + menu_h > window_h - bottom_reserve {
+        y - menu_h
+    } else {
+        y
+    };
+    (x.clamp(8.0, max_x), y.clamp(8.0, max_y))
 }
 
 pub(crate) fn take_toggle_request() -> bool {
@@ -252,11 +305,14 @@ mod win32 {
             if ClientToScreen(hwnd, &mut origin) == 0 {
                 return None;
             }
-            let width = (client.right - client.left).max(1) as f32;
-            let height = (client.bottom - client.top).max(1) as f32;
-            let nx = (((cursor.x - origin.x) as f32 / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
-            let ny = (((cursor.y - origin.y) as f32 / height) * 2.0 - 1.0).clamp(-1.0, 1.0);
-            Some((nx, ny))
+            Some(super::normalize_gaze(
+                cursor.x,
+                cursor.y,
+                origin.x,
+                origin.y,
+                client.right - client.left,
+                client.bottom - client.top,
+            ))
         }
     }
 
@@ -334,20 +390,34 @@ pub(crate) fn move_with_cursor(_grab: (i32, i32)) {}
 /// laço de render, então aqui basta amostrar e enviar.
 #[cfg(target_os = "windows")]
 pub(crate) fn start_gaze_loop(controller: gpui_vrm::VrmController) {
+    if !claim_gaze_slot() {
+        return;
+    }
     std::thread::Builder::new()
         .name("usami-mascot-gaze".into())
         .spawn(move || {
             let mut following = false;
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(16));
+                if GAZE_STOP.load(Ordering::SeqCst) {
+                    if following {
+                        controller.look_at_normalized(0.0, 0.0);
+                    }
+                    return;
+                }
                 if is_active() && follow_enabled() {
                     if let Some((nx, ny)) = win32::cursor_gaze() {
                         controller.look_at_normalized(nx, ny);
                         following = true;
                     }
-                } else if following {
-                    controller.look_at_normalized(0.0, 0.0);
-                    following = false;
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                } else {
+                    if following {
+                        controller.look_at_normalized(0.0, 0.0);
+                        following = false;
+                    }
+                    // Fora do mascote não há nada para amostrar: o laço dorme
+                    // fundo em vez de acordar a 60 fps à toa.
+                    std::thread::sleep(std::time::Duration::from_millis(250));
                 }
             }
         })
@@ -367,5 +437,60 @@ mod tests {
         assert!(should_snap(SNAP_WIDTH - 1.0, SNAP_HEIGHT));
         assert!(should_snap(SNAP_WIDTH, SNAP_HEIGHT - 1.0));
         assert!(!should_snap(1440.0, 900.0));
+    }
+
+    #[test]
+    fn gaze_maps_the_window_to_minus_one_through_one() {
+        let (nx, ny) = normalize_gaze(290, 480, 100, 200, 380, 560);
+        assert!((nx - 0.0).abs() < 1e-6, "centro x = {nx}");
+        assert!((ny - 0.0).abs() < 1e-6, "centro y = {ny}");
+
+        assert_eq!(normalize_gaze(100, 200, 100, 200, 380, 560), (-1.0, -1.0));
+        assert_eq!(normalize_gaze(480, 760, 100, 200, 380, 560), (1.0, 1.0));
+    }
+
+    #[test]
+    fn gaze_clamps_outside_the_window_and_survives_zero_size() {
+        assert_eq!(
+            normalize_gaze(9999, -9999, 100, 200, 380, 560),
+            (1.0, -1.0)
+        );
+        let (nx, ny) = normalize_gaze(10, 10, 0, 0, 0, 0);
+        assert_eq!((nx, ny), (1.0, 1.0));
+    }
+
+    #[test]
+    fn menu_opens_down_when_it_fits() {
+        let (x, y) = menu_position(100.0, 100.0, 210.0, 172.0, 380.0, 560.0, 56.0);
+        assert_eq!((x, y), (100.0, 100.0));
+    }
+
+    #[test]
+    fn menu_flips_up_near_the_bottom_and_keeps_off_the_composer() {
+        let (_, y) = menu_position(100.0, 400.0, 210.0, 172.0, 380.0, 560.0, 56.0);
+        assert_eq!(y, 228.0);
+        let (_, y) = menu_position(100.0, 520.0, 210.0, 172.0, 380.0, 560.0, 56.0);
+        assert_eq!(y, 560.0 - 172.0 - 56.0);
+    }
+
+    #[test]
+    fn menu_stays_inside_the_horizontal_bounds() {
+        assert_eq!(
+            menu_position(300.0, 100.0, 210.0, 172.0, 380.0, 560.0, 56.0).0,
+            162.0
+        );
+        assert_eq!(
+            menu_position(-40.0, 100.0, 210.0, 172.0, 380.0, 560.0, 56.0).0,
+            8.0
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn gaze_loop_has_a_single_instance() {
+        assert!(claim_gaze_slot());
+        assert!(!claim_gaze_slot());
+        stop_gaze_loop();
+        assert!(GAZE_STOP.load(Ordering::SeqCst));
     }
 }

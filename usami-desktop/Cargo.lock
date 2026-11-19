@@ -2439,6 +2439,7 @@ dependencies = [
 [[package]]
 name = "gpui-vrm"
 version = "0.1.0"
+source = "git+https://github.com/Rukafuu/weebui?rev=a663b5055c79ee347428e466ed29e6e0683c6f24#a663b5055c79ee347428e466ed29e6e0683c6f24"
 dependencies = [
  "anyhow",
  "bytemuck",

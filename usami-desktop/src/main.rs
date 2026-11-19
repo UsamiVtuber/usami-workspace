@@ -391,12 +391,14 @@ impl UsamiApp {
                     let _ = cx.update(|cx: &mut App| {
                         // Bandeja/atalho pedem o modo mascote pela thread de
                         // presença; aqui viram troca de janela na UI.
-                        if crate::mascot::take_toggle_request() {
+                        if let Some(source) = crate::mascot::take_toggle_request() {
                             if let Some(handle) = cx.windows().first().copied() {
                                 let this = this.clone();
                                 let _ = handle.update(cx, |_, window, cx| {
                                     if let Some(view) = this.upgrade() {
-                                        view.update(cx, |view, cx| view.toggle_mascot(window, cx));
+                                        view.update(cx, |view, cx| {
+                                            view.toggle_mascot(window, cx, source)
+                                        });
                                     }
                                 });
                             }
@@ -512,8 +514,29 @@ impl UsamiApp {
                 let cx = cx.clone();
                 async move {
                     while let Some(cmd) = lol_endpoint.ui_rx.recv().await {
+                        // Partida começou com o mascote ativo: sai do mascote
+                        // antes, para a sobreposição poder assumir a janela.
+                        let needs_overlay = matches!(
+                            &cmd,
+                            lol::ipc::LolUiCommand::MatchStateChanged {
+                                in_match,
+                                loading,
+                                ..
+                            } if *in_match || *loading
+                        );
                         let _ = cx.update(|cx: &mut App| {
                             if let Some(this) = this.upgrade() {
+                                if needs_overlay {
+                                    if let Some(handle) = cx.windows().first().copied() {
+                                        let _ = handle.update(cx, |_, window, cx| {
+                                            let _ = this.update(cx, |view, cx| {
+                                                if view.mascot_mode {
+                                                    view.exit_mascot(window, cx);
+                                                }
+                                            });
+                                        });
+                                    }
+                                }
                                 this.update(cx, |view, cx| {
                                     view.apply_lol_command(cmd, cx);
                                 });

@@ -290,9 +290,13 @@ unsafe extern "system" fn mascot_wndproc(
     // caminhos (botão e menu do sistema/teclado) antes de chegar nele.
     let minimize_click = msg == WM_NCLBUTTONUP && wparam as u32 == HTMINBUTTON;
     let minimize_command = msg == WM_SYSCOMMAND && (wparam as u32 & 0xFFF0) == SC_MINIMIZE;
-    if (minimize_click || minimize_command) && crate::mascot::is_enabled() {
+    // Dentro do mascot, minimizar mantém o comportamento padrão da janela.
+    if (minimize_click || minimize_command)
+        && crate::mascot::is_enabled()
+        && !crate::mascot::is_active()
+    {
         println!("[Usami Presence] minimizar interceptado -> request_toggle()");
-        crate::mascot::request_toggle();
+        crate::mascot::request_toggle(crate::mascot::ToggleRequest::Minimize);
         return 0;
     }
     let orig = ORIGINAL_WNDPROC.load(Ordering::SeqCst) as *const ();
@@ -527,7 +531,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_HOTKEY if wparam as i32 == HOTKEY_MASCOT_ID => {
             if crate::mascot::is_enabled() {
-                crate::mascot::request_toggle();
+                crate::mascot::request_toggle(crate::mascot::ToggleRequest::User);
             }
             0
         }
@@ -637,7 +641,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         MENU_TOGGLE_WINDOW => unsafe { toggle_window(app) },
         MENU_MASCOT => {
             if crate::mascot::is_enabled() {
-                crate::mascot::request_toggle();
+                crate::mascot::request_toggle(crate::mascot::ToggleRequest::User);
             }
         }
         MENU_TOPMOST => unsafe { toggle_topmost(app) },

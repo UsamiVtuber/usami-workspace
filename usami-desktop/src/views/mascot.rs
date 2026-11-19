@@ -93,6 +93,56 @@ impl UsamiApp {
                     .justify_center()
                     .when_some(self.vrm_view.clone(), |parent, view| parent.child(view)),
             )
+            // ── CAMADA DE ARRASTO SOBRE O AVATAR ──
+            // O VrmView interpreta arrasto com o botão esquerdo como órbita de
+            // câmera. Esta camada occlude() fica à frente dele e absorve o
+            // gesto: arrastar move a janela, clique cutuca, duplo volta ao app.
+            // Balão, barra, menu e configurações são pintados depois, ficam por
+            // cima e mantêm os próprios handlers.
+            .child(
+                div()
+                    .id("mascot-drag-layer")
+                    .occlude()
+                    .absolute()
+                    .inset_0()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                            this.mascot_mouse_down();
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            this.mascot_open_menu(event.position, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.mascot_mouse_move(event);
+                        // O VrmView também olhava para o cursor via hover; a
+                        // camada occlude() corta esse handler, então o olhar é
+                        // repassado aqui. A posição do evento cresce para baixo;
+                        // `look_at_normalized` usa +y para cima.
+                        let size = window.bounds().size;
+                        let width: f32 = size.width.into();
+                        let height: f32 = size.height.into();
+                        if width > 1.0 && height > 1.0 {
+                            let mx: f32 = event.position.x.into();
+                            let my: f32 = event.position.y.into();
+                            let nx = ((mx / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
+                            let ny = (1.0 - (my / height) * 2.0).clamp(-1.0, 1.0);
+                            this.vrm_controller.look_at_normalized(nx, ny);
+                        }
+                        cx.stop_propagation();
+                    }))
+                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                        this.mascot_click(event, window, cx);
+                        cx.stop_propagation();
+                    })),
+            )
             // ── BALÃO / DICA NO TOPO ──
             .child(
                 div()
@@ -107,10 +157,9 @@ impl UsamiApp {
                             div()
                                 .w_full()
                                 .rounded(px(16.0))
-                                .bg(rgba(0x140A20E6))
+                                .bg(rgba(0x140A20F2))
                                 .border_1()
-                                .border_color(c.primary)
-                                .shadow(theme::glow(c.accent, 12.0))
+                                .border_color(c.line)
                                 .px(px(14.0))
                                 .py(px(10.0))
                                 .text_size(px(13.0))
@@ -161,7 +210,7 @@ impl UsamiApp {
                                 this.toggle_listening(cx);
                                 cx.stop_propagation();
                             }))
-                            .child("🎤"),
+                            .child(icon("mic", 15.0)),
                     )
                     .child(
                         div()
@@ -171,6 +220,7 @@ impl UsamiApp {
                             .h(px(36.0))
                             .flex()
                             .items_center()
+                            .overflow_hidden()
                             .rounded_full()
                             .bg(rgba(0x140A20E6))
                             .border_1()
@@ -188,11 +238,19 @@ impl UsamiApp {
                                 cx.stop_propagation();
                                 cx.notify();
                             }))
-                            .child(if input_text.is_empty() {
-                                "Manda pra ela…".to_string()
-                            } else {
-                                input_text.clone()
-                            }),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(if input_text.is_empty() {
+                                        "Manda pra ela…".to_string()
+                                    } else {
+                                        input_text.clone()
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -217,9 +275,9 @@ impl UsamiApp {
                                 cx.stop_propagation();
                             }))
                             .child(if has_text {
-                                icon("send", 15.0).into_any_element()
+                                icon("send_dark", 15.0).into_any_element()
                             } else {
-                                icon("volume", 15.0).into_any_element()
+                                icon("mic_dark", 15.0).into_any_element()
                             }),
                     ),
             )
@@ -288,7 +346,7 @@ impl UsamiApp {
                                     } else {
                                         "Falar por voz"
                                     },
-                                    "volume",
+                                    "mic",
                                     Some(is_listening),
                                     &c,
                                 )

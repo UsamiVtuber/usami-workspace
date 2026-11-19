@@ -74,7 +74,7 @@ impl WindowPrefs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UiPrefs {
     #[serde(default)]
     pub muted: bool,
@@ -90,6 +90,18 @@ pub struct UiPrefs {
     /// No modo mascote, a cabeça e os olhos acompanham o cursor pela tela.
     #[serde(default)]
     pub mascot_follow: bool,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            muted: false,
+            window: None,
+            mascot: false,
+            mascot_enabled: true,
+            mascot_follow: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

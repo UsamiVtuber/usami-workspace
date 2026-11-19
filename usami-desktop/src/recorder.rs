@@ -4,7 +4,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -222,7 +222,8 @@ fn capture_until_stopped(
     let channels = supported.channels() as usize;
     let frame_len = (sample_rate as usize * FRAME_MS / 1000).max(1);
 
-    let queue = Arc::new(Mutex::new(VecDeque::<i16>::new()));
+    // Queue + Condvar para wake-up event-driven (substitui polling de 40 ms).
+    let queue = Arc::new((Mutex::new(VecDeque::<i16>::new()), Condvar::new()));
     let capacity = sample_rate as usize * 2; // 2 s de folga entre drenagens
     let stream = build_stream(
         &device,
@@ -240,13 +241,17 @@ fn capture_until_stopped(
     let mut vad = Vad::new(sample_rate);
     let mut pending: Vec<i16> = Vec::with_capacity(frame_len * 4);
     while !stop.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(40));
+        // Espera até haver dados na fila ou timeout de 40 ms (fallback para VAD
+        // continuar processando silêncio e timeouts de fala).
+        let (lock, cvar) = &*queue;
+        let mut queued = lock.lock().unwrap();
+        if queued.is_empty() {
+            queued = cvar.wait_timeout(queued, Duration::from_millis(40)).unwrap().0;
+        }
+        pending.extend(queued.drain(..));
+        drop(queued);
 
         vad.set_mode(gate.is_gamer_mode(), gate.is_ptt_down());
-
-        if let Ok(mut queued) = queue.lock() {
-            pending.extend(queued.drain(..));
-        }
         if gate.suspended() {
             // Enquanto a Usami fala (ou está muda), o microfone não transcreve
             // nem acumula: evita o loop de realimentação do próprio TTS.
@@ -278,7 +283,7 @@ fn build_stream(
     device: &cpal::Device,
     format: cpal::SampleFormat,
     config: cpal::StreamConfig,
-    queue: Arc<Mutex<VecDeque<i16>>>,
+    queue: Arc<(Mutex<VecDeque<i16>>, Condvar)>,
     capacity: usize,
     channels: usize,
 ) -> Result<cpal::Stream, String> {
@@ -325,7 +330,7 @@ fn u16_to_i16(sample: u16) -> i16 {
 }
 
 fn push_queued<T, F>(
-    queue: &Arc<Mutex<VecDeque<i16>>>,
+    queue: &Arc<(Mutex<VecDeque<i16>>, Condvar)>,
     data: &[T],
     channels: usize,
     capacity: usize,
@@ -334,7 +339,8 @@ fn push_queued<T, F>(
     T: Copy,
     F: Fn(T) -> i16,
 {
-    let Ok(mut queued) = queue.lock() else {
+    let (lock, cvar) = &**queue;
+    let Ok(mut queued) = lock.lock() else {
         return;
     };
     let channels = channels.max(1);
@@ -344,6 +350,8 @@ fn push_queued<T, F>(
         }
         queued.push_back(convert(*sample));
     }
+    // Notifica a thread de captura que há novos dados (substitui polling).
+    cvar.notify_one();
 }
 
 fn frame_rms(frame: &[i16]) -> f32 {

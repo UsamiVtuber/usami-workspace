@@ -153,11 +153,9 @@ pub fn start(window: &Window) {
     }
 }
 
-/// Encerra a thread de presença: remove o ícone, desregistra o atalho e fecha
-/// a janela oculta. Idempotente; pode ser chamado no fechamento da janela.
-pub fn shutdown() {
-    crate::mascot::stop_gaze_loop();
-    // Restaura o WNDPROC original antes de fechar a janela
+/// Restaura o WNDPROC original imediatamente. Chamado no panic hook para
+/// evitar que a janela fique com um callback pendurado após crash.
+pub fn restore_wndproc_on_panic() {
     let app = app_window();
     if !app.is_null() {
         if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
@@ -166,6 +164,14 @@ pub fn shutdown() {
             }
         }
     }
+}
+
+/// Encerra a thread de presença: remove o ícone, desregistra o atalho e fecha
+/// a janela oculta. Idempotente; pode ser chamado no fechamento da janela.
+pub fn shutdown() {
+    crate::mascot::stop_gaze_loop();
+    // Restaura o WNDPROC original antes de fechar a janela
+    restore_wndproc_on_panic();
     let hidden = HIDDEN_WINDOW.swap(0, Ordering::SeqCst);
     if hidden != 0 {
         unsafe { PostMessageW(hidden as HWND, WM_CLOSE, 0, 0) };

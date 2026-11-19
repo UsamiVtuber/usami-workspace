@@ -3,7 +3,7 @@
 // transcrição — sem botão: quem fala recebe a vez.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -25,66 +25,87 @@ const PARTIAL_MIN_MS: usize = 350;
 
 /// Portão único da escuta: a UI suspende enquanto pensa/fala e o usuário
 /// suspende ao mutar. A thread de captura descarta tudo enquanto fechado.
+///
+/// Usa um único AtomicU32 como bitfield para garantir leitura atômica do estado
+/// completo em `suspended()`. Evita race conditions entre leitura de múltiplos
+/// campos separados.
 pub struct MicGate {
-    user: AtomicBool,
-    agent: AtomicBool,
-    gamer_mode: AtomicBool,
-    ptt_required: AtomicBool,
-    ptt_down: AtomicBool,
+    /// Bits: 0=user, 1=agent, 2=gamer_mode, 3=ptt_required, 4=ptt_down
+    state: AtomicU32,
 }
+
+const BIT_USER: u32 = 1 << 0;
+const BIT_AGENT: u32 = 1 << 1;
+const BIT_GAMER_MODE: u32 = 1 << 2;
+const BIT_PTT_REQUIRED: u32 = 1 << 3;
+const BIT_PTT_DOWN: u32 = 1 << 4;
 
 impl MicGate {
     pub fn new() -> Self {
         Self {
             // Começa fechado: só abre quando a escuta do modo chamada é ligada.
-            user: AtomicBool::new(true),
-            agent: AtomicBool::new(false),
-            gamer_mode: AtomicBool::new(false),
-            ptt_required: AtomicBool::new(false),
-            ptt_down: AtomicBool::new(false),
+            // user=true (bit 0)
+            state: AtomicU32::new(BIT_USER),
         }
+    }
+
+    fn set_bit(&self, mask: u32, value: bool) {
+        if value {
+            self.state.fetch_or(mask, Ordering::SeqCst);
+        } else {
+            self.state.fetch_and(!mask, Ordering::SeqCst);
+        }
+    }
+
+    fn get_bit(&self, mask: u32) -> bool {
+        (self.state.load(Ordering::SeqCst) & mask) != 0
     }
 
     pub fn set_user(&self, suspend: bool) {
-        self.user.store(suspend, Ordering::Relaxed);
+        self.set_bit(BIT_USER, suspend);
     }
 
     pub fn set_agent(&self, suspend: bool) {
-        self.agent.store(suspend, Ordering::Relaxed);
+        self.set_bit(BIT_AGENT, suspend);
     }
 
     pub fn set_gamer_mode(&self, enabled: bool) {
-        self.gamer_mode.store(enabled, Ordering::Relaxed);
+        self.set_bit(BIT_GAMER_MODE, enabled);
     }
 
     pub fn is_gamer_mode(&self) -> bool {
-        self.gamer_mode.load(Ordering::Relaxed)
+        self.get_bit(BIT_GAMER_MODE)
     }
 
     pub fn set_ptt_required(&self, required: bool) {
-        self.ptt_required.store(required, Ordering::Relaxed);
+        self.set_bit(BIT_PTT_REQUIRED, required);
     }
 
     pub fn is_ptt_required(&self) -> bool {
-        self.ptt_required.load(Ordering::Relaxed)
+        self.get_bit(BIT_PTT_REQUIRED)
     }
 
     pub fn set_ptt_down(&self, down: bool) {
-        self.ptt_down.store(down, Ordering::Relaxed);
+        self.set_bit(BIT_PTT_DOWN, down);
     }
 
     pub fn is_ptt_down(&self) -> bool {
-        self.ptt_down.load(Ordering::Relaxed)
+        self.get_bit(BIT_PTT_DOWN)
     }
 
     pub fn suspended(&self) -> bool {
-        if self.user.load(Ordering::Relaxed) || self.agent.load(Ordering::Relaxed) {
+        // Leitura atômica única do estado completo
+        let state = self.state.load(Ordering::SeqCst);
+        let user = (state & BIT_USER) != 0;
+        let agent = (state & BIT_AGENT) != 0;
+        let gamer_mode = (state & BIT_GAMER_MODE) != 0;
+        let ptt_required = (state & BIT_PTT_REQUIRED) != 0;
+        let ptt_down = (state & BIT_PTT_DOWN) != 0;
+
+        if user || agent {
             return true;
         }
-        if self.gamer_mode.load(Ordering::Relaxed)
-            && self.ptt_required.load(Ordering::Relaxed)
-            && !self.ptt_down.load(Ordering::Relaxed)
-        {
+        if gamer_mode && ptt_required && !ptt_down {
             return true;
         }
         false

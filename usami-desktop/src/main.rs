@@ -1510,6 +1510,11 @@ fn install_panic_hook() {
 
         storage::append_crash_log(&format!("PANIC at {location}: {payload}"));
 
+        // Restaura o WNDPROC original antes de qualquer outra coisa para evitar
+        // que a janela fique com um callback pendurado após crash.
+        #[cfg(target_os = "windows")]
+        presence::restore_wndproc_on_panic();
+
         let base_url = api::UsamiApiClient::from_env().base_url().to_string();
         let token = api::UsamiApiClient::from_env().token().map(str::to_string);
         let body = serde_json::json!({

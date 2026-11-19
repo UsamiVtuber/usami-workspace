@@ -31,6 +31,10 @@ O `README.md` da raiz descreve o workspace em alto nível. Para detalhes de um c
 
 - Não use emojis em código, interface ou documentação do projeto. A interface do desktop usa os ícones SVG de [`usami-desktop/assets/icons/`](usami-desktop/assets/icons); quando faltar um símbolo, adicione um SVG novo em vez de um emoji.
 
+## Interface
+
+- Não use emojis em código, interface ou documentação do projeto. A interface do desktop usa os ícones SVG de [`usami-desktop/assets/icons/`](usami-desktop/assets/icons); quando faltar um símbolo, adicione um SVG novo em vez de um emoji.
+
 ## Segurança e operações locais
 
 - Nunca leia, copie, imprima ou versione credenciais. Não inclua valores de `.env`, chaves, tokens ou dados pessoais em código, logs ou respostas.

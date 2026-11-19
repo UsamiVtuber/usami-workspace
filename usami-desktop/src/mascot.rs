@@ -5,7 +5,7 @@
 //! flag atômico, consumido pelo tick da UI. Toda a cirurgia de estilo/geometria
 //! é Win32 porque o GPUI 0.2.2 não troca decoração em runtime no Windows.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Retângulo físico de janela: (x, y, largura, altura), em pixels de tela.
 pub(crate) type WinRect = (i32, i32, i32, i32);
@@ -20,7 +20,15 @@ pub(crate) const MASCOT_HEIGHT: f32 = 560.0;
 pub(crate) const SNAP_WIDTH: f32 = 640.0;
 pub(crate) const SNAP_HEIGHT: f32 = 480.0;
 
-static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Origem do pedido de toggle. Minimizar dentro do mascote e o atalho
+/// durante uma partida têm efeitos diferentes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToggleRequest {
+    Minimize,
+    User,
+}
+
+static TOGGLE_REQUESTED: AtomicU8 = AtomicU8::new(0);
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static FOLLOW: AtomicBool = AtomicBool::new(false);
@@ -28,8 +36,12 @@ static FOLLOW: AtomicBool = AtomicBool::new(false);
 static GAZE_STARTED: AtomicBool = AtomicBool::new(false);
 static GAZE_STOP: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn request_toggle() {
-    TOGGLE_REQUESTED.store(true, Ordering::SeqCst);
+pub(crate) fn request_toggle(source: ToggleRequest) {
+    let value = match source {
+        ToggleRequest::Minimize => 1,
+        ToggleRequest::User => 2,
+    };
+    TOGGLE_REQUESTED.store(value, Ordering::SeqCst);
 }
 
 pub(crate) fn set_enabled(enabled: bool) {
@@ -63,7 +75,8 @@ pub(crate) fn stop_gaze_loop() {
 }
 
 /// Converte o cursor da tela para a coordenada normalizada do conteúdo da
-/// janela (`-1..=1`), com clamp nas bordas.
+/// janela (`-1..=1`), com clamp nas bordas. Usa `+y` para cima, que é a
+/// convenção do `look_at_normalized` do `gpui-vrm`.
 pub(crate) fn normalize_gaze(
     cursor_x: i32,
     cursor_y: i32,
@@ -75,7 +88,7 @@ pub(crate) fn normalize_gaze(
     let width = width.max(1) as f32;
     let height = height.max(1) as f32;
     let nx = (((cursor_x - origin_x) as f32 / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
-    let ny = (((cursor_y - origin_y) as f32 / height) * 2.0 - 1.0).clamp(-1.0, 1.0);
+    let ny = (1.0 - ((cursor_y - origin_y) as f32 / height) * 2.0).clamp(-1.0, 1.0);
     (nx, ny)
 }
 
@@ -100,8 +113,12 @@ pub(crate) fn menu_position(
     (x.clamp(8.0, max_x), y.clamp(8.0, max_y))
 }
 
-pub(crate) fn take_toggle_request() -> bool {
-    TOGGLE_REQUESTED.swap(false, Ordering::SeqCst)
+pub(crate) fn take_toggle_request() -> Option<ToggleRequest> {
+    match TOGGLE_REQUESTED.swap(0, Ordering::SeqCst) {
+        1 => Some(ToggleRequest::Minimize),
+        2 => Some(ToggleRequest::User),
+        _ => None,
+    }
 }
 
 pub(crate) fn is_active() -> bool {
@@ -121,7 +138,7 @@ mod win32 {
     use super::{MASCOT_HEIGHT, MASCOT_WIDTH, WinRect};
     use std::mem::{size_of, zeroed};
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -130,13 +147,15 @@ mod win32 {
         GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
         GetWindowRect, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
         SM_CXSCREEN, SM_CYSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, SetWindowLongPtrW, SetWindowPos,
+        ShowWindow, ShowWindowAsync,
         WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
         WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
     static SAVED_STYLE: AtomicIsize = AtomicIsize::new(0);
     static SAVED_EX_STYLE: AtomicIsize = AtomicIsize::new(0);
+    static SAVED_MAXIMIZED: AtomicBool = AtomicBool::new(false);
     static SAVED_RECT: Mutex<Option<WinRect>> = Mutex::new(None);
 
     const FRAME_STYLES: u32 =
@@ -201,11 +220,13 @@ mod win32 {
             1.0
         };
         unsafe {
-            if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 {
+            let was_maximized = IsZoomed(hwnd) != 0;
+            if IsIconic(hwnd) != 0 || was_maximized {
                 ShowWindow(hwnd, SW_RESTORE);
             }
 
             let restore = fallback.or_else(current_rect)?;
+            SAVED_MAXIMIZED.store(was_maximized, Ordering::SeqCst);
             *SAVED_RECT.lock().unwrap_or_else(|p| p.into_inner()) = Some(restore);
 
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -236,9 +257,12 @@ mod win32 {
         }
     }
 
-    pub(super) fn exit() {
+    /// Devolve se a janela estava maximizada antes de virar mascote. O
+    /// `ShowWindowAsync` deixa o `WM_SIZE` do maximize para depois do update
+    /// atual, quando o GPUI já pode ressincronizar o viewport.
+    pub(super) fn exit() -> bool {
         let Some(hwnd) = hwnd() else {
-            return;
+            return false;
         };
         unsafe {
             let style = SAVED_STYLE.load(Ordering::SeqCst);
@@ -255,22 +279,28 @@ mod win32 {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take();
-            if let Some((x, y, width, height)) = restore {
-                let insert_after = if (ex_style as u32 & WS_EX_TOPMOST) != 0 {
-                    HWND_TOPMOST
-                } else {
-                    HWND_NOTOPMOST
-                };
-                SetWindowPos(
-                    hwnd,
-                    insert_after,
-                    x,
-                    y,
-                    width,
-                    height,
-                    SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
-                );
+            let was_maximized = SAVED_MAXIMIZED.swap(false, Ordering::SeqCst);
+            let Some((x, y, width, height)) = restore else {
+                return false;
+            };
+            let insert_after = if (ex_style as u32 & WS_EX_TOPMOST) != 0 {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            };
+            SetWindowPos(
+                hwnd,
+                insert_after,
+                x,
+                y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            );
+            if was_maximized {
+                ShowWindowAsync(hwnd, SW_MAXIMIZE);
             }
+            was_maximized
         }
     }
 
@@ -350,12 +380,14 @@ pub(crate) fn enter(_scale: f32, _fallback: Option<WinRect>) -> Option<WinRect> 
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn exit() {
-    win32::exit();
+pub(crate) fn exit() -> bool {
+    win32::exit()
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn exit() {}
+pub(crate) fn exit() -> bool {
+    false
+}
 
 #[cfg(target_os = "windows")]
 pub(crate) fn current_rect() -> Option<WinRect> {
@@ -445,18 +477,20 @@ mod tests {
         assert!((nx - 0.0).abs() < 1e-6, "centro x = {nx}");
         assert!((ny - 0.0).abs() < 1e-6, "centro y = {ny}");
 
-        assert_eq!(normalize_gaze(100, 200, 100, 200, 380, 560), (-1.0, -1.0));
-        assert_eq!(normalize_gaze(480, 760, 100, 200, 380, 560), (1.0, 1.0));
+        // Canto superior esquerdo: x à esquerda, y para cima.
+        assert_eq!(normalize_gaze(100, 200, 100, 200, 380, 560), (-1.0, 1.0));
+        // Canto inferior direito: x à direita, y para baixo.
+        assert_eq!(normalize_gaze(480, 760, 100, 200, 380, 560), (1.0, -1.0));
     }
 
     #[test]
     fn gaze_clamps_outside_the_window_and_survives_zero_size() {
         assert_eq!(
             normalize_gaze(9999, -9999, 100, 200, 380, 560),
-            (1.0, -1.0)
+            (1.0, 1.0)
         );
         let (nx, ny) = normalize_gaze(10, 10, 0, 0, 0, 0);
-        assert_eq!((nx, ny), (1.0, 1.0));
+        assert_eq!((nx, ny), (1.0, -1.0));
     }
 
     #[test]

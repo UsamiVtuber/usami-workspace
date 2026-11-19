@@ -125,9 +125,13 @@ Cada PR para `master` recebe um review automático da **Usami** (`.github/workfl
 + `scripts/qa-review.mjs`): o diff vai para o `BRAIN_MODEL` (NVIDIA Nemotron 3 Ultra, via API
 NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua sendo do mantenedor.
 
+- **Trigger e execução**: `pull_request_target` roda o workflow e o `scripts/qa-review.mjs`
+  da **base**, com checkout explícito do SHA da base e `persist-credentials: false`. O código da
+  PR **nunca é executado** no runner; só o diff é lido, via `gh pr diff`, e tratado como dado não
+  confiável no prompt.
 - **Runner**: self-hosted no notebook Linux, labels `[self-hosted, linux, usami-notebook]`,
-  `timeout-minutes: 25`. O job usa o `gh` autenticado como **Usamiin** no keychain do SO —
-  nenhum token do GitHub fica no CI.
+  `timeout-minutes: 25`. O job usa o `gh` autenticado como **Usamiin** no keychain do SO apenas
+  para publicar o comentário — o `GITHUB_TOKEN` do checkout não é persistido.
 - **Provisionar o runner**: registre no nível da organização com
   `./config.sh --url https://github.com/UsamiVtuber --token <token da UI> --name luke --labels linux,usami-notebook --unattended --replace`
   (o comando que a UI gera não inclui `--name`/`--labels`, e sem `usami-notebook` nenhum job casa).
@@ -136,16 +140,19 @@ NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua 
   `sudo systemctl enable --now actions.runner.UsamiVtuber.luke.service`.
 - **Runner group `Default`**: precisa de **"Allow public repositories"** marcado
   (Settings → Actions → Runner groups). Com essa opção desligada o runner aparece **Idle** e os
-  jobs deste repositório público ficam `queued` para sempre, sem erro visível.
+  jobs deste repositório público ficam `queued` para sempre, sem erro visível. A proteção vem de
+  não executar nada do head da PR, não de a PR ser de fork.
 - **Host**: Node.js 22+ e `gh` autenticado como Usamiin (`gh auth status` roda como primeiro check
   e falha o job se o login não estiver lá).
 - **Secret**: `NVIDIA_API_KEY` como secret no nível da organização (ou do repo) com acesso a este
-  repositório; o workflow o expõe só ao job (`${{ secrets.NVIDIA_API_KEY }}`). O modelo vem da
-  variável `BRAIN_MODEL` no próprio workflow.
-- **Scan de segredos (opcional)**: antes da chamada ao modelo, o diff passa por `gitleaks`
-  (`ghcr.io/gitleaks/gitleaks:v8.30.1` via `docker run`, sem instalar nada no runner). Não bloqueia:
-  se acusar algo, o step emite um `::warning` com os valores redigidos e o review continua. Isso
-  importa porque o texto do diff inteiro é enviado à API externa da NVIDIA.
+  repositório; o workflow o expõe só ao step do review (`${{ secrets.NVIDIA_API_KEY }}`). O modelo
+  vem da variável `BRAIN_MODEL` no próprio workflow.
+- **Scan de segredos (bloqueante)**: antes da chamada ao modelo, o diff passa por `gitleaks`
+  (`ghcr.io/gitleaks/gitleaks:v8.30.1` via `docker run`, sem instalar nada no runner). Se acusar
+  segredo adicionado na PR, o job falha com os valores redigidos no log e o diff não é enviado à
+  API externa da NVIDIA.
+- **Diff grande**: acima de 120k caracteres o review falha fechado, sem veredito — a PR é revisada
+  manualmente ou dividida.
 - **Re-run manual**: `gh workflow run qa-review.yml -f pr_number=5`. Enquanto o workflow ainda não
   estiver na `master`, acrescente `--ref feat/qa-review-workspace` (ou a branch que o contém).
   Um push novo na PR cancela o review em andamento (`concurrency`).

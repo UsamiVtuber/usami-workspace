@@ -111,13 +111,22 @@ impl UsamiApp {
     }
 
     /// Alterna entre o app completo e a janelinha de mascote.
-    pub(crate) fn toggle_mascot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_mascot(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        source: crate::mascot::ToggleRequest,
+    ) {
+        use crate::mascot::ToggleRequest;
         if self.mascot_mode {
             self.exit_mascot(window, cx);
         } else if self.lol_overlay_active {
-            // Com a sobreposição do LoL ativa o mascote não entra; o clique
-            // em minimizar cai no comportamento padrão da janela.
-            window.minimize_window();
+            // Com a sobreposição do LoL ativa o mascote não entra. O clique em
+            // minimizar mantém o comportamento padrão; o atalho/bandeja não
+            // mexe na janela.
+            if source == ToggleRequest::Minimize {
+                window.minimize_window();
+            }
         } else {
             self.enter_mascot(window, cx);
         }
@@ -143,6 +152,14 @@ impl UsamiApp {
                 self.last_normal_rect = Some(restore);
             }
             crate::mascot::set_active(true);
+            // O SetWindowPos aconteceu dentro deste update: o bounds_changed do
+            // GPUI foi descartado (App emprestado). Este resize é adiado pelo
+            // GPUI e reemite WM_SIZE fora do empréstimo, ressincronizando o
+            // viewport com a janelinha.
+            window.resize(size(
+                px(crate::mascot::MASCOT_WIDTH),
+                px(crate::mascot::MASCOT_HEIGHT),
+            ));
         }
         #[cfg(not(target_os = "windows"))]
         let _ = window;
@@ -152,7 +169,7 @@ impl UsamiApp {
         cx.notify();
     }
 
-    pub(crate) fn exit_mascot(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn exit_mascot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.mascot_mode {
             return;
         }
@@ -167,8 +184,16 @@ impl UsamiApp {
         }
         #[cfg(target_os = "windows")]
         {
-            crate::mascot::exit();
+            let restored_maximized = crate::mascot::exit();
             crate::mascot::set_active(false);
+            // Mesmo motivo do enter: ressincroniza o viewport depois de
+            // devolver estilo e geometria da janela. No caso maximizado o
+            // maximize é assíncrono e emite o próprio WM_SIZE.
+            if !restored_maximized {
+                if let Some(saved) = self.prefs.window {
+                    window.resize(size(px(saved.width), px(saved.height)));
+                }
+            }
         }
         #[cfg(not(target_os = "windows"))]
         let _ = window;

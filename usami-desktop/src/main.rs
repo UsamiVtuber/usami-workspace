@@ -694,36 +694,42 @@ impl UsamiApp {
     }
 
     /// Inicia a detecção de PTT (Push-to-Talk) na UI thread.
-    /// GetAsyncKeyState deve ser chamado na thread que processa mensagens da janela.
+    /// Roda no executor de foreground do GPUI (`cx.spawn`), que executa na
+    /// thread principal — a mesma que processa as mensagens da janela.
+    /// `background_executor().spawn` é um thread pool e não serve aqui.
     #[cfg(target_os = "windows")]
     fn start_ptt_detection(&mut self, cx: &mut Context<Self>) {
-        // Reseta a flag de parada e inicia a task se não estiver rodando
         self.ptt_detection_stop.store(false, Ordering::Relaxed);
         let gate = Arc::clone(&self.mic_gate);
         let stop = Arc::clone(&self.ptt_detection_stop);
-        cx.background_executor().spawn(async move {
-            // Verifica a cada 50ms (20Hz) - suficiente para PTT responsivo
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
-            loop {
-                interval.tick().await;
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                // Só verifica se ainda estamos em modo gamer com PTT requerido
-                if gate.is_gamer_mode() && gate.is_ptt_required() {
-                    let ptt_down = unsafe {
-                        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-                            GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                loop {
+                    // Verifica a cada 50ms (20Hz) - suficiente para PTT responsivo
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // Só verifica se ainda estamos em modo gamer com PTT requerido
+                    if gate.is_gamer_mode() && gate.is_ptt_required() {
+                        let ptt_down = unsafe {
+                            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                                GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
+                            };
+                            let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
+                            let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
+                            let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
+                            v_down || x1_down || x2_down
                         };
-                        let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
-                        let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
-                        let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
-                        v_down || x1_down || x2_down
-                    };
-                    gate.set_ptt_down(ptt_down);
+                        gate.set_ptt_down(ptt_down);
+                    }
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     /// Para a detecção de PTT.

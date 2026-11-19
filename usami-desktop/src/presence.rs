@@ -187,11 +187,15 @@ pub fn shutdown() {
     };
     if let Some(handle) = handle {
         // Join com timeout: usa um canal para sinalizar conclusão.
-        // Spawn uma thread que faz o join e manda o resultado pro canal.
+        // Spawn uma thread helper que faz o join e manda o resultado pro canal.
+        // A helper thread não é guardada (drop do JoinHandle = detach implícito).
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(handle.join());
-        });
+        std::thread::Builder::new()
+            .name("usami-presence-join-helper".into())
+            .spawn(move || {
+                let _ = tx.send(handle.join());
+            })
+            .expect("falha ao criar helper thread");
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(_)) => {} // thread saiu limpo
             Ok(Err(_)) => eprintln!("[Usami Presence] presence thread panicked during shutdown"),

@@ -22,6 +22,10 @@ O `README.md` da raiz descreve o workspace em alto nível. Para detalhes de um c
 4. Execute as verificações apropriadas disponíveis no componente e informe os comandos e resultados reais. Na aplicação `usami/`, os scripts ficam em `package.json` (por exemplo, `npm test`, `npm run build` e testes específicos). Não assuma que um script existe em outro componente.
 5. Revise o diff para confirmar que só os arquivos esperados foram alterados.
 
+## Interface
+
+- Não use emojis em código, interface ou documentação do projeto. A interface do desktop usa os ícones SVG de [`usami-desktop/assets/icons/`](usami-desktop/assets/icons); quando faltar um símbolo, adicione um SVG novo em vez de um emoji.
+
 ## Segurança e operações locais
 
 - Nunca leia, copie, imprima ou versione credenciais. Não inclua valores de `.env`, chaves, tokens ou dados pessoais em código, logs ou respostas.

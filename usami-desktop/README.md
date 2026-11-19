@@ -177,6 +177,14 @@ Principais dependências: `gpui` 0.2.2, `cpal` 0.18.2, `rodio` 0.23.0,
   cada ~1,2 s e o texto já entendido aparece no topo.
 - **Overlay LoL:** com partida em andamento o app vira o overlay Usami.GG,
   transparente e sempre no topo; `Ctrl+Alt+L` alterna o clique através dele.
+- **Modo mascote (Desktop Mate):** o botão de minimizar, a bandeja ou
+  `Ctrl+Alt+M` encolhem o app para o avatar sem moldura, sempre no topo e fora
+  da barra de tarefas; duplo clique no avatar volta ao app. No modo mascote, o
+  clique direito abre o menu (falar por voz, seguir o cursor, configurações e
+  voltar), o compositor envia texto pelos mesmos endpoints do chat e o
+  microfone reaproveita o STT do chamado. A preferência `mascot_follow`
+  (Ajustes → Sistema) faz a cabeça e os olhos acompanharem o ponteiro pela tela
+  inteira; sem ela, só o hover dentro da janela move o olhar.
 
 ### Painel de configurações
 

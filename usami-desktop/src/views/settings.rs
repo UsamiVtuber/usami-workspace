@@ -1020,6 +1020,70 @@ impl UsamiApp {
                                 ),
                         ),
                 )
+                .child(
+                    div()
+                        .mt(px(sp.s2))
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .p(px(sp.s3))
+                        .rounded(px(r.md))
+                        .bg(c.card_bg)
+                        .border_1()
+                        .border_color(c.line)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(sp.s1))
+                                .child(
+                                    div()
+                                        .text_size(px(ty.md))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c.pearl)
+                                        .child("Seguir o cursor"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(ty.sm))
+                                        .text_color(c.muted)
+                                        .child("No modo mascote, a cabeça e os olhos acompanham o ponteiro pela tela inteira."),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("mascot-follow-toggle")
+                                .w(px(52.0))
+                                .h(px(28.0))
+                                .rounded(px(999.0))
+                                .bg(if self.prefs.mascot_follow { theme::Palette::emerald_soft() } else { rgba(0x88888822) })
+                                .border_1()
+                                .border_color(if self.prefs.mascot_follow { theme::Palette::emerald_border() } else { rgba(0x88888866) })
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    let next = !this.prefs.mascot_follow;
+                                    this.prefs.mascot_follow = next;
+                                    crate::mascot::set_follow(next);
+                                    this.persist_prefs();
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size_full()
+                                        .child(
+                                            div()
+                                                .w(px(22.0))
+                                                .h(px(22.0))
+                                                .rounded(px(999.0))
+                                                .bg(if self.prefs.mascot_follow { theme::Palette::emerald() } else { rgb(0x888888) })
+                                                .ml(if self.prefs.mascot_follow { px(26.0) } else { px(4.0) }),
+                                        ),
+                                ),
+                        ),
+                )
                 .child(settings_h3("ARQUITETURA NATIVA"))
                 .child(settings_list_item("Desktop: Rust + GPUI 0.2.2 + WGPU 60 FPS"))
                 .child(settings_list_item("Avatar: 白ー (shiro) VRM 1.0 com renderização direta nativa"))

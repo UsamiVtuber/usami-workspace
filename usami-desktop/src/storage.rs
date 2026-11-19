@@ -87,6 +87,9 @@ pub struct UiPrefs {
     /// as Configurações podem desligar.
     #[serde(default = "default_true")]
     pub mascot_enabled: bool,
+    /// No modo mascote, a cabeça e os olhos acompanham o cursor pela tela.
+    #[serde(default)]
+    pub mascot_follow: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

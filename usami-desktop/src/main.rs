@@ -94,6 +94,10 @@ struct UsamiApp {
     last_normal_rect: Option<mascot::WinRect>,
     /// Contador de "cutucadas" no avatar (varia as falas).
     mascot_pokes: u8,
+    /// Posição do clique direito que abriu o menu de contexto do mascote.
+    mascot_menu_at: Option<Point<Pixels>>,
+    /// Painel de configurações sobreposto à janela pequena.
+    mascot_settings_open: bool,
     last_maximize_line: Instant,
     /// Despedida ao fechar: a primeira tentativa segura a janela, a segunda
     /// libera; o tick fecha sozinho quando o áudio acaba (ou estoura o teto).
@@ -270,6 +274,8 @@ impl UsamiApp {
 
         let vrm_controller = VrmController::new();
         vrm_controller.set_emotion_with_options("tsundere", 4.5, false);
+        crate::mascot::set_follow(prefs.mascot_follow);
+        crate::mascot::start_gaze_loop(vrm_controller.clone());
 
         // A escuta segue a boca do avatar: 100 ms entre o TTS começar e o
         // microfone fechar — bem abaixo dos 120 ms que abrem uma fala na VAD,
@@ -562,6 +568,8 @@ impl UsamiApp {
             mascot_grab: None,
             last_normal_rect: None,
             mascot_pokes: 0,
+            mascot_menu_at: None,
+            mascot_settings_open: false,
             last_maximize_line: Instant::now() - Duration::from_secs(900),
             farewell_started_at: None,
             farewell_audio_done: Arc::new(AtomicBool::new(false)),

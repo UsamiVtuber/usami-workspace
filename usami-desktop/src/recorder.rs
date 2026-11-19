@@ -221,20 +221,6 @@ fn capture_until_stopped(
     while !stop.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(40));
 
-        #[cfg(target_os = "windows")]
-        if gate.is_gamer_mode() {
-            let ptt_down = unsafe {
-                use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-                    GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
-                };
-                let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
-                let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
-                let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
-                v_down || x1_down || x2_down
-            };
-            gate.set_ptt_down(ptt_down);
-        }
-
         vad.set_mode(gate.is_gamer_mode(), gate.is_ptt_down());
 
         if let Ok(mut queued) = queue.lock() {

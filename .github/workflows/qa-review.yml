@@ -1,7 +1,10 @@
 name: QA Review (Usami)
 
 on:
-  pull_request:
+  # pull_request_target roda o workflow da BASE, com o checkout da BASE:
+  # o código da PR nunca é executado no runner self-hosted. O diff da PR
+  # é obtido pela API (gh pr diff) e enviado ao modelo como dado não confiável.
+  pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
@@ -11,7 +14,7 @@ on:
         type: string
 
 # Roda APENAS no self-hosted runner do notebook Linux (label: usami-notebook)
-# O gh CLI usa token do keychain do SO (DPAPI/libsecret) — NÃO env vars
+# O gh CLI usa token do keychain do SO (DPAPI/libsecret) só para comentar na PR.
 #
 # Um push novo na mesma PR cancela o review em andamento: o veredito antigo
 # sairia sobre um diff que já não existe.
@@ -31,14 +34,25 @@ jobs:
     env:
       # Modelo de raciocínio profundo (NVIDIA Nemotron 3 Ultra via API NVIDIA direta)
       BRAIN_MODEL: nvidia/nemotron-3-ultra-550b-a55b
-      # Chave da NVIDIA (organization secret: Settings → Secrets → Actions → Organization secrets)
-      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
 
     steps:
-      - name: Checkout PR
+      - name: Valida o número da PR
+        env:
+          RAW_PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          if ! [[ "$RAW_PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::Número de PR inválido: $RAW_PR"
+            exit 1
+          fi
+          echo "PR_NUM=$RAW_PR" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Checkout da base (nunca do head da PR)
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # histórico completo para diff
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Verifica Node 22+
         run: |
@@ -50,26 +64,28 @@ jobs:
         run: |
           gh auth status --hostname github.com
           echo "✅ gh CLI autenticado (token no keychain do SO)"
+        shell: bash
 
-      - name: Scan de segredos no diff (gitleaks, opcional)
-        continue-on-error: true
+      - name: Scan de segredos no diff (bloqueante)
         run: |
-          PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           set -o pipefail
-          # `gitleaks stdin` sai com 0 mesmo achando segredo (testado com --exit-code),
-          # então o resultado é lido da saída. --redact mantém o valor fora do log.
-          gh pr diff "$PR_NUM" | docker run --rm -i ghcr.io/gitleaks/gitleaks:v8.30.1 \
-            stdin --redact --no-banner --no-color --verbose 2>&1 | tee "$RUNNER_TEMP/gitleaks.log"
+          gh pr diff "$PR_NUM" > "$RUNNER_TEMP/pr.diff"
+          # `gitleaks stdin` sai com 0 mesmo achando segredo, então o
+          # resultado é lido da saída. --redact mantém o valor fora do log.
+          docker run --rm -i ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            stdin --redact --no-banner --no-color --verbose \
+            < "$RUNNER_TEMP/pr.diff" 2>&1 | tee "$RUNNER_TEMP/gitleaks.log"
           if grep -qE 'leaks found: [1-9]' "$RUNNER_TEMP/gitleaks.log"; then
-            echo "::warning title=Possível segredo na PR::gitleaks acusou segredo(s) no diff (valores redigidos no log do step). O review segue mesmo assim."
-          else
-            echo "✅ Sem segredos detectados no diff"
+            echo "::error title=Segredo no diff::gitleaks acusou segredo(s) adicionado(s) na PR (valores redigidos no log). Review não enviado ao modelo."
+            exit 1
           fi
+          echo "✅ Sem segredos detectados no diff"
         shell: bash
 
       - name: Roda QA Review
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
-          PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
           echo "🔍 Revisando PR #$PR_NUM..."
           node scripts/qa-review.mjs "$PR_NUM"
         shell: bash

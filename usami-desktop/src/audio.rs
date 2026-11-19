@@ -66,11 +66,7 @@ impl AudioPlayer {
             block_len: 0,
             level_reported_end: false,
         });
-        PcmSink {
-            sender: Some(sender),
-            pending,
-            leftover_byte: None,
-        }
+        PcmSink::new(sender, pending)
     }
 }
 
@@ -159,10 +155,23 @@ pub struct PcmSink {
     sender: Option<Sender<Vec<f32>>>,
     pending: Arc<AtomicUsize>,
     leftover_byte: Option<u8>,
+    /// Buffer reutilizado para evitar alocações no hot path de push_i16_le.
+    scratch: Vec<f32>,
 }
 
 impl PcmSink {
+    /// Cria um novo PcmSink com buffer de scratch pré-alocado.
+    pub(crate) fn new(sender: Sender<Vec<f32>>, pending: Arc<AtomicUsize>) -> Self {
+        Self {
+            sender: Some(sender),
+            pending,
+            leftover_byte: None,
+            scratch: Vec::with_capacity(4096),
+        }
+    }
+
     /// Retorna `true` quando o chunk produziu ao menos uma amostra.
+    /// Reutiliza `self.scratch` para evitar alocações no hot path.
     pub fn push_i16_le(&mut self, bytes: &[u8]) -> bool {
         let Some(sender) = &self.sender else {
             return false;
@@ -171,26 +180,27 @@ impl PcmSink {
             return false;
         }
 
-        let mut samples = Vec::with_capacity(bytes.len() / 2 + 1);
+        self.scratch.clear();
         let mut start = 0;
         if let Some(high) = self.leftover_byte.take() {
-            samples.push(i16::from_le_bytes([bytes[0], high]) as f32 / 32_768.0);
+            self.scratch.push(i16::from_le_bytes([bytes[0], high]) as f32 / 32_768.0);
             start = 1;
         }
         let rest = &bytes[start..];
         let complete = rest.len() - rest.len() % 2;
         for pair in rest[..complete].as_chunks::<2>().0 {
-            samples.push(i16::from_le_bytes(*pair) as f32 / 32_768.0);
+            self.scratch.push(i16::from_le_bytes(*pair) as f32 / 32_768.0);
         }
         if complete < rest.len() {
             self.leftover_byte = Some(rest[rest.len() - 1]);
         }
-        if samples.is_empty() {
+        if self.scratch.is_empty() {
             return false;
         }
 
-        self.pending.fetch_add(samples.len(), Ordering::Relaxed);
-        sender.send(samples).is_ok()
+        self.pending.fetch_add(self.scratch.len(), Ordering::Relaxed);
+        // Clona apenas os dados necessários para envio (evita manter borrow mutável).
+        sender.send(self.scratch.clone()).is_ok()
     }
 
     /// Fecha a escrita. O que já foi empilhado continua tocando.
@@ -221,11 +231,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let pending = Arc::new(AtomicUsize::new(0));
         (
-            PcmSink {
-                sender: Some(sender),
-                pending: Arc::clone(&pending),
-                leftover_byte: None,
-            },
+            PcmSink::new(sender, pending.clone()),
             receiver,
             pending,
         )

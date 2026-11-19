@@ -235,9 +235,17 @@ mod win32 {
             SAVED_EX_STYLE.store(ex_style, Ordering::SeqCst);
 
             let frameless = style & !(FRAME_STYLES as isize);
-            SetWindowLongPtrW(hwnd, GWL_STYLE, frameless);
+            let ok = unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, frameless) };
+            if ok == 0 {
+                let err = windows_sys::Win32::Foundation::GetLastError();
+                eprintln!("[Usami Mascot] Falha ao remover moldura (SetWindowLongPtrW GWL_STYLE): erro {}", err);
+            }
             let mascot_ex = ((ex_style as u32) | WS_EX_TOPMOST | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, mascot_ex as isize);
+            let ok = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, mascot_ex as isize) };
+            if ok == 0 {
+                let err = windows_sys::Win32::Foundation::GetLastError();
+                eprintln!("[Usami Mascot] Falha ao aplicar estilo mascote (SetWindowLongPtrW GWL_EXSTYLE): erro {}", err);
+            }
             refresh_taskbar(hwnd);
 
             let width = (MASCOT_WIDTH * scale).round() as i32;
@@ -268,10 +276,18 @@ mod win32 {
             let style = SAVED_STYLE.load(Ordering::SeqCst);
             let ex_style = SAVED_EX_STYLE.load(Ordering::SeqCst);
             if style != 0 {
-                SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+                let ok = SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+                if ok == 0 {
+                    let err = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Usami Mascot] Falha ao restaurar estilo (SetWindowLongPtrW GWL_STYLE): erro {}", err);
+                }
             }
             if ex_style != 0 {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+                let ok = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+                if ok == 0 {
+                    let err = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Usami Mascot] Falha ao restaurar ex-estilo (SetWindowLongPtrW GWL_EXSTYLE): erro {}", err);
+                }
             }
             refresh_taskbar(hwnd);
 

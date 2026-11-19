@@ -160,7 +160,11 @@ pub fn restore_wndproc_on_panic() {
     if !app.is_null() {
         if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
             unsafe {
-                SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as isize);
+                let ok = SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as isize);
+                if ok == 0 {
+                    let err = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Usami Presence] Falha ao restaurar WNDPROC (SetWindowLongPtrW): erro {}", err);
+                }
             }
         }
     }
@@ -224,29 +228,44 @@ fn run(app: isize, ready: Sender<Result<Ready, String>>) {
     let tray = add_tray_icon(hidden);
 
     let hotkey = unsafe {
-        RegisterHotKey(
+        let ok = RegisterHotKey(
             hidden,
             HOTKEY_ID,
             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
             VK_U as u32,
-        )
-    } != 0;
+        );
+        if ok == 0 {
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            eprintln!("[Usami Presence] Falha ao registrar hotkey principal (RegisterHotKey): erro {}", err);
+        }
+        ok != 0
+    };
     let _lol_hotkey = unsafe {
-        RegisterHotKey(
+        let ok = RegisterHotKey(
             hidden,
             HOTKEY_LOL_OVERLAY_ID,
             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
             VK_L_KEY,
-        )
-    } != 0;
+        );
+        if ok == 0 {
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            eprintln!("[Usami Presence] Falha ao registrar hotkey LoL overlay (RegisterHotKey): erro {}", err);
+        }
+        ok != 0
+    };
     let _mascot_hotkey = unsafe {
-        RegisterHotKey(
+        let ok = RegisterHotKey(
             hidden,
             HOTKEY_MASCOT_ID,
             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
             VK_M_KEY,
-        )
-    } != 0;
+        );
+        if ok == 0 {
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            eprintln!("[Usami Presence] Falha ao registrar hotkey mascote (RegisterHotKey): erro {}", err);
+        }
+        ok != 0
+    };
 
     unsafe {
         TASKBAR_CREATED.store(

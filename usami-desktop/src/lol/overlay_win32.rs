@@ -31,7 +31,11 @@ mod win32 {
                 } else {
                     target &= !(WS_EX_TRANSPARENT as isize);
                 }
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
+                let ok = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target) };
+                if ok == 0 {
+                    let err = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Usami LoL Overlay] Falha ao aplicar estilo overlay (SetWindowLongPtrW): erro {}", err);
+                }
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -44,7 +48,11 @@ mod win32 {
             } else {
                 let base = SAVED_EX_STYLE.load(Ordering::SeqCst);
                 let restored = base & !(WS_EX_TRANSPARENT as isize);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, restored);
+                let ok = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, restored) };
+                if ok == 0 {
+                    let err = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Usami LoL Overlay] Falha ao restaurar estilo overlay (SetWindowLongPtrW): erro {}", err);
+                }
                 let insert_after: HWND = if (restored as u32 & WS_EX_TOPMOST) != 0 {
                     HWND_TOPMOST
                 } else {

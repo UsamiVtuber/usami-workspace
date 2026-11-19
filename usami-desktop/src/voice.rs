@@ -97,6 +97,9 @@ impl UsamiApp {
                 self.sync_mic_gate();
                 self.status_text = "OUVINDO...".into();
 
+                #[cfg(target_os = "windows")]
+                self.start_ptt_detection(cx);
+
                 // Prévia ao vivo: fatias do áudio em andamento vão para o STT em
                 // paralelo ao turno final. A latência só atrasa a legenda; parar
                 // de falar continua encerrando o turno pelo caminho normal.
@@ -289,6 +292,8 @@ impl UsamiApp {
         self.listen_session = self.listen_session.wrapping_add(1);
         self.live_transcript = SharedString::default();
         self.sync_mic_gate();
+        #[cfg(target_os = "windows")]
+        self.stop_ptt_detection();
         if let Some(listener) = self.listener.take() {
             listener.stop();
         }

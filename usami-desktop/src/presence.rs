@@ -71,7 +71,7 @@ const MENU_EXIT: usize = 5;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
 
-static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+static ORIGINAL_WNDPROC: OnceLock<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT> = OnceLock::new();
 static APP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static HIDDEN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TRAY_ICON: AtomicIsize = AtomicIsize::new(0);
@@ -115,7 +115,9 @@ pub fn start(window: &Window) {
             let err = windows_sys::Win32::Foundation::GetLastError();
             eprintln!("[Usami Presence] Falha ao subclassear janela (SetWindowLongPtrW): erro {}", err);
         } else {
-            ORIGINAL_WNDPROC.store(orig, Ordering::SeqCst);
+            let orig_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                std::mem::transmute(orig);
+            let _ = ORIGINAL_WNDPROC.set(orig_proc);
             println!("[Usami Presence] WndProc subclasseado com sucesso para interceptar minimizar");
         }
     }
@@ -151,10 +153,25 @@ pub fn start(window: &Window) {
     }
 }
 
+/// Restaura o WNDPROC original imediatamente. Chamado no panic hook para
+/// evitar que a janela fique com um callback pendurado após crash.
+pub fn restore_wndproc_on_panic() {
+    let app = app_window();
+    if !app.is_null() {
+        if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
+            unsafe {
+                SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as isize);
+            }
+        }
+    }
+}
+
 /// Encerra a thread de presença: remove o ícone, desregistra o atalho e fecha
 /// a janela oculta. Idempotente; pode ser chamado no fechamento da janela.
 pub fn shutdown() {
     crate::mascot::stop_gaze_loop();
+    // Restaura o WNDPROC original antes de fechar a janela
+    restore_wndproc_on_panic();
     let hidden = HIDDEN_WINDOW.swap(0, Ordering::SeqCst);
     if hidden != 0 {
         unsafe { PostMessageW(hidden as HWND, WM_CLOSE, 0, 0) };
@@ -299,10 +316,7 @@ unsafe extern "system" fn mascot_wndproc(
         crate::mascot::request_toggle(crate::mascot::ToggleRequest::Minimize);
         return 0;
     }
-    let orig = ORIGINAL_WNDPROC.load(Ordering::SeqCst) as *const ();
-    if !orig.is_null() {
-        let orig_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
-            std::mem::transmute(orig);
+    if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
         return orig_proc(hwnd, msg, wparam, lparam);
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)

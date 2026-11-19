@@ -38,7 +38,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_vrm::{VrmController, VrmView};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -72,6 +72,8 @@ struct UsamiApp {
     call_seconds: u64,
     is_listening: bool,
     listener: Option<recorder::VoiceListener>,
+    /// Flag para cancelar a task de detecção PTT na UI thread.
+    ptt_detection_stop: Arc<AtomicBool>,
     mic_gate: Arc<recorder::MicGate>,
     is_companion_mode: bool,
     sleep_companion_started_at: Option<Instant>,
@@ -573,6 +575,7 @@ impl UsamiApp {
             call_seconds: 0,
             is_listening: false,
             listener: None,
+            ptt_detection_stop: Arc::new(AtomicBool::new(false)),
             mic_gate,
             is_companion_mode: false,
             sleep_companion_started_at: None,
@@ -711,6 +714,51 @@ impl UsamiApp {
         presence::start(window);
         presence::set_emotion_icon(&self.last_emotion);
         self.presence_subscription = Some(cx.on_window_closed(|_| presence::shutdown()));
+    }
+
+    /// Inicia a detecção de PTT (Push-to-Talk) na UI thread.
+    /// Roda no executor de foreground do GPUI (`cx.spawn`), que executa na
+    /// thread principal — a mesma que processa as mensagens da janela.
+    /// `background_executor().spawn` é um thread pool e não serve aqui.
+    #[cfg(target_os = "windows")]
+    fn start_ptt_detection(&mut self, cx: &mut Context<Self>) {
+        self.ptt_detection_stop.store(false, Ordering::Relaxed);
+        let gate = Arc::clone(&self.mic_gate);
+        let stop = Arc::clone(&self.ptt_detection_stop);
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                loop {
+                    // Verifica a cada 50ms (20Hz) - suficiente para PTT responsivo
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // Só verifica se ainda estamos em modo gamer com PTT requerido
+                    if gate.is_gamer_mode() && gate.is_ptt_required() {
+                        let ptt_down = unsafe {
+                            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                                GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
+                            };
+                            let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
+                            let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
+                            let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
+                            v_down || x1_down || x2_down
+                        };
+                        gate.set_ptt_down(ptt_down);
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Para a detecção de PTT.
+    #[cfg(target_os = "windows")]
+    fn stop_ptt_detection(&mut self) {
+        self.ptt_detection_stop.store(true, Ordering::Relaxed);
     }
 
     fn poke(&mut self, cx: &mut Context<Self>) {
@@ -1247,8 +1295,15 @@ impl UsamiApp {
                 self.lol_cs = cs;
 
                 let should_overlay = in_match || loading || self.lol_manual_overlay;
-                self.mic_gate
-                    .set_gamer_mode(in_match || loading || self.lol_manual_overlay);
+                let gamer_mode = in_match || loading || self.lol_manual_overlay;
+                self.mic_gate.set_gamer_mode(gamer_mode);
+                // Se estamos ouvindo e o modo gamer mudou, reiniciar detecção PTT
+                if self.is_listening {
+                    self.stop_ptt_detection();
+                    if gamer_mode {
+                        self.start_ptt_detection(cx);
+                    }
+                }
                 if !self.mascot_mode && should_overlay != was_active {
                     self.lol_overlay_active = should_overlay;
                     if should_overlay {
@@ -1306,9 +1361,15 @@ impl UsamiApp {
                 } else {
                     self.lol_manual_overlay = !self.lol_manual_overlay;
                     self.lol_overlay_active = self.lol_manual_overlay;
-                    self.mic_gate.set_gamer_mode(
-                        self.lol_manual_overlay || self.lol_in_match || self.lol_loading,
-                    );
+                    let gamer_mode = self.lol_manual_overlay || self.lol_in_match || self.lol_loading;
+                    self.mic_gate.set_gamer_mode(gamer_mode);
+                    // Se estamos ouvindo e o modo gamer mudou, reiniciar detecção PTT
+                    if self.is_listening {
+                        self.stop_ptt_detection();
+                        if gamer_mode {
+                            self.start_ptt_detection(cx);
+                        }
+                    }
                     self.lol_click_through = true;
                     if self.lol_overlay_active {
                         self.active_drawer = ActiveDrawer::None;
@@ -1477,6 +1538,11 @@ fn install_panic_hook() {
             .unwrap_or_else(|| "unknown".to_string());
 
         storage::append_crash_log(&format!("PANIC at {location}: {payload}"));
+
+        // Restaura o WNDPROC original antes de qualquer outra coisa para evitar
+        // que a janela fique com um callback pendurado após crash.
+        #[cfg(target_os = "windows")]
+        presence::restore_wndproc_on_panic();
 
         let base_url = api::UsamiApiClient::from_env().base_url().to_string();
         let token = api::UsamiApiClient::from_env().token().map(str::to_string);

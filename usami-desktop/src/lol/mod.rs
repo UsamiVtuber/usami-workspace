@@ -42,6 +42,16 @@ impl Drop for GeneratingGuard {
     }
 }
 
+/// Canal global para comandos da UI vindos da thread Win32 (hotkey `Ctrl+Alt+L`).
+///
+/// Usa `std::sync::Mutex` (não `TokioMutex`) porque é acessado a partir de
+/// `presence.rs::notify_hotkey_toggle_click_through()`, que roda na thread
+/// Win32 síncrona (message loop da janela oculta). Essa thread **não** tem
+/// runtime Tokio e não pode fazer `.await`.
+///
+/// O lock é mantido por tempo mínimo (só o `send` no canal unbounded) e não
+/// há contenção real: a thread Win32 só envia esse comando esporadicamente,
+/// enquanto o worker assíncrono só lê o canal na inicialização (`start()`).
 static GLOBAL_UI_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<LolUiCommand>>>> = OnceLock::new();
 
 pub struct LolCompanionHandle {
@@ -143,6 +153,13 @@ async fn run_worker(
     let mut active_champion = String::new();
     let mut active_role = PlayerRole::Unknown;
     let mut active_enemies: Vec<String> = Vec::new();
+
+    /// Histórico de falas recentes para evitar repetição (máx. 5).
+    ///
+    /// Usa `TokioMutex` porque é acessado **apenas** do worker assíncrono
+    /// (`run_worker` e tasks `tokio::spawn` filhas). Nunca é acessado de
+    /// contexto síncrono. O lock é sempre liberado antes de qualquer `.await`
+    /// (clone ou push/pop rápido), evitando lock convoy.
     let recent_replies = Arc::new(TokioMutex::new(Vec::<String>::new()));
     let is_generating = Arc::new(AtomicBool::new(false));
     let mut last_kda = (0, 0, 0);

@@ -155,7 +155,7 @@ async fn run_worker(
     let mut core_circuit_was_open = false;
 
     while !shutdown.load(Ordering::SeqCst) {
-        let _now = Instant::now();
+        let now = Instant::now();
         let delay = if enabled {
             state.next_poll_delay()
         } else {

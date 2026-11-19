@@ -27,6 +27,10 @@ O `README.md` da raiz descreve o workspace em alto nível. Para detalhes de um c
    - Se aprovado, a Usami comenta dando o veredito de aprovação e solicitando ao usuário que aprove/faça o merge da PR. Caso contrário, comenta apontando as correções e sugestões necessárias.
 6. Revise o diff para confirmar que só os arquivos esperados foram alterados.
 
+## Interface
+
+- Não use emojis em código, interface ou documentação do projeto. A interface do desktop usa os ícones SVG de [`usami-desktop/assets/icons/`](usami-desktop/assets/icons); quando faltar um símbolo, adicione um SVG novo em vez de um emoji.
+
 ## Segurança e operações locais
 
 - Nunca leia, copie, imprima ou versione credenciais. Não inclua valores de `.env`, chaves, tokens ou dados pessoais em código, logs ou respostas.

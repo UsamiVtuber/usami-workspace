@@ -107,10 +107,9 @@ impl UsamiApp {
                             div()
                                 .w_full()
                                 .rounded(px(16.0))
-                                .bg(rgba(0x140A20E6))
+                                .bg(rgba(0x140A20F2))
                                 .border_1()
-                                .border_color(c.primary)
-                                .shadow(theme::glow(c.accent, 12.0))
+                                .border_color(c.line)
                                 .px(px(14.0))
                                 .py(px(10.0))
                                 .text_size(px(13.0))
@@ -161,7 +160,7 @@ impl UsamiApp {
                                 this.toggle_listening(cx);
                                 cx.stop_propagation();
                             }))
-                            .child("🎤"),
+                            .child(icon("mic", 15.0)),
                     )
                     .child(
                         div()
@@ -171,6 +170,7 @@ impl UsamiApp {
                             .h(px(36.0))
                             .flex()
                             .items_center()
+                            .overflow_hidden()
                             .rounded_full()
                             .bg(rgba(0x140A20E6))
                             .border_1()
@@ -188,11 +188,19 @@ impl UsamiApp {
                                 cx.stop_propagation();
                                 cx.notify();
                             }))
-                            .child(if input_text.is_empty() {
-                                "Manda pra ela…".to_string()
-                            } else {
-                                input_text.clone()
-                            }),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(if input_text.is_empty() {
+                                        "Manda pra ela…".to_string()
+                                    } else {
+                                        input_text.clone()
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -217,9 +225,9 @@ impl UsamiApp {
                                 cx.stop_propagation();
                             }))
                             .child(if has_text {
-                                icon("send", 15.0).into_any_element()
+                                icon("send_dark", 15.0).into_any_element()
                             } else {
-                                icon("volume", 15.0).into_any_element()
+                                icon("mic_dark", 15.0).into_any_element()
                             }),
                     ),
             )
@@ -288,7 +296,7 @@ impl UsamiApp {
                                     } else {
                                         "Falar por voz"
                                     },
-                                    "volume",
+                                    "mic",
                                     Some(is_listening),
                                     &c,
                                 )

@@ -23,21 +23,6 @@ jobs:
           clean: true
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Verify source files
-        run: |
-          echo "=== Git commit ==="
-          git rev-parse HEAD
-          echo "=== lol/mod.rs line count ==="
-          wc -l usami-desktop/src/lol/mod.rs
-          echo "=== eprintln in lol/mod.rs ==="
-          grep -n "eprintln!" usami-desktop/src/lol/mod.rs
-          echo "=== eprintln in lol/live_client.rs ==="
-          grep -n "eprintln!" usami-desktop/src/lol/live_client.rs
-          echo "=== mascot.rs imports ==="
-          head -20 usami-desktop/src/mascot.rs
-          echo "=== presence.rs line 159 ==="
-          sed -n '155,165p' usami-desktop/src/presence.rs
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.98
         with:
@@ -54,6 +39,10 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --workspace
+        working-directory: usami-desktop
+
+      - name: Run tests
+        run: cargo test --workspace
         working-directory: usami-desktop
 
       - name: Build (debug)

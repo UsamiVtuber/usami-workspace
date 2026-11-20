@@ -252,7 +252,7 @@ pub fn detect_player_role(player: &Player) -> PlayerRole {
     let has_jungle_item = player
         .items
         .iter()
-        .any(|i| matches!(i.item_id, 1101..=1103));
+        .any(|i| matches!(i.item_id, 1101 | 1102 | 1103));
     if has_jungle_item {
         return PlayerRole::Jungle;
     }
@@ -281,15 +281,15 @@ fn player_identifiers(player: &Player) -> HashSet<String> {
     if !player.summoner_name.is_empty() {
         ids.insert(player.summoner_name.clone());
     }
-    if let Some(ref riot_id) = player.riot_id
-        && !riot_id.is_empty()
-    {
-        ids.insert(riot_id.clone());
+    if let Some(ref riot_id) = player.riot_id {
+        if !riot_id.is_empty() {
+            ids.insert(riot_id.clone());
+        }
     }
-    if let Some(ref game_name) = player.riot_id_game_name
-        && !game_name.is_empty()
-    {
-        ids.insert(game_name.clone());
+    if let Some(ref game_name) = player.riot_id_game_name {
+        if !game_name.is_empty() {
+            ids.insert(game_name.clone());
+        }
     }
     ids
 }

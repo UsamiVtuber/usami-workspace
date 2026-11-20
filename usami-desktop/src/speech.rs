@@ -18,11 +18,10 @@ pub(crate) fn is_duplicate_utterance(
     if key.is_empty() {
         return true;
     }
-    if let Some((prev_key, prev_at)) = last_commit
-        && *prev_key == key
-        && now.saturating_duration_since(*prev_at) < Duration::from_secs(5)
-    {
-        return true;
+    if let Some((prev_key, prev_at)) = last_commit {
+        if *prev_key == key && now.saturating_duration_since(*prev_at) < Duration::from_secs(5) {
+            return true;
+        }
     }
     *last_commit = Some((key, now));
     false
@@ -47,11 +46,12 @@ pub(crate) fn sanitize_speech_text(text: &str) -> String {
             cleaned.push(ch);
         }
     }
-    if let Some(pos) = cleaned.find("-prefab_")
-        && let Some(start) =
+    if let Some(pos) = cleaned.find("-prefab_") {
+        if let Some(start) =
             cleaned[..pos].rfind(|c: char| c.is_ascii_digit() || c == ' ' || c == ',')
-    {
-        cleaned.truncate(start);
+        {
+            cleaned.truncate(start);
+        }
     }
     cleaned.trim().to_string()
 }

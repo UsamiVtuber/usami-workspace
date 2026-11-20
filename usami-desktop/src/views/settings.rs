@@ -373,7 +373,7 @@ impl UsamiApp {
                                 .border_color(theme::Palette::emerald_border())
                                 .text_size(px(ty.xs))
                                 .text_color(theme::Palette::emerald())
-                                .child(st),
+                                .child(SharedString::from(st)),
                         );
                     }
 
@@ -751,7 +751,7 @@ impl UsamiApp {
                                 .border_color(theme::Palette::emerald_border())
                                 .text_size(px(ty.xs))
                                 .text_color(theme::Palette::emerald())
-                                .child(st),
+                                .child(SharedString::from(st)),
                         );
                     }
 

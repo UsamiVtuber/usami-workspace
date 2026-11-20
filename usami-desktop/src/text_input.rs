@@ -66,7 +66,10 @@ pub(crate) fn resolve_key_char_with_dead_key(
     ch: &str,
 ) -> Option<String> {
     let mut chars = ch.chars();
-    let first = chars.next()?;
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return None,
+    };
 
     if chars.next().is_none() {
         if let Some(dead) = pending_dead_key.take() {
@@ -95,8 +98,10 @@ pub(crate) fn resolve_key_char_with_dead_key(
     }
 
     let mut out = String::new();
-    if let Some(dead) = pending_dead_key.take() && !ch.starts_with(dead) {
-        out.push(dead);
+    if let Some(dead) = pending_dead_key.take() {
+        if !ch.starts_with(dead) {
+            out.push(dead);
+        }
     }
     out.push_str(ch);
     Some(out)

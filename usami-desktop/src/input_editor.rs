@@ -85,10 +85,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
                 target -= 1;
             }
-            while target > 0 && chars.get(target - 1).is_some_and(|c| !c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
                 target -= 1;
             }
             self.cursor_char_idx = target;
@@ -114,10 +114,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target < chars.len() && chars.get(target).is_some_and(|c| !c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).map_or(false, |c| !c.is_whitespace()) {
                 target += 1;
             }
-            while target < chars.len() && chars.get(target).is_some_and(|c| c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).map_or(false, |c| c.is_whitespace()) {
                 target += 1;
             }
             self.cursor_char_idx = target;
@@ -212,7 +212,8 @@ impl UsamiApp {
                         }
                     }
 
-                    if !attached_image && let Some(text) = item.text() {
+                    if !attached_image {
+                        if let Some(text) = item.text() {
                             let trimmed = text.trim().trim_matches('"');
                             let path = std::path::Path::new(trimmed);
                             let is_image_ext = path
@@ -226,30 +227,32 @@ impl UsamiApp {
                                 })
                                 .unwrap_or(false);
 
-                            if is_image_ext && path.is_file() && let Ok(bytes) = std::fs::read(path) {
-                                let filename = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("imagem.png")
-                                    .to_string();
-                                let mime = match path
-                                    .extension()
-                                    .and_then(|e| e.to_str())
-                                    .map(|s| s.to_ascii_lowercase())
-                                    .as_deref()
-                                {
-                                    Some("jpg") | Some("jpeg") => "image/jpeg",
-                                    Some("png") => "image/png",
-                                    Some("webp") => "image/webp",
-                                    Some("gif") => "image/gif",
-                                    Some("bmp") => "image/bmp",
-                                    _ => "image/png",
-                                };
-                                self.attached_media =
-                                    Some(AttachedMedia::from_bytes(filename, mime, bytes));
-                                self.input_active = true;
-                                cx.notify();
-                                return;
+                            if is_image_ext && path.is_file() {
+                                if let Ok(bytes) = std::fs::read(path) {
+                                    let filename = path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("imagem.png")
+                                        .to_string();
+                                    let mime = match path
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .map(|s| s.to_ascii_lowercase())
+                                        .as_deref()
+                                    {
+                                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                                        Some("png") => "image/png",
+                                        Some("webp") => "image/webp",
+                                        Some("gif") => "image/gif",
+                                        Some("bmp") => "image/bmp",
+                                        _ => "image/png",
+                                    };
+                                    self.attached_media =
+                                        Some(AttachedMedia::from_bytes(filename, mime, bytes));
+                                    self.input_active = true;
+                                    cx.notify();
+                                    return;
+                                }
                             }
 
                             self.input_active = true;
@@ -258,6 +261,7 @@ impl UsamiApp {
                             self.caret_on = true;
                             cx.notify();
                         }
+                    }
                 }
             } else if key.eq_ignore_ascii_case("a") {
                 self.input_active = true;
@@ -291,12 +295,13 @@ impl UsamiApp {
                     let current = self.cursor_idx();
                     if current > 0 {
                         let mut target = current;
-                        while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace())
+                        while target > 0
+                            && chars.get(target - 1).map_or(false, |c| c.is_whitespace())
                         {
                             target -= 1;
                         }
                         while target > 0
-                            && chars.get(target - 1).is_some_and(|c| !c.is_whitespace())
+                            && chars.get(target - 1).map_or(false, |c| !c.is_whitespace())
                         {
                             target -= 1;
                         }

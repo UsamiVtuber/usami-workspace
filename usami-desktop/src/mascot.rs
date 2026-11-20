@@ -5,8 +5,8 @@
 //! flag atômico, consumido pelo tick da UI. Toda a cirurgia de estilo/geometria
 //! é Win32 porque o GPUI 0.2.2 não troca decoração em runtime no Windows.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::JoinHandle;
 
 /// Retângulo físico de janela: (x, y, largura, altura), em pixels de tela.

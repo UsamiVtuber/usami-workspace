@@ -64,10 +64,10 @@ impl UsamiApp {
                                     return;
                                 }
                                 for event in res.events {
-                                    if let Some(dedupe_key) = &event.dedupe_key
-                                        && view.proactive_seen.contains(dedupe_key)
-                                    {
-                                        continue;
+                                    if let Some(dedupe_key) = &event.dedupe_key {
+                                        if view.proactive_seen.contains(dedupe_key) {
+                                            continue;
+                                        }
                                     }
                                     if view.proactive_queue.iter().any(|e| e.id == event.id) {
                                         continue;

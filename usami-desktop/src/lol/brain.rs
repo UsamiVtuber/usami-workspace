@@ -343,7 +343,11 @@ fn is_operational_or_system_error(text: &str) -> bool {
 }
 
 /// Faz o parse da resposta do LLM aceitando JSON puro, bloco ```json ou texto livre com fallback.
-pub fn parse_companion_reply(raw: &str, fallback_priority: u8, fallback_expr: LolExpression) -> LolCompanionReply {
+pub fn parse_companion_reply(
+    raw: &str,
+    fallback_priority: u8,
+    fallback_expr: LolExpression,
+) -> LolCompanionReply {
     let trimmed = raw.trim();
     if is_operational_or_system_error(trimmed) {
         return LolCompanionReply {
@@ -370,10 +374,7 @@ pub fn parse_companion_reply(raw: &str, fallback_priority: u8, fallback_expr: Lo
     }
 
     // Fallback seguro se o LLM retornar texto puro sem envelope JSON
-    let clean_text = trimmed
-        .trim_matches('`')
-        .trim()
-        .to_string();
+    let clean_text = trimmed.trim_matches('`').trim().to_string();
     LolCompanionReply {
         fala: if clean_text.is_empty() || is_operational_or_system_error(&clean_text) {
             String::new()
@@ -477,8 +478,9 @@ mod tests {
         );
 
         // Deve retornar imediatamente sem esperar 8 segundos!
-        let voice = q.pop_ready(t0 + Duration::from_secs(2), false).expect("pergunta do usuário não deve esperar cooldown");
+        let voice = q
+            .pop_ready(t0 + Duration::from_secs(2), false)
+            .expect("pergunta do usuário não deve esperar cooldown");
         assert!(matches!(voice.event, LolEvent::UserVoiceQuery { .. }));
     }
 }
-

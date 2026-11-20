@@ -1,8 +1,8 @@
 //! Gerenciamento assíncrono de Vínculo, Afeto, Humor e Atividade de Chat com o core.
 
+use crate::UsamiApp;
 use crate::api;
 use crate::api::tokio_runtime;
-use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -75,9 +75,14 @@ impl UsamiApp {
                                 let tool = activity.tool.clone().filter(|t| !t.is_empty());
                                 let phase = activity.phase.clone();
                                 let changed = view.active_tool != tool
-                                    || view.chat_activity.as_ref().and_then(|a| a.phase.clone()) != phase;
+                                    || view.chat_activity.as_ref().and_then(|a| a.phase.clone())
+                                        != phase;
                                 view.active_tool = tool;
-                                view.chat_activity = if activity.active { Some(activity) } else { None };
+                                view.chat_activity = if activity.active {
+                                    Some(activity)
+                                } else {
+                                    None
+                                };
                                 if changed {
                                     cx.notify();
                                 }
@@ -209,9 +214,13 @@ impl UsamiApp {
         .detach();
     }
 
-
     /// Mesma regra do web: cada mensagem rende XP, mas quem soma é o core.
-    pub(crate) fn award_bond_chat(&mut self, content: String, spoken: bool, cx: &mut Context<Self>) {
+    pub(crate) fn award_bond_chat(
+        &mut self,
+        content: String,
+        spoken: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.api_client.has_token() {
             return;
         }
@@ -227,14 +236,12 @@ impl UsamiApp {
                 let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
-                        this.update(cx, |view, cx| {
-                            match res {
-                                Ok(resp) => {
-                                    view.apply_bond(resp.bond);
-                                    cx.notify();
-                                }
-                                Err(error) => eprintln!("[Vínculo] evento de chat falhou: {error}"),
+                        this.update(cx, |view, cx| match res {
+                            Ok(resp) => {
+                                view.apply_bond(resp.bond);
+                                cx.notify();
                             }
+                            Err(error) => eprintln!("[Vínculo] evento de chat falhou: {error}"),
                         });
                     }
                 });
@@ -260,14 +267,12 @@ impl UsamiApp {
                 let res = rx.await.expect("Tokio task dropped without sending result");
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
-                        this.update(cx, |view, cx| {
-                            match res {
-                                Ok(resp) => {
-                                    view.apply_bond(resp.bond);
-                                    cx.notify();
-                                }
-                                Err(error) => eprintln!("[Vínculo] evento de chamada falhou: {error}"),
+                        this.update(cx, |view, cx| match res {
+                            Ok(resp) => {
+                                view.apply_bond(resp.bond);
+                                cx.notify();
                             }
+                            Err(error) => eprintln!("[Vínculo] evento de chamada falhou: {error}"),
                         });
                     }
                 });
@@ -275,5 +280,4 @@ impl UsamiApp {
         })
         .detach();
     }
-
 }

@@ -75,11 +75,9 @@ impl UsamiApp {
                     cx.stop_propagation();
                 }),
             )
-            .on_mouse_move(
-                cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
-                    this.mascot_mouse_move(event);
-                }),
-            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
+                this.mascot_mouse_move(event);
+            }))
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 this.mascot_click(event, window, cx);
             }))
@@ -202,7 +200,11 @@ impl UsamiApp {
                             .rounded_full()
                             .border_1()
                             .border_color(if is_listening { c.primary } else { c.line })
-                            .bg(if is_listening { c.icon_bg_active } else { c.icon_bg })
+                            .bg(if is_listening {
+                                c.icon_bg_active
+                            } else {
+                                c.icon_bg
+                            })
                             .text_size(px(15.0))
                             .hover(|s| s.bg(c.icon_bg_hover))
                             .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
@@ -227,7 +229,11 @@ impl UsamiApp {
                             .border_color(if input_active { c.primary } else { c.line })
                             .px(px(12.0))
                             .text_size(px(12.5))
-                            .text_color(if input_text.is_empty() { c.faint } else { c.pearl })
+                            .text_color(if input_text.is_empty() {
+                                c.faint
+                            } else {
+                                c.pearl
+                            })
                             .cursor_text()
                             .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -351,11 +357,13 @@ impl UsamiApp {
                                     &c,
                                 )
                                 .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.toggle_listening(cx);
-                                    this.mascot_close_menu(cx);
-                                    cx.stop_propagation();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.toggle_listening(cx);
+                                        this.mascot_close_menu(cx);
+                                        cx.stop_propagation();
+                                    },
+                                )),
                             )
                             .child(
                                 mascot_menu_item(
@@ -366,11 +374,13 @@ impl UsamiApp {
                                     &c,
                                 )
                                 .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.mascot_toggle_follow(cx);
-                                    this.mascot_close_menu(cx);
-                                    cx.stop_propagation();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.mascot_toggle_follow(cx);
+                                        this.mascot_close_menu(cx);
+                                        cx.stop_propagation();
+                                    },
+                                )),
                             )
                             .child(
                                 mascot_menu_item(
@@ -381,10 +391,12 @@ impl UsamiApp {
                                     &c,
                                 )
                                 .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.mascot_open_settings(cx);
-                                    cx.stop_propagation();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.mascot_open_settings(cx);
+                                        cx.stop_propagation();
+                                    },
+                                )),
                             )
                             .child(
                                 mascot_menu_item(
@@ -395,10 +407,12 @@ impl UsamiApp {
                                     &c,
                                 )
                                 .on_mouse_down(MouseButton::Left, stop_mascot_mouse_down)
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.exit_mascot(window, cx);
-                                    cx.stop_propagation();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        this.exit_mascot(window, cx);
+                                        cx.stop_propagation();
+                                    },
+                                )),
                             ),
                     )
             })

@@ -57,7 +57,10 @@ impl RiotCloudClient {
             .api_key
             .as_deref()
             .ok_or(RiotCloudError::MissingApiKey)?;
-        let url = format!("{}/lol/summoner/v4/summoners/by-puuid/{puuid}", self.platform_host);
+        let url = format!(
+            "{}/lol/summoner/v4/summoners/by-puuid/{puuid}",
+            self.platform_host
+        );
         let res = self
             .client
             .get(url)
@@ -91,7 +94,10 @@ impl RiotCloudClient {
         if res.status().as_u16() == 429 {
             return Err(RiotCloudError::RateLimited);
         }
-        Ok(res.error_for_status()?.json::<Vec<LeagueEntryDto>>().await?)
+        Ok(res
+            .error_for_status()?
+            .json::<Vec<LeagueEntryDto>>()
+            .await?)
     }
 
     pub async fn get_recent_match_ids(
@@ -119,4 +125,3 @@ impl RiotCloudClient {
         Ok(res.error_for_status()?.json::<Vec<String>>().await?)
     }
 }
-

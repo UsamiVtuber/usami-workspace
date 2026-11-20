@@ -2,17 +2,17 @@
 //!
 //! Reúne abas de Skills, Execuções, Permissões, Confirmações e Sugestões.
 
+use crate::UsamiApp;
 use crate::agent_center_model::{
-    classify_execution_status, collect_skill_reasons, format_duration_ms, format_execution_time,
-    format_relevance_pct, group_skills_by_state, group_tools_by_namespace, is_local_quiet_hours_now,
-    origin_label, pending_confirmations_count, pending_suggestions_count, permission_level_label,
-    state_label, suggestion_kind_label, suggestion_status_label, summarize_executions,
-    AgentCenterTab, ExecFilter, ExecutionTone, SkillFilter,
+    AgentCenterTab, ExecFilter, ExecutionTone, SkillFilter, classify_execution_status,
+    collect_skill_reasons, format_duration_ms, format_execution_time, format_relevance_pct,
+    group_skills_by_state, group_tools_by_namespace, is_local_quiet_hours_now, origin_label,
+    pending_confirmations_count, pending_suggestions_count, permission_level_label, state_label,
+    suggestion_kind_label, suggestion_status_label, summarize_executions,
 };
 use crate::api;
 use crate::theme;
 use crate::ui::widgets::settings_hint;
-use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::sync::Arc;
@@ -41,8 +41,7 @@ impl UsamiApp {
             self.agent_executions_loaded = true;
             self.agent_permissions_loaded = true;
             self.agent_suggestions_loaded = true;
-            let msg: SharedString =
-                "Token ausente (USAMI_API_TOKEN) para consultar o core.".into();
+            let msg: SharedString = "Token ausente (USAMI_API_TOKEN) para consultar o core.".into();
             self.agent_skills_error = Some(msg.clone());
             self.agent_executions_error = Some(msg.clone());
             self.agent_permissions_error = Some(msg.clone());
@@ -158,7 +157,9 @@ impl UsamiApp {
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let res = run_on_tokio(async move { api.get_agent_suggestions(false, 50).await }).await;
+                    let res =
+                        run_on_tokio(async move { api.get_agent_suggestions(false, 50).await })
+                            .await;
                     let _ = cx.update(|cx: &mut App| {
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -274,8 +275,11 @@ impl UsamiApp {
                 let step = run_on_tokio(async move {
                     match api.create_skill_confirmation(&skill_req).await {
                         Ok(conf) => {
-                            api.install_skill_with_confirmation(&skill_req, &conf.confirmation.token)
-                                .await
+                            api.install_skill_with_confirmation(
+                                &skill_req,
+                                &conf.confirmation.token,
+                            )
+                            .await
                         }
                         Err(err) => Err(err),
                     }
@@ -554,7 +558,9 @@ impl UsamiApp {
             let cx = cx.clone();
             async move {
                 let skill_req = skill_id.clone();
-                let res = run_on_tokio(async move { api.toggle_skill_enabled(&skill_req, enable).await }).await;
+                let res =
+                    run_on_tokio(async move { api.toggle_skill_enabled(&skill_req, enable).await })
+                        .await;
                 let _ = cx.update(|cx: &mut App| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |view, cx| {
@@ -825,7 +831,9 @@ impl UsamiApp {
                                 .text_color(if ns_revoked { c.ok } else { c.danger_muted })
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     let reason = if next_ns_revoke {
-                                        Some(format!("Integração {wildcard_click} revogada no desktop"))
+                                        Some(format!(
+                                            "Integração {wildcard_click} revogada no desktop"
+                                        ))
                                     } else {
                                         None
                                     };
@@ -935,47 +943,44 @@ impl UsamiApp {
                 }
 
                 item = item.child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("agent-tool-perm-{tname}")))
-                                .cursor_pointer()
-                                .px(px(10.0))
-                                .py(px(4.0))
-                                .rounded(px(r.sm))
-                                .bg(c.surface_soft)
-                                .border_1()
-                                .border_color(if tool.revoked {
-                                    c.success_border
+                    div().flex().justify_end().child(
+                        div()
+                            .id(SharedString::from(format!("agent-tool-perm-{tname}")))
+                            .cursor_pointer()
+                            .px(px(10.0))
+                            .py(px(4.0))
+                            .rounded(px(r.sm))
+                            .bg(c.surface_soft)
+                            .border_1()
+                            .border_color(if tool.revoked {
+                                c.success_border
+                            } else {
+                                c.danger_muted_border
+                            })
+                            .text_size(px(ty.xs))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if tool.revoked { c.ok } else { c.danger_muted })
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                let reason = if next_revoke {
+                                    Some("Revogada manualmente no desktop".to_string())
                                 } else {
-                                    c.danger_muted_border
-                                })
-                                .text_size(px(ty.xs))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(if tool.revoked { c.ok } else { c.danger_muted })
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    let reason = if next_revoke {
-                                        Some("Revogada manualmente no desktop".to_string())
-                                    } else {
-                                        None
-                                    };
-                                    this.revoke_or_restore_permission(
-                                        tname_click.clone(),
-                                        next_revoke,
-                                        reason,
-                                        cx,
-                                    );
-                                }))
-                                .child(if is_busy {
-                                    "Atualizando…"
-                                } else if tool.revoked {
-                                    "Restaurar"
-                                } else {
-                                    "Revogar"
-                                }),
-                        ),
+                                    None
+                                };
+                                this.revoke_or_restore_permission(
+                                    tname_click.clone(),
+                                    next_revoke,
+                                    reason,
+                                    cx,
+                                );
+                            }))
+                            .child(if is_busy {
+                                "Atualizando…"
+                            } else if tool.revoked {
+                                "Restaurar"
+                            } else {
+                                "Revogar"
+                            }),
+                    ),
                 );
 
                 group_card = group_card.child(item);
@@ -1104,9 +1109,7 @@ impl UsamiApp {
                         .map(|p| p.benefit.clone())
                         .or_else(|| skill.description.clone()),
                     risks: proposal.map(|p| p.risks.clone()),
-                    dependencies: proposal
-                        .map(|p| p.dependencies.clone())
-                        .unwrap_or_default(),
+                    dependencies: proposal.map(|p| p.dependencies.clone()).unwrap_or_default(),
                     max_level: skill.max_permission_level.unwrap_or(1),
                 });
             }
@@ -1822,7 +1825,10 @@ impl UsamiApp {
         section
     }
 
-    pub(crate) fn render_agent_center_drawer(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn render_agent_center_drawer(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let t = theme::theme();
         let c = t.color;
         let sp = t.space;
@@ -1858,7 +1864,11 @@ impl UsamiApp {
                 .py(px(4.5))
                 .rounded_full()
                 .border_1()
-                .bg(if active { c.accent_tint } else { c.surface_soft })
+                .bg(if active {
+                    c.accent_tint
+                } else {
+                    c.surface_soft
+                })
                 .border_color(if active { c.accent } else { c.line_strong })
                 .text_size(px(ty.xs))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -1887,11 +1897,13 @@ impl UsamiApp {
                                 format!("Todas ({skills_count})"),
                                 skill_filter == SkillFilter::All,
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.agent_skill_filter = SkillFilter::All;
-                                this.poke(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.agent_skill_filter = SkillFilter::All;
+                                    this.poke(cx);
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .child(
                             pill(
@@ -1899,11 +1911,13 @@ impl UsamiApp {
                                 format!("Instaladas ({installed_len})"),
                                 skill_filter == SkillFilter::Installed,
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.agent_skill_filter = SkillFilter::Installed;
-                                this.poke(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.agent_skill_filter = SkillFilter::Installed;
+                                    this.poke(cx);
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .child(
                             pill(
@@ -1911,11 +1925,13 @@ impl UsamiApp {
                                 format!("Disponíveis ({available_len})"),
                                 skill_filter == SkillFilter::Available,
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.agent_skill_filter = SkillFilter::Available;
-                                this.poke(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.agent_skill_filter = SkillFilter::Available;
+                                    this.poke(cx);
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .child(
                             pill(
@@ -1923,11 +1939,13 @@ impl UsamiApp {
                                 format!("Pendentes ({pending_len})"),
                                 skill_filter == SkillFilter::Pending,
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.agent_skill_filter = SkillFilter::Pending;
-                                this.poke(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.agent_skill_filter = SkillFilter::Pending;
+                                    this.poke(cx);
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .child(
                             pill(
@@ -1935,11 +1953,13 @@ impl UsamiApp {
                                 format!("Desativadas ({disabled_len})"),
                                 skill_filter == SkillFilter::Disabled,
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.agent_skill_filter = SkillFilter::Disabled;
-                                this.poke(cx);
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.agent_skill_filter = SkillFilter::Disabled;
+                                    this.poke(cx);
+                                    cx.notify();
+                                },
+                            )),
                         ),
                 );
 
@@ -1991,38 +2011,34 @@ impl UsamiApp {
                         .filter(|b| skill_filter.matches_state(b.key))
                     {
                         let count = bucket.skills.len();
-                        let mut group_el = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(sp.s2))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .mt(px(sp.s1))
-                                    .child(
-                                        div()
-                                            .text_size(px(ty.xs))
-                                            .font_family(theme::FONT_DISPLAY)
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(c.primary)
-                                            .child(bucket.label.to_uppercase()),
-                                    )
-                                    .child(
-                                        div()
-                                            .px(px(8.0))
-                                            .py(px(1.5))
-                                            .rounded_full()
-                                            .bg(c.card_bg)
-                                            .border_1()
-                                            .border_color(c.line)
-                                            .text_size(px(ty.xs))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(c.primary)
-                                            .child(format!("{count}")),
-                                    ),
-                            );
+                        let mut group_el = div().flex().flex_col().gap(px(sp.s2)).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .mt(px(sp.s1))
+                                .child(
+                                    div()
+                                        .text_size(px(ty.xs))
+                                        .font_family(theme::FONT_DISPLAY)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.primary)
+                                        .child(bucket.label.to_uppercase()),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(8.0))
+                                        .py(px(1.5))
+                                        .rounded_full()
+                                        .bg(c.card_bg)
+                                        .border_1()
+                                        .border_color(c.line)
+                                        .text_size(px(ty.xs))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.primary)
+                                        .child(format!("{count}")),
+                                ),
+                        );
 
                         if bucket.skills.is_empty() {
                             group_el = group_el.child(
@@ -2114,12 +2130,11 @@ impl UsamiApp {
                                             ),
                                     );
 
-                                if let Some(desc) = skill.description.filter(|d| !d.trim().is_empty()) {
+                                if let Some(desc) =
+                                    skill.description.filter(|d| !d.trim().is_empty())
+                                {
                                     card = card.child(
-                                        div()
-                                            .text_size(px(ty.sm))
-                                            .text_color(c.pearl)
-                                            .child(desc),
+                                        div().text_size(px(ty.sm)).text_color(c.pearl).child(desc),
                                     );
                                 }
 
@@ -2162,11 +2177,7 @@ impl UsamiApp {
                                             .px(px(10.0))
                                             .py(px(4.5))
                                             .rounded(px(r.sm))
-                                            .bg(if can_enable {
-                                                c.accent_tint
-                                            } else {
-                                                c.deep
-                                            })
+                                            .bg(if can_enable { c.accent_tint } else { c.deep })
                                             .border_1()
                                             .border_color(if can_enable {
                                                 c.accent
@@ -2178,13 +2189,15 @@ impl UsamiApp {
                                             .text_color(c.pearl)
                                             .when(busy_id.is_some(), |el| el.opacity(0.55))
                                             .hover(|s| s.border_color(c.primary))
-                                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                this.toggle_agent_skill(
-                                                    skill_for_click.clone(),
-                                                    next_enable,
-                                                    cx,
-                                                );
-                                            }))
+                                            .on_click(cx.listener(
+                                                move |this, _: &ClickEvent, _, cx| {
+                                                    this.toggle_agent_skill(
+                                                        skill_for_click.clone(),
+                                                        next_enable,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
                                             .child(label),
                                     );
                                 }
@@ -2192,11 +2205,8 @@ impl UsamiApp {
                                 card = card.child(foot);
 
                                 if !reasons.is_empty() {
-                                    let mut reasons_el = div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .pt(px(2.0));
+                                    let mut reasons_el =
+                                        div().flex().flex_col().gap(px(2.0)).pt(px(2.0));
                                     for reason in reasons {
                                         reasons_el = reasons_el.child(
                                             div()
@@ -2216,18 +2226,14 @@ impl UsamiApp {
                     }
 
                     if !invalid_skills.is_empty() {
-                        let mut inv_el = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(sp.s2))
-                            .child(
-                                div()
-                                    .text_size(px(ty.xs))
-                                    .font_family(theme::FONT_DISPLAY)
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(c.err)
-                                    .child("MANIFESTOS INVÁLIDOS"),
-                            );
+                        let mut inv_el = div().flex().flex_col().gap(px(sp.s2)).child(
+                            div()
+                                .text_size(px(ty.xs))
+                                .font_family(theme::FONT_DISPLAY)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(c.err)
+                                .child("MANIFESTOS INVÁLIDOS"),
+                        );
                         for skill in invalid_skills {
                             let reasons = collect_skill_reasons(&skill);
                             let mut card = div()
@@ -2306,11 +2312,13 @@ impl UsamiApp {
                                     format!("Todas ({exec_total})"),
                                     exec_filter == ExecFilter::All,
                                 )
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.agent_exec_filter = ExecFilter::All;
-                                    this.poke(cx);
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.agent_exec_filter = ExecFilter::All;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 pill(
@@ -2318,11 +2326,13 @@ impl UsamiApp {
                                     format!("Verificadas ({exec_verified})"),
                                     exec_filter == ExecFilter::Verified,
                                 )
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.agent_exec_filter = ExecFilter::Verified;
-                                    this.poke(cx);
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.agent_exec_filter = ExecFilter::Verified;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 pill(
@@ -2330,11 +2340,13 @@ impl UsamiApp {
                                     format!("Falhas ({exec_failed})"),
                                     exec_filter == ExecFilter::Failed,
                                 )
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.agent_exec_filter = ExecFilter::Failed;
-                                    this.poke(cx);
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.agent_exec_filter = ExecFilter::Failed;
+                                        this.poke(cx);
+                                        cx.notify();
+                                    },
+                                )),
                             ),
                     );
 
@@ -2464,9 +2476,8 @@ impl UsamiApp {
                                         ),
                                 );
 
-                            if let Some(summary) = record
-                                .input_summary
-                                .filter(|s| !s.trim().is_empty())
+                            if let Some(summary) =
+                                record.input_summary.filter(|s| !s.trim().is_empty())
                             {
                                 card = card.child(
                                     div()
@@ -2601,7 +2612,11 @@ impl UsamiApp {
                                 this.fetch_agent_center(cx);
                                 this.poke(cx);
                             }))
-                            .child(if loading { "Atualizando…" } else { "Atualizar" }),
+                            .child(if loading {
+                                "Atualizando…"
+                            } else {
+                                "Atualizar"
+                            }),
                     ),
             )
             .child(

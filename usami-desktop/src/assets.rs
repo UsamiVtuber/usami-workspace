@@ -35,7 +35,9 @@ pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
-pub(crate) fn first_existing(candidates: impl IntoIterator<Item = Option<PathBuf>>) -> Option<PathBuf> {
+pub(crate) fn first_existing(
+    candidates: impl IntoIterator<Item = Option<PathBuf>>,
+) -> Option<PathBuf> {
     candidates.into_iter().flatten().find(|path| path.exists())
 }
 

@@ -1,7 +1,7 @@
 //! Camadas do palco 3D e cenário de fundo do desktop (Camadas 0, 1 e 2).
 
-use crate::theme;
 use crate::UsamiApp;
+use crate::theme;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -48,4 +48,3 @@ impl UsamiApp {
             )
     }
 }
-

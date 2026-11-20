@@ -1,8 +1,8 @@
 //! Gerenciamento assíncrono de Memória e Personalidade com o core Usami.
 
+use crate::UsamiApp;
 use crate::api;
 use crate::api::tokio_runtime;
-use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -51,7 +51,12 @@ impl UsamiApp {
         .detach();
     }
 
-    pub(crate) fn delete_memory_fact(&mut self, section: String, fact: String, cx: &mut Context<Self>) {
+    pub(crate) fn delete_memory_fact(
+        &mut self,
+        section: String,
+        fact: String,
+        cx: &mut Context<Self>,
+    ) {
         if !self.memory_confirm_active {
             return;
         }

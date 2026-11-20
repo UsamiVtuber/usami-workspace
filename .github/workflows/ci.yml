@@ -24,6 +24,8 @@ jobs:
 
       - name: Verify source files
         run: |
+          echo "=== Git commit ==="
+          git rev-parse HEAD
           echo "=== lol/mod.rs line count ==="
           wc -l usami-desktop/src/lol/mod.rs
           echo "=== eprintln in lol/mod.rs ==="

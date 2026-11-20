@@ -159,7 +159,9 @@ pub fn start(window: &Window) {
 /// evitar que a janela fique com um callback pendurado após crash.
 pub fn restore_wndproc_on_panic() {
     let app = app_window();
-    if !app.is_null() && let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
+    if !app.is_null()
+        && let Some(&orig_proc) = ORIGINAL_WNDPROC.get()
+    {
         unsafe {
             SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as usize as isize);
         }

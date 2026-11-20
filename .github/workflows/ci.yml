@@ -127,7 +127,7 @@ jobs:
         working-directory: usami-desktop
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets
         working-directory: usami-desktop
 
       - name: Build

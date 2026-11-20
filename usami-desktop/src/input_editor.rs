@@ -212,8 +212,7 @@ impl UsamiApp {
                         }
                     }
 
-                    if !attached_image {
-                        if let Some(text) = item.text() {
+                    if !attached_image && let Some(text) = item.text() {
                             let trimmed = text.trim().trim_matches('"');
                             let path = std::path::Path::new(trimmed);
                             let is_image_ext = path
@@ -227,10 +226,7 @@ impl UsamiApp {
                                 })
                                 .unwrap_or(false);
 
-                            if is_image_ext
-                                && path.is_file()
-                                && let Ok(bytes) = std::fs::read(path)
-                            {
+                            if is_image_ext && path.is_file() && let Ok(bytes) = std::fs::read(path) {
                                 let filename = path
                                     .file_name()
                                     .and_then(|n| n.to_str())
@@ -262,7 +258,6 @@ impl UsamiApp {
                             self.caret_on = true;
                             cx.notify();
                         }
-                    }
                 }
             } else if key.eq_ignore_ascii_case("a") {
                 self.input_active = true;

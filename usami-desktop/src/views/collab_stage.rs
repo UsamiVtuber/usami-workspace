@@ -59,10 +59,10 @@ impl CollabStageState {
 
     #[allow(dead_code)]
     pub fn mark_pre_yield(&mut self, did: &str) {
-        if let Some(peer) = self.peers.iter_mut().find(|p| p.did == did) {
-            if peer.role == FloorRole::Speaking {
-                peer.role = FloorRole::PreYielding;
-            }
+        if let Some(peer) = self.peers.iter_mut().find(|p| p.did == did)
+            && peer.role == FloorRole::Speaking
+        {
+            peer.role = FloorRole::PreYielding;
         }
     }
 }

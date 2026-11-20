@@ -251,19 +251,19 @@ impl UsamiApp {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(2))
                         .await;
-                    if let Ok(status) = api.get_spotify_status().await {
-                        if status.connected {
-                            let _ = cx.update(|cx: &mut App| {
-                                if let Some(this) = this.upgrade() {
-                                    this.update(cx, |app, cx| {
-                                        app.os_shell.set_connector_status("spotify", true, true);
-                                        app.os_shell.connector_status = None;
-                                        cx.notify();
-                                    });
-                                }
-                            });
-                            break;
-                        }
+                    if let Ok(status) = api.get_spotify_status().await
+                        && status.connected
+                    {
+                        let _ = cx.update(|cx: &mut App| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |app, cx| {
+                                    app.os_shell.set_connector_status("spotify", true, true);
+                                    app.os_shell.connector_status = None;
+                                    cx.notify();
+                                });
+                            }
+                        });
+                        break;
                     }
                 }
             }

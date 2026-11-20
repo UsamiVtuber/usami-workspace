@@ -386,28 +386,28 @@ async fn run_worker(
                 }
 
                 // Processa no máximo 1 evento por ciclo respeitando voz ativa, cooldown e geração
-                if !is_generating.load(Ordering::Relaxed) {
-                    if let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking()) {
-                        let tag = queued.event.cooldown_bucket().to_string();
-                        let fallback_expr = match &queued.event {
-                            LolEvent::UserVoiceQuery { .. } => LolExpression::Neutral,
-                            LolEvent::PlayerDied { .. } => LolExpression::Disappointed,
-                            LolEvent::ChampionKill { .. } | LolEvent::BaronKilled { .. } => LolExpression::Smug,
-                            LolEvent::FirstBlood { .. } => LolExpression::Surprised,
-                            _ => LolExpression::Neutral,
-                        };
-                        let recent_snapshot = recent_replies.lock().await.clone();
-                        let prompt = build_llm_prompt(&queued.event, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
-                        let client = Arc::clone(&api_client);
-                        let ui = bridge.ui_tx.clone();
-                        let replies = Arc::clone(&recent_replies);
-                        is_generating.store(true, Ordering::Relaxed);
-                        let guard = GeneratingGuard { flag: Arc::clone(&is_generating) };
-                        tokio::spawn(async move {
-                            let _guard = guard;
-                            dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
-                        });
-                    }
+                if !is_generating.load(Ordering::Relaxed)
+                    && let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking())
+                {
+                    let tag = queued.event.cooldown_bucket().to_string();
+                    let fallback_expr = match &queued.event {
+                        LolEvent::UserVoiceQuery { .. } => LolExpression::Neutral,
+                        LolEvent::PlayerDied { .. } => LolExpression::Disappointed,
+                        LolEvent::ChampionKill { .. } | LolEvent::BaronKilled { .. } => LolExpression::Smug,
+                        LolEvent::FirstBlood { .. } => LolExpression::Surprised,
+                        _ => LolExpression::Neutral,
+                    };
+                    let recent_snapshot = recent_replies.lock().await.clone();
+                    let prompt = build_llm_prompt(&queued.event, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
+                    let client = Arc::clone(&api_client);
+                    let ui = bridge.ui_tx.clone();
+                    let replies = Arc::clone(&recent_replies);
+                    is_generating.store(true, Ordering::Relaxed);
+                    let guard = GeneratingGuard { flag: Arc::clone(&is_generating) };
+                    tokio::spawn(async move {
+                        let _guard = guard;
+                        dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
+                    });
                 }
             }
         }

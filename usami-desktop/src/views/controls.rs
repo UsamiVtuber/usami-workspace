@@ -340,10 +340,8 @@ impl UsamiApp {
                                                                     );
                                                                 } else {
                                                                     let is_selected = sel_range
-                                                                        .map_or(false, |(s, e)| {
-                                                                            char_idx >= s
-                                                                                && char_idx < e
-                                                                        });
+                                                                        .map(|(s, e)| char_idx >= s && char_idx < e)
+                                                                        .unwrap_or(false);
                                                                     let mut ws_el = div()
                                                                         .id(("ws", char_idx))
                                                                         .flex_shrink_0()
@@ -469,10 +467,7 @@ impl UsamiApp {
                                                                 let char_idx =
                                                                     token.start_char_idx + offset;
                                                                 let is_selected = sel_range
-                                                                    .map_or(false, |(s, e)| {
-                                                                        char_idx >= s
-                                                                            && char_idx < e
-                                                                    });
+                                                                    .is_some_and(|(s, e)| char_idx >= s && char_idx < e);
                                                                 let mut char_el = div()
                                                                     .id(("char", char_idx))
                                                                     .flex_shrink_0()

@@ -1726,10 +1726,10 @@ impl UsamiApiClient {
             let res = req.send().await.map_err(map_request_error)?;
             let status = res.status();
             if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
+                if let Ok(err_json) = res.json::<serde_json::Value>().await
+                    && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+                {
+                    return Err(msg.to_string());
                 }
                 return Err(format!("Falha ao atualizar skill (HTTP {status})."));
             }

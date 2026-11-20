@@ -1,0 +1,54 @@
+# CODEOWNERS — donos de código para review automático
+# Sintaxe: padrão  @usuario-ou-time
+# Ordem importa: a última correspondência vence
+
+# ============================
+# Padrões globais (fallback)
+# ============================
+*                       @UsamiVtuber/usami-core
+
+# ============================
+# Documentação e configs de repo
+# ============================
+/README.md              @UsamiVtuber/usami-core
+/.github/               @UsamiVtuber/usami-core
+/AGENTS.md              @UsamiVtuber/usami-core
+
+# ============================
+# Runtime principal (usami/)
+# ============================
+/usami/                 @UsamiVtuber/usami-runtime
+/usami/src/             @UsamiVtuber/usami-runtime
+/usami/server.mjs       @UsamiVtuber/usami-runtime
+/usami/package.json     @UsamiVtuber/usami-runtime
+
+# ============================
+# Desktop (usami-desktop/)
+# ============================
+/usami-desktop/         @UsamiVtuber/usami-desktop
+/usami-desktop/src/     @UsamiVtuber/usami-desktop
+/usami-desktop/Cargo.toml @UsamiVtuber/usami-desktop
+
+# ============================
+# Infra n8n (infra/n8n-local/)
+# ============================
+/infra/n8n-local/       @UsamiVtuber/usami-infra
+
+# ============================
+# Monitor (usami-monitor/)
+# ============================
+/usami-monitor/         @UsamiVtuber/usami-monitor
+
+# ============================
+# Skills e automações
+# ============================
+/Agents/Skills/         @UsamiVtuber/usami-core
+
+# ============================
+# Secrets e configs sensíveis — NINGUÉM (bloqueia merge sem override)
+# ============================
+/.env*                  @UsamiVtuber/usami-secrets
+/*.env*                 @UsamiVtuber/usami-secrets
+/**/.env*               @UsamiVtuber/usami-secrets
+/*.pem                  @UsamiVtuber/usami-secrets
+/*.key                  @UsamiVtuber/usami-secrets

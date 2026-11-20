@@ -21,6 +21,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Debug checkout contents
+        run: ls -la && echo "---" && ls -la usami 2>&1 || echo "usami not found"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

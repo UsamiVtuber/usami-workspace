@@ -188,8 +188,35 @@ async fn run_worker(
                         riot_cloud.set_api_key(key);
                     }
                     LolControlMsg::RefreshDataDragon => {
-                        if let Ok(updated) = DataDragonStore::load_or_fetch().await {
-                            ddragon = updated;
+                        let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                            "Recarregando DataDragon...".into(),
+                        ));
+                        match DataDragonStore::load_or_fetch().await {
+                            Ok(updated) => {
+                                let patch = updated.patch.clone();
+                                ddragon = updated;
+                                let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                                    format!("DataDragon v{patch} recarregado"),
+                                ));
+                                // Atualiza o estado da UI com o novo patch se estiver em partida
+                                if let PollerState::InMatch { .. } = &state {
+                                    let _ = bridge.ui_tx.send(LolUiCommand::MatchStateChanged {
+                                        in_match: true,
+                                        loading: false,
+                                        champion: non_empty(&active_champion),
+                                        role: active_role,
+                                        patch: Some(patch),
+                                        game_time: last_game_time,
+                                        kda: last_kda,
+                                        cs: last_cs,
+                                    });
+                                }
+                            }
+                            Err(err) => {
+                                let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                                    format!("Falha ao recarregar DataDragon: {err}"),
+                                ));
+                            }
                         }
                     }
                     LolControlMsg::UserVoice(query) => {

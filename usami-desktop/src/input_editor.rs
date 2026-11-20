@@ -227,32 +227,33 @@ impl UsamiApp {
                                 })
                                 .unwrap_or(false);
 
-                            if is_image_ext && path.is_file() {
-                                if let Ok(bytes) = std::fs::read(path) {
-                                    let filename = path
-                                        .file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("imagem.png")
-                                        .to_string();
-                                    let mime = match path
-                                        .extension()
-                                        .and_then(|e| e.to_str())
-                                        .map(|s| s.to_ascii_lowercase())
-                                        .as_deref()
-                                    {
-                                        Some("jpg") | Some("jpeg") => "image/jpeg",
-                                        Some("png") => "image/png",
-                                        Some("webp") => "image/webp",
-                                        Some("gif") => "image/gif",
-                                        Some("bmp") => "image/bmp",
-                                        _ => "image/png",
-                                    };
-                                    self.attached_media =
-                                        Some(AttachedMedia::from_bytes(filename, mime, bytes));
-                                    self.input_active = true;
-                                    cx.notify();
-                                    return;
-                                }
+                            if is_image_ext
+                                && path.is_file()
+                                && let Ok(bytes) = std::fs::read(path)
+                            {
+                                let filename = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("imagem.png")
+                                    .to_string();
+                                let mime = match path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|s| s.to_ascii_lowercase())
+                                    .as_deref()
+                                {
+                                    Some("jpg") | Some("jpeg") => "image/jpeg",
+                                    Some("png") => "image/png",
+                                    Some("webp") => "image/webp",
+                                    Some("gif") => "image/gif",
+                                    Some("bmp") => "image/bmp",
+                                    _ => "image/png",
+                                };
+                                self.attached_media =
+                                    Some(AttachedMedia::from_bytes(filename, mime, bytes));
+                                self.input_active = true;
+                                cx.notify();
+                                return;
                             }
 
                             self.input_active = true;

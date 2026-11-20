@@ -107,12 +107,7 @@ pub fn start(window: &Window) {
     APP_WINDOW.store(app as isize, Ordering::SeqCst);
     // Subclasseia a janela para interceptar WM_SYSCOMMAND (minimizar -> mascote)
     unsafe {
-        let orig = SetWindowLongPtrW(
-            app,
-            GWLP_WNDPROC,
-            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT
-                as isize,
-        );
+        let orig = SetWindowLongPtrW(app, GWLP_WNDPROC, mascot_wndproc as usize as isize);
         if orig == 0 {
             let err = windows_sys::Win32::Foundation::GetLastError();
             eprintln!(
@@ -164,11 +159,9 @@ pub fn start(window: &Window) {
 /// evitar que a janela fique com um callback pendurado após crash.
 pub fn restore_wndproc_on_panic() {
     let app = app_window();
-    if !app.is_null() {
-        if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
-            unsafe {
-                SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as isize);
-            }
+    if !app.is_null() && let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
+        unsafe {
+            SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as usize as isize);
         }
     }
 }

@@ -64,10 +64,10 @@ impl LolCompanionHandle {
 /// Chamado pela thread Win32 de `presence.rs` quando o usuário pressiona `Ctrl+Alt+L`.
 pub fn notify_hotkey_toggle_click_through() {
     let slot = GLOBAL_UI_TX.get_or_init(|| Mutex::new(None));
-    if let Ok(guard) = slot.lock() {
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(LolUiCommand::ToggleClickThrough);
-        }
+    if let Ok(guard) = slot.lock()
+        && let Some(tx) = guard.as_ref()
+    {
+        let _ = tx.send(LolUiCommand::ToggleClickThrough);
     }
 }
 
@@ -116,9 +116,10 @@ async fn run_worker(
     shutdown: Arc<AtomicBool>,
     provider: Arc<dyn GameProvider>,
 ) {
-    let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
-        format!("Provedor {} carregando DataDragon...", provider.name()).into(),
-    ));
+    let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(format!(
+        "Provedor {} carregando DataDragon...",
+        provider.name()
+    )));
 
     let mut ddragon = match DataDragonStore::load_or_fetch().await {
         Ok(store) => {

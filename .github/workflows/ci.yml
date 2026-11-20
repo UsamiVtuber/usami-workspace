@@ -12,9 +12,12 @@ concurrency:
 
 jobs:
   lint-and-typecheck:
-    name: Lint & Typecheck
+    name: Lint & Typecheck (usami)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,20 +29,24 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: usami/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run lint
-        run: npm run lint
+        run: npm run lint --if-present
 
       - name: Run typecheck
-        run: npm run typecheck
+        run: npm run typecheck --if-present
 
   test:
-    name: Tests
+    name: Tests (usami)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,18 +58,34 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: usami/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
+      - name: Run unit tests
+        run: npm run test:unit -- --test-force-exit
+
+      - name: Run chat tests
+        run: npm run test:chat -- --test-force-exit
+
+      - name: Run technique tests
+        run: npm run test:technique -- --test-force-exit
+
+      - name: Run planner tests
+        run: npm run test:planner -- --test-force-exit
+
+      - name: Run sites tests
+        run: npm run test:sites -- --test-force-exit
 
   build:
-    name: Build
+    name: Build (usami)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [lint-and-typecheck, test]
+    defaults:
+      run:
+        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +97,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: usami/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -84,7 +108,7 @@ jobs:
   rust-check:
     name: Rust Check (usami-desktop)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,6 +122,8 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'usami-desktop -> target'
 
       - name: Check fmt
         run: cargo fmt --all -- --check

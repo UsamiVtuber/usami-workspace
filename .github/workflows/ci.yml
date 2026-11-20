@@ -21,6 +21,7 @@ jobs:
         with:
           fetch-depth: 0
           clean: true
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Verify source files
         run: |

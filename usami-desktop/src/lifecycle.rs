@@ -189,10 +189,8 @@ impl UsamiApp {
             // Mesmo motivo do enter: ressincroniza o viewport depois de
             // devolver estilo e geometria da janela. No caso maximizado o
             // maximize é assíncrono e emite o próprio WM_SIZE.
-            if !restored_maximized {
-                if let Some(saved) = self.prefs.window {
-                    window.resize(size(px(saved.width), px(saved.height)));
-                }
+            if !restored_maximized && let Some(saved) = self.prefs.window {
+                window.resize(size(px(saved.width), px(saved.height)));
             }
         }
         #[cfg(not(target_os = "windows"))]

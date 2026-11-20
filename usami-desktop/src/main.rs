@@ -53,6 +53,7 @@ struct UsamiApp {
     input_active: bool,
     caret_on: bool,
     status_text: SharedString,
+    #[allow(dead_code)]
     character_name: SharedString,
     character_credit: SharedString,
     last_reply: SharedString,
@@ -388,22 +389,22 @@ impl UsamiApp {
                         .timer(Duration::from_millis(500))
                         .await;
                     tick_counter = tick_counter.wrapping_add(1);
-                    let should_poll = tick_counter % 30 == 1; // a cada ~15s (e no primeiro tick)
-                    let should_present = tick_counter % 5 == 0; // a cada ~2.5s
+                    let should_poll = tick_counter.is_multiple_of(30); // a cada ~15s (e no primeiro tick)
+                    let should_present = tick_counter.is_multiple_of(5); // a cada ~2.5s
                     let _ = cx.update(|cx: &mut App| {
                         // Bandeja/atalho pedem o modo mascote pela thread de
                         // presença; aqui viram troca de janela na UI.
-                        if let Some(source) = crate::mascot::take_toggle_request() {
-                            if let Some(handle) = cx.windows().first().copied() {
-                                let this = this.clone();
-                                let _ = handle.update(cx, |_, window, cx| {
-                                    if let Some(view) = this.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.toggle_mascot(window, cx, source)
-                                        });
-                                    }
-                                });
-                            }
+                        if let Some(source) = crate::mascot::take_toggle_request()
+                            && let Some(handle) = cx.windows().first().copied()
+                        {
+                            let this = this.clone();
+                            let _ = handle.update(cx, |_, window, cx| {
+                                if let Some(view) = this.upgrade() {
+                                    view.update(cx, |view, cx| {
+                                        view.toggle_mascot(window, cx, source)
+                                    });
+                                }
+                            });
                         }
                         if let Some(this) = this.upgrade() {
                             this.update(cx, |view, cx| {
@@ -454,7 +455,7 @@ impl UsamiApp {
                                         let now = Instant::now();
                                         let min_interval = Duration::from_millis(250); // ~4 fps
                                         let notify =
-                                            view.last_overlay_notify.map_or(true, |last| {
+                                            view.last_overlay_notify.is_none_or(|last| {
                                                 now.duration_since(last) >= min_interval
                                             });
                                         if notify {
@@ -486,7 +487,7 @@ impl UsamiApp {
                                 // Atividade do turno: enquanto há resposta pendente,
                                 // a cada ~1 s lemos o que a Usami está fazendo
                                 // (pensando / executando qual ferramenta).
-                                if view.is_busy && tick_counter % 2 == 0 {
+                                if view.is_busy && tick_counter.is_multiple_of(2) {
                                     view.fetch_chat_activity(cx);
                                 }
                             });
@@ -528,16 +529,16 @@ impl UsamiApp {
                         );
                         let _ = cx.update(|cx: &mut App| {
                             if let Some(this) = this.upgrade() {
-                                if needs_overlay {
-                                    if let Some(handle) = cx.windows().first().copied() {
-                                        let _ = handle.update(cx, |_, window, cx| {
-                                            let _ = this.update(cx, |view, cx| {
-                                                if view.mascot_mode {
-                                                    view.exit_mascot(window, cx);
-                                                }
-                                            });
+                                if needs_overlay
+                                    && let Some(handle) = cx.windows().first().copied()
+                                {
+                                    let _ = handle.update(cx, |_, window, cx| {
+                                        this.update(cx, |view, cx| {
+                                            if view.mascot_mode {
+                                                view.exit_mascot(window, cx);
+                                            }
                                         });
-                                    }
+                                    });
                                 }
                                 this.update(cx, |view, cx| {
                                     view.apply_lol_command(cmd, cx);
@@ -821,48 +822,47 @@ impl UsamiApp {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                if let Ok(Ok(Some(paths))) = receiver.await {
-                    if let Some(path) = paths.into_iter().next() {
-                        if let Ok(bytes) = std::fs::read(&path) {
-                            let filename = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("imagem.png")
-                                .to_string();
-                            let mime = match path
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .map(|s| s.to_ascii_lowercase())
-                                .as_deref()
-                            {
-                                Some("jpg") | Some("jpeg") => "image/jpeg",
-                                Some("png") => "image/png",
-                                Some("webp") => "image/webp",
-                                Some("gif") => "image/gif",
-                                Some("bmp") => "image/bmp",
-                                Some("pdf") => "application/pdf",
-                                Some("txt") => "text/plain",
-                                Some("doc") => "application/msword",
-                                Some("docx") => {
-                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                }
-                                Some("mp4") => "video/mp4",
-                                Some("mp3") => "audio/mpeg",
-                                Some("zip") => "application/zip",
-                                _ => "application/octet-stream",
-                            };
-                            let media = AttachedMedia::from_bytes(filename, mime, bytes);
-                            let _ = cx.update(|cx: &mut App| {
-                                if let Some(this) = this.upgrade() {
-                                    this.update(cx, |view, cx| {
-                                        view.attached_media = Some(media);
-                                        view.input_active = true;
-                                        cx.notify();
-                                    });
-                                }
+                if let Ok(Ok(Some(paths))) = receiver.await
+                    && let Some(path) = paths.into_iter().next()
+                    && let Ok(bytes) = std::fs::read(&path)
+                {
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("imagem.png")
+                        .to_string();
+                    let mime = match path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase())
+                        .as_deref()
+                    {
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("png") => "image/png",
+                        Some("webp") => "image/webp",
+                        Some("gif") => "image/gif",
+                        Some("bmp") => "image/bmp",
+                        Some("pdf") => "application/pdf",
+                        Some("txt") => "text/plain",
+                        Some("doc") => "application/msword",
+                        Some("docx") => {
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        }
+                        Some("mp4") => "video/mp4",
+                        Some("mp3") => "audio/mpeg",
+                        Some("zip") => "application/zip",
+                        _ => "application/octet-stream",
+                    };
+                    let media = AttachedMedia::from_bytes(filename, mime, bytes);
+                    let _ = cx.update(|cx: &mut App| {
+                        if let Some(this) = this.upgrade() {
+                            this.update(cx, |view, cx| {
+                                view.attached_media = Some(media);
+                                view.input_active = true;
+                                cx.notify();
                             });
                         }
-                    }
+                    });
                 }
             }
         })
@@ -895,13 +895,12 @@ impl UsamiApp {
 
         // Persiste o anexo em disco (apenas na primeira gravação) para que
         // sobreviva a reinicializações do app.
-        if let Some(media) = attached.as_mut() {
-            if media.stored_path.is_none() {
-                if let Some(bytes) = api::base64_decode(&media.data_base64) {
-                    media.stored_path =
-                        storage::save_media_file(&media.filename, &media.mime_type, &bytes);
-                }
-            }
+        if let Some(media) = attached.as_mut()
+            && media.stored_path.is_none()
+            && let Some(bytes) = api::base64_decode(&media.data_base64)
+        {
+            media.stored_path =
+                storage::save_media_file(&media.filename, &media.mime_type, &bytes);
         }
 
         if let Some(media) = attached {
@@ -1563,7 +1562,7 @@ fn install_panic_hook() {
                 Ok(c) => c,
                 Err(_) => return,
             };
-            let _ = api::tokio_runtime().block_on(async move {
+            api::tokio_runtime().block_on(async move {
                 let mut req = client
                     .post(format!("{base_url}/api/observability/client-log"))
                     .header("x-usami-client", "usami-desktop")

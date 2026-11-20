@@ -258,10 +258,10 @@ async fn fetch_or_read_cached(
     url: &str,
     path: &PathBuf,
 ) -> Result<String, String> {
-    if let Ok(cached) = fs::read_to_string(path) {
-        if !cached.trim().is_empty() {
-            return Ok(cached);
-        }
+    if let Ok(cached) = fs::read_to_string(path)
+        && !cached.trim().is_empty()
+    {
+        return Ok(cached);
     }
     let res = client
         .get(url)

@@ -8,6 +8,7 @@ use crate::UsamiApp;
 use gpui::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum FloorRole {
     Speaking,
     PreYielding,
@@ -16,6 +17,7 @@ pub enum FloorRole {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CollabPeer {
     pub did: String,
     pub display_name: String,
@@ -44,6 +46,7 @@ impl Default for CollabStageState {
 }
 
 impl CollabStageState {
+    #[allow(dead_code)]
     pub fn grant_floor(&mut self, did: &str) {
         for peer in &mut self.peers {
             peer.role = if peer.did == did {
@@ -54,11 +57,12 @@ impl CollabStageState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn mark_pre_yield(&mut self, did: &str) {
-        if let Some(peer) = self.peers.iter_mut().find(|p| p.did == did) {
-            if peer.role == FloorRole::Speaking {
-                peer.role = FloorRole::PreYielding;
-            }
+        if let Some(peer) = self.peers.iter_mut().find(|p| p.did == did)
+            && peer.role == FloorRole::Speaking
+        {
+            peer.role = FloorRole::PreYielding;
         }
     }
 }

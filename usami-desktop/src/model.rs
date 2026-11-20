@@ -6,6 +6,7 @@ use crate::storage;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 pub(crate) enum ActiveDrawer {
     None,
     Chat,
@@ -28,6 +29,7 @@ pub(crate) enum SettingsTab {
 
 /// Capítulos do menu estilo Visual Novel ("Midnight Romance").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 pub(crate) enum BondTab {
     Home,
     Diary,

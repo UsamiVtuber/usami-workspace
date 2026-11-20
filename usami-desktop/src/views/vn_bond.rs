@@ -386,6 +386,7 @@ pub(crate) fn collect_diary_entries(
 
 /// Capítulo "Diário": páginas cronológicas com os momentos reais do vínculo,
 /// compostas como anotações íntimas (bilhetinho + registros datados).
+#[allow(dead_code)]
 pub(crate) fn render_vn_tab_diary(
     bond: Option<&api::BondData>,
     memory: Option<&api::MemoryData>,
@@ -660,6 +661,7 @@ pub(crate) fn render_vn_history_item(
 /// Capítulo "Álbum de Memórias": lembranças derivadas de marcos reais do
 /// vínculo (primeiro momento, risada, voz, chamada) + resumos diários já
 /// guardados no core. Nada de memória fictícia.
+#[allow(dead_code)]
 pub(crate) fn render_vn_tab_memories(
     bond: Option<&api::BondData>,
     memory: Option<&api::MemoryData>,
@@ -785,6 +787,7 @@ pub(crate) fn render_vn_tab_memories(
         )
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_vn_large_memory(
     tag: &'static str,
     title: String,

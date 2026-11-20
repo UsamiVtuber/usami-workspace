@@ -109,7 +109,7 @@ pub fn start(window: &Window) {
         let orig = SetWindowLongPtrW(
             app,
             GWLP_WNDPROC,
-            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as isize,
+            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as usize as isize,
         );
         if orig == 0 {
             let err = windows_sys::Win32::Foundation::GetLastError();
@@ -157,11 +157,11 @@ pub fn start(window: &Window) {
 /// evitar que a janela fique com um callback pendurado após crash.
 pub fn restore_wndproc_on_panic() {
     let app = app_window();
-    if !app.is_null() {
-        if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
-            unsafe {
-                SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as isize);
-            }
+    if !app.is_null()
+        && let Some(&orig_proc) = ORIGINAL_WNDPROC.get()
+    {
+        unsafe {
+            SetWindowLongPtrW(app, GWLP_WNDPROC, orig_proc as usize as isize);
         }
     }
 }
@@ -317,9 +317,9 @@ unsafe extern "system" fn mascot_wndproc(
         return 0;
     }
     if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
-        return orig_proc(hwnd, msg, wparam, lparam);
+        return unsafe { orig_proc(hwnd, msg, wparam, lparam) };
     }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 fn app_window() -> HWND {
@@ -411,21 +411,21 @@ fn load_emotion_icon(category: &str) -> *mut core::ffi::c_void {
 
     let path = crate::assets::asset_path(&format!("assets/icons/emotions/{category}.ico"));
     let mut hicon = std::ptr::null_mut();
-    if path.exists() {
-        if let Some(s) = path.to_str() {
-            let wide_path = wide(s);
-            unsafe {
-                let handle = LoadImageW(
-                    std::ptr::null_mut(),
-                    wide_path.as_ptr(),
-                    IMAGE_ICON,
-                    0,
-                    0,
-                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
-                );
-                if !handle.is_null() {
-                    hicon = handle as *mut core::ffi::c_void;
-                }
+    if path.exists()
+        && let Some(s) = path.to_str()
+    {
+        let wide_path = wide(s);
+        unsafe {
+            let handle = LoadImageW(
+                std::ptr::null_mut(),
+                wide_path.as_ptr(),
+                IMAGE_ICON,
+                0,
+                0,
+                LR_LOADFROMFILE | LR_DEFAULTSIZE,
+            );
+            if !handle.is_null() {
+                hicon = handle;
             }
         }
     }

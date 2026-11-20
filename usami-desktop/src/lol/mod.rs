@@ -62,10 +62,10 @@ impl LolCompanionHandle {
 /// Chamado pela thread Win32 de `presence.rs` quando o usuário pressiona `Ctrl+Alt+L`.
 pub fn notify_hotkey_toggle_click_through() {
     let slot = GLOBAL_UI_TX.get_or_init(|| Mutex::new(None));
-    if let Ok(guard) = slot.lock() {
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(LolUiCommand::ToggleClickThrough);
-        }
+    if let Ok(guard) = slot.lock()
+        && let Some(tx) = guard.as_ref()
+    {
+        let _ = tx.send(LolUiCommand::ToggleClickThrough);
     }
 }
 
@@ -108,7 +108,7 @@ async fn run_worker(
     provider: Arc<dyn GameProvider>,
 ) {
     let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
-        format!("Provedor {} carregando DataDragon...", provider.name()).into(),
+        format!("Provedor {} carregando DataDragon...", provider.name()),
     ));
 
     let mut ddragon = match DataDragonStore::load_or_fetch().await {
@@ -152,7 +152,7 @@ async fn run_worker(
     let mut circuit_was_open = false;
 
     while !shutdown.load(Ordering::SeqCst) {
-        let now = Instant::now();
+        let _now = Instant::now();
         let delay = if enabled {
             state.next_poll_delay()
         } else {
@@ -376,8 +376,9 @@ async fn run_worker(
                 }
 
                 // Processa no máximo 1 evento por ciclo respeitando voz ativa, cooldown e geração
-                if !is_generating.load(Ordering::Relaxed) {
-                    if let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking()) {
+                if !is_generating.load(Ordering::Relaxed)
+                    && let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking())
+                {
                         let tag = queued.event.cooldown_bucket().to_string();
                         let fallback_expr = match &queued.event {
                             LolEvent::UserVoiceQuery { .. } => LolExpression::Neutral,
@@ -397,7 +398,6 @@ async fn run_worker(
                             let _guard = guard;
                             dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
                         });
-                    }
                 }
             }
         }

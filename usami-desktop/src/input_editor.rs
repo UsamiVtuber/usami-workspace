@@ -85,10 +85,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace()) {
                 target -= 1;
             }
-            while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).is_some_and(|c| !c.is_whitespace()) {
                 target -= 1;
             }
             self.cursor_char_idx = target;
@@ -114,10 +114,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target < chars.len() && chars.get(target).map_or(false, |c| !c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).is_some_and(|c| !c.is_whitespace()) {
                 target += 1;
             }
-            while target < chars.len() && chars.get(target).map_or(false, |c| c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).is_some_and(|c| c.is_whitespace()) {
                 target += 1;
             }
             self.cursor_char_idx = target;
@@ -213,6 +213,7 @@ impl UsamiApp {
                                 }
                             }
 
+                            #[allow(clippy::collapsible_if)]
                             if !attached_image {
                                 if let Some(text) = item.text() {
                                     let trimmed = text.trim().trim_matches('"');
@@ -228,6 +229,7 @@ impl UsamiApp {
                                         })
                                         .unwrap_or(false);
 
+                                    #[allow(clippy::collapsible_if)]
                                     if is_image_ext && path.is_file() {
                                         if let Ok(bytes) = std::fs::read(path) {
                                             let filename = path
@@ -299,10 +301,10 @@ impl UsamiApp {
                             let current = self.cursor_idx();
                             if current > 0 {
                                 let mut target = current;
-                                while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
+                                while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace()) {
                                     target -= 1;
                                 }
-                                while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
+                                while target > 0 && chars.get(target - 1).is_some_and(|c| !c.is_whitespace()) {
                                     target -= 1;
                                 }
                                 let mut new_chars = Vec::with_capacity(chars.len());

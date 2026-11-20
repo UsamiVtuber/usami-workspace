@@ -15,9 +15,6 @@ jobs:
     name: Lint & Typecheck (usami)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,20 +29,20 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: usami
 
       - name: Run lint
         run: npm run lint --if-present
+        working-directory: usami
 
       - name: Run typecheck
         run: npm run typecheck --if-present
+        working-directory: usami
 
   test:
     name: Tests (usami)
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,30 +57,33 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: usami
 
       - name: Run unit tests
         run: npm run test:unit -- --test-force-exit
+        working-directory: usami
 
       - name: Run chat tests
         run: npm run test:chat -- --test-force-exit
+        working-directory: usami
 
       - name: Run technique tests
         run: npm run test:technique -- --test-force-exit
+        working-directory: usami
 
       - name: Run planner tests
         run: npm run test:planner -- --test-force-exit
+        working-directory: usami
 
       - name: Run sites tests
         run: npm run test:sites -- --test-force-exit
+        working-directory: usami
 
   build:
     name: Build (usami)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [lint-and-typecheck, test]
-    defaults:
-      run:
-        working-directory: usami
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,9 +98,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: usami
 
       - name: Build
         run: npm run build
+        working-directory: usami
 
   rust-check:
     name: Rust Check (usami-desktop)

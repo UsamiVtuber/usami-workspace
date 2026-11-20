@@ -6,6 +6,8 @@
 //! é Win32 porque o GPUI 0.2.2 não troca decoração em runtime no Windows.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Mutex;
+use std::thread::JoinHandle;
 
 /// Retângulo físico de janela: (x, y, largura, altura), em pixels de tela.
 pub(crate) type WinRect = (i32, i32, i32, i32);
@@ -35,6 +37,10 @@ static FOLLOW: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
 static GAZE_STARTED: AtomicBool = AtomicBool::new(false);
 static GAZE_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Handle da thread do gaze loop para join limpo no shutdown.
+#[cfg(target_os = "windows")]
+static GAZE_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 pub(crate) fn request_toggle(source: ToggleRequest) {
     let value = match source {
@@ -70,8 +76,17 @@ fn claim_gaze_slot() -> bool {
 }
 
 /// Encerra o laço de olhar no fechamento do app (idempotente).
+/// Faz join na thread para não travar o shutdown.
 pub(crate) fn stop_gaze_loop() {
     GAZE_STOP.store(true, Ordering::SeqCst);
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(mut guard) = GAZE_HANDLE.lock() {
+            if let Some(handle) = guard.take() {
+                let _ = handle.join();
+            }
+        }
+    }
 }
 
 /// Converte o cursor da tela para a coordenada normalizada do conteúdo da
@@ -421,7 +436,7 @@ pub(crate) fn start_gaze_loop(controller: gpui_vrm::VrmController) {
     if !claim_gaze_slot() {
         return;
     }
-    std::thread::Builder::new()
+    let handle = std::thread::Builder::new()
         .name("usami-mascot-gaze".into())
         .spawn(move || {
             let mut following = false;
@@ -449,7 +464,10 @@ pub(crate) fn start_gaze_loop(controller: gpui_vrm::VrmController) {
                 }
             }
         })
-        .ok();
+        .expect("falha ao criar thread do gaze loop");
+    if let Ok(mut guard) = GAZE_HANDLE.lock() {
+        *guard = Some(handle);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]

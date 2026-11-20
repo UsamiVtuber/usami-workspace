@@ -44,6 +44,16 @@ impl Drop for GeneratingGuard {
     }
 }
 
+/// Canal global para comandos da UI vindos da thread Win32 (hotkey `Ctrl+Alt+L`).
+///
+/// Usa `std::sync::Mutex` (não `TokioMutex`) porque é acessado a partir de
+/// `presence.rs::notify_hotkey_toggle_click_through()`, que roda na thread
+/// Win32 síncrona (message loop da janela oculta). Essa thread **não** tem
+/// runtime Tokio e não pode fazer `.await`.
+///
+/// O lock é mantido por tempo mínimo (só o `send` no canal unbounded) e não
+/// há contenção real: a thread Win32 só envia esse comando esporadicamente,
+/// enquanto o worker assíncrono só lê o canal na inicialização (`start()`).
 static GLOBAL_UI_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<LolUiCommand>>>> = OnceLock::new();
 
 pub struct LolCompanionHandle {
@@ -153,6 +163,13 @@ async fn run_worker(
     let mut active_champion = String::new();
     let mut active_role = PlayerRole::Unknown;
     let mut active_enemies: Vec<String> = Vec::new();
+
+    /// Histórico de falas recentes para evitar repetição (máx. 5).
+    ///
+    /// Usa `TokioMutex` porque é acessado **apenas** do worker assíncrono
+    /// (`run_worker` e tasks `tokio::spawn` filhas). Nunca é acessado de
+    /// contexto síncrono. O lock é sempre liberado antes de qualquer `.await`
+    /// (clone ou push/pop rápido), evitando lock convoy.
     let recent_replies = Arc::new(TokioMutex::new(Vec::<String>::new()));
     let is_generating = Arc::new(AtomicBool::new(false));
     let mut last_kda = (0, 0, 0);
@@ -160,6 +177,9 @@ async fn run_worker(
     let mut last_game_time = 0.0;
     let mut circuit_breaker = CircuitBreaker::new();
     let mut circuit_was_open = false;
+    // Circuit breaker dedicado para o backend 8787 (LLM core).
+    let core_circuit = Arc::new(Mutex::new(CircuitBreaker::new()));
+    let mut core_circuit_was_open = false;
 
     while !shutdown.load(Ordering::SeqCst) {
         let _now = Instant::now();
@@ -218,8 +238,9 @@ async fn run_worker(
                         let client = Arc::clone(&api_client);
                         let ui = bridge.ui_tx.clone();
                         let replies = Arc::clone(&recent_replies);
+                        let core_cb = Arc::clone(&core_circuit);
                         tokio::spawn(async move {
-                            dispatch_to_llm(&client, &ui, &prompt, 3, LolExpression::Smug, "manual", &replies).await;
+                            dispatch_to_llm(&client, &ui, &prompt, 3, LolExpression::Smug, "manual", &replies, core_cb).await;
                         });
                     }
                 }
@@ -258,6 +279,27 @@ async fn run_worker(
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
+
+                // Verifica circuit breaker do backend 8787 (LLM core).
+                let core_circuit_open = {
+                    let cb = core_circuit.lock().unwrap_or_else(|e| e.into_inner());
+                    !cb.should_poll(now)
+                };
+                if core_circuit_open && !core_circuit_was_open {
+                    let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
+                        "LLM core indisponivel (circuit breaker)".into(),
+                    ));
+                    let _ = bridge.ui_tx.send(LolUiCommand::CompanionSpeak {
+                        fala: "O servico de fala nao esta respondendo. Vou continuar monitorando o jogo, mas sem comentar por enquanto.".into(),
+                        expressao: LolExpression::Disappointed,
+                        prioridade: 4,
+                        event_tag: "core_offline".into(),
+                    });
+                    core_circuit_was_open = true;
+                } else if !core_circuit_open {
+                    core_circuit_was_open = false;
+                }
+
                 let probe = provider.poll().await;
                 match &probe {
                     ProbeResult::Closed => circuit_breaker.record_failure(now),
@@ -342,8 +384,9 @@ async fn run_worker(
                             let client = Arc::clone(&api_client);
                             let ui = bridge.ui_tx.clone();
                             let replies = Arc::clone(&recent_replies);
+                            let core_cb = Arc::clone(&core_circuit);
                             tokio::spawn(async move {
-                                dispatch_to_llm(&client, &ui, &prompt, 4, LolExpression::Smug, "match_ended", &replies).await;
+                                dispatch_to_llm(&client, &ui, &prompt, 4, LolExpression::Smug, "match_ended", &replies, core_cb).await;
                             });
                         }
                         was_in_match = false;
@@ -408,13 +451,34 @@ async fn run_worker(
                         let _guard = guard;
                         dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies).await;
                     });
+                if !is_generating.load(Ordering::Relaxed) {
+                    if let Some(queued) = queue.pop_ready(now, vrm_controller.is_speaking()) {
+                        let tag = queued.event.cooldown_bucket().to_string();
+                        let fallback_expr = match &queued.event {
+                            LolEvent::UserVoiceQuery { .. } => LolExpression::Neutral,
+                            LolEvent::PlayerDied { .. } => LolExpression::Disappointed,
+                            LolEvent::ChampionKill { .. } | LolEvent::BaronKilled { .. } => LolExpression::Smug,
+                            LolEvent::FirstBlood { .. } => LolExpression::Surprised,
+                            _ => LolExpression::Neutral,
+                        };
+                        let recent_snapshot = recent_replies.lock().await.clone();
+                        let prompt = build_llm_prompt(&queued.event, &ddragon, &active_champion, active_role, &active_enemies, &recent_snapshot);
+                        let client = Arc::clone(&api_client);
+                        let ui = bridge.ui_tx.clone();
+                        let replies = Arc::clone(&recent_replies);
+                        let core_cb = Arc::clone(&core_circuit);
+                        is_generating.store(true, Ordering::Relaxed);
+                        let guard = GeneratingGuard { flag: Arc::clone(&is_generating) };
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            dispatch_to_llm(&client, &ui, &prompt, queued.priority, fallback_expr, &tag, &replies, core_cb).await;
+                        });
+                    }
                 }
             }
         }
     }
 }
-
-static LAST_CORE_ERROR_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 async fn dispatch_to_llm(
     api_client: &UsamiApiClient,
@@ -424,6 +488,7 @@ async fn dispatch_to_llm(
     fallback_expr: LolExpression,
     event_tag: &str,
     recent_replies: &Arc<TokioMutex<Vec<String>>>,
+    core_circuit: Arc<Mutex<CircuitBreaker>>,
 ) {
     // Tenta o Ollama local primeiro quando USAMI_LLM_SOURCE=ollama, para
     // poupar as APIs pagas (OpenRouter/NVIDIA) do backend 8787.
@@ -466,10 +531,26 @@ async fn dispatch_to_llm(
         return;
     }
 
+    // Verifica o circuit breaker do backend 8787 antes de chamar.
+    let now = Instant::now();
+    let should_call = {
+        let cb = core_circuit.lock().unwrap_or_else(|e| e.into_inner());
+        cb.should_poll(now)
+    };
+    if !should_call {
+        eprintln!("[Usami.GG] Circuit breaker 8787 aberto; pulando chamada LLM para {}", event_tag);
+        return;
+    }
+
     // Fallback para o backend 8787 (OpenRouter/NVIDIA).
     let call_fut = api_client.send_chat_with_options(prompt, false, true);
     match tokio::time::timeout(Duration::from_secs(8), call_fut).await {
         Ok(Ok(res)) => {
+            // Sucesso: fecha o circuito.
+            {
+                let mut cb = core_circuit.lock().unwrap_or_else(|e| e.into_inner());
+                cb.record_success();
+            }
             let reply = parse_companion_reply(&res.reply, fallback_priority, fallback_expr);
             if reply.fala.trim().is_empty() {
                 // Silenciado (erro operacional ou resposta vazia filtrada para economizar TTS)
@@ -490,18 +571,20 @@ async fn dispatch_to_llm(
             });
         }
         Ok(Err(err)) => {
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let last = LAST_CORE_ERROR_SECS.load(Ordering::Relaxed);
-            if now_secs.saturating_sub(last) >= 300 {
-                LAST_CORE_ERROR_SECS.store(now_secs, Ordering::Relaxed);
-                eprintln!("[Usami.GG] Falha ao consultar core 8787 ({err})");
+            // Erro da API: registra falha no circuit breaker.
+            {
+                let mut cb = core_circuit.lock().unwrap_or_else(|e| e.into_inner());
+                cb.record_failure(now);
             }
+            eprintln!("[Usami.GG] Falha ao consultar core 8787 para {}: {}", event_tag, err);
         }
         Err(_) => {
-            eprintln!("[Usami.GG] Timeout (8s) aguardando resposta da LLM");
+            // Timeout: registra falha no circuit breaker.
+            {
+                let mut cb = core_circuit.lock().unwrap_or_else(|e| e.into_inner());
+                cb.record_failure(now);
+            }
+            eprintln!("[Usami.GG] Timeout (8s) aguardando resposta da LLM para {}", event_tag);
         }
     }
 }

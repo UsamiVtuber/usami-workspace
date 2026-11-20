@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 
 const PR_NUMBER = process.argv[2];
 const REPO = 'UsamiVtuber/usami-workspace';
-const MAX_DIFF_CHARS = 120000;
+const MAX_DIFF_CHARS = 300000;
 // O fetch do Node (undici) desiste em 300 s sem o primeiro byte; o Nemotron
 // Ultra demora mais que isso para começar a responder sem streaming.
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;

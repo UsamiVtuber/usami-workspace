@@ -75,6 +75,7 @@ pub fn load_fonts(cx: &App, base_dir: &Path) {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct Palette {
     /// Fundo principal Midnight Romance (`#100819`).
     pub deep: Rgba,
@@ -189,6 +190,7 @@ impl Palette {
     }
 
     /// Bordô profundo para gradientes
+    #[allow(dead_code)]
     pub fn vn_lavender_bright() -> Rgba {
         rgb(0x8e1b33)
     }
@@ -301,6 +303,7 @@ impl Radii {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Shadows {
     pub composer: Vec<BoxShadow>,
     pub composer_focus: Vec<BoxShadow>,
@@ -374,10 +377,12 @@ impl Theme {
     }
 
     /// `linear-gradient(135deg, rgba(168,36,64,.55), rgba(245,208,216,.3))`
+    #[allow(dead_code)]
     pub fn bond_pill_bg(&self) -> Background {
         Self::gradient(135.0, rgba(0xa824408c), rgba(0xf5d0d84d))
     }
 
+    #[allow(dead_code)]
     pub fn bond_pill_hover(&self) -> Background {
         Self::gradient(135.0, rgba(0xa82440bf), rgba(0xf5d0d873))
     }

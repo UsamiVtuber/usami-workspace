@@ -218,15 +218,15 @@ pub fn format_execution_time(iso: &str) -> String {
         let month = date_segs.next();
         let day = date_segs.next();
         let time_core = rest.split(['.', 'Z', '+', '-']).next().unwrap_or(rest);
-        if let (Some(m), Some(d)) = (month, day) {
-            if time_core.len() >= 5 {
-                let hhmmss = if time_core.len() >= 8 {
-                    &time_core[..8]
-                } else {
-                    time_core
-                };
-                return format!("{d}/{m} {hhmmss}");
-            }
+        if let (Some(m), Some(d)) = (month, day)
+            && time_core.len() >= 5
+        {
+            let hhmmss = if time_core.len() >= 8 {
+                &time_core[..8]
+            } else {
+                time_core
+            };
+            return format!("{d}/{m} {hhmmss}");
         }
     }
     trimmed.to_string()
@@ -295,10 +295,7 @@ pub fn pending_confirmations_count(
         }
     }
     for proposal in proposals {
-        if proposal.status == "pending"
-            && !pending_skill_ids
-                .iter()
-                .any(|id| *id == proposal.skill_id.as_str())
+        if proposal.status == "pending" && !pending_skill_ids.contains(&proposal.skill_id.as_str())
         {
             pending_skill_ids.push(proposal.skill_id.as_str());
         }

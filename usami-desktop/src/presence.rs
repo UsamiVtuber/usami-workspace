@@ -324,9 +324,11 @@ unsafe extern "system" fn mascot_wndproc(
         return 0;
     }
     if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
-        return orig_proc(hwnd, msg, wparam, lparam);
+        // SAFETY: orig_proc is a valid WNDPROC function pointer
+        return unsafe { orig_proc(hwnd, msg, wparam, lparam) };
     }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    // SAFETY: DefWindowProcW is a valid Win32 API function
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 fn app_window() -> HWND {

@@ -85,10 +85,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target > 0 && chars.get(target - 1).map_or(false, |c| c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace()) {
                 target -= 1;
             }
-            while target > 0 && chars.get(target - 1).map_or(false, |c| !c.is_whitespace()) {
+            while target > 0 && chars.get(target - 1).is_some_and(|c| !c.is_whitespace()) {
                 target -= 1;
             }
             self.cursor_char_idx = target;
@@ -114,10 +114,10 @@ impl UsamiApp {
         let current = self.cursor_idx();
         if ctrl {
             let mut target = current;
-            while target < chars.len() && chars.get(target).map_or(false, |c| !c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).is_some_and(|c| !c.is_whitespace()) {
                 target += 1;
             }
-            while target < chars.len() && chars.get(target).map_or(false, |c| c.is_whitespace()) {
+            while target < chars.len() && chars.get(target).is_some_and(|c| c.is_whitespace()) {
                 target += 1;
             }
             self.cursor_char_idx = target;
@@ -295,8 +295,7 @@ impl UsamiApp {
                     let current = self.cursor_idx();
                     if current > 0 {
                         let mut target = current;
-                        while target > 0
-                            && chars.get(target - 1).is_some_and(|c| c.is_whitespace())
+                        while target > 0 && chars.get(target - 1).is_some_and(|c| c.is_whitespace())
                         {
                             target -= 1;
                         }

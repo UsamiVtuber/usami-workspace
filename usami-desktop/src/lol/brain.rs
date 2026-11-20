@@ -17,20 +17,11 @@ pub struct QueuedLolEvent {
     pub enqueued_at: Instant,
 }
 
+#[derive(Default)]
 pub struct EventPriorityQueue {
     items: Vec<QueuedLolEvent>,
     last_global_emit: Option<Instant>,
     bucket_cooldowns: HashMap<&'static str, Instant>,
-}
-
-impl Default for EventPriorityQueue {
-    fn default() -> Self {
-        Self {
-            items: Vec::new(),
-            last_global_emit: None,
-            bucket_cooldowns: HashMap::new(),
-        }
-    }
 }
 
 impl EventPriorityQueue {
@@ -40,12 +31,11 @@ impl EventPriorityQueue {
 
         // Verifica cooldown específico por categoria de evento (voz do usuário tem cooldown zero)
         let min_bucket_cd = bucket_cooldown_duration(bucket);
-        if min_bucket_cd > Duration::ZERO {
-            if let Some(last) = self.bucket_cooldowns.get(bucket) {
-                if now.duration_since(*last) < min_bucket_cd {
-                    return;
-                }
-            }
+        if min_bucket_cd > Duration::ZERO
+            && let Some(last) = self.bucket_cooldowns.get(bucket)
+            && now.duration_since(*last) < min_bucket_cd
+        {
+            return;
         }
 
         // Se chegou evento crítico (>=4), descarta eventos antigos de prioridade baixa (<=2)
@@ -94,12 +84,11 @@ impl EventPriorityQueue {
         // Se o próximo item for pergunta direta do usuário (priority >= 5), ele
         // não deve ser bloqueado pelo cooldown global de comentários passivos do jogo!
         let is_user_voice = self.items.first().map(|i| i.priority >= 5).unwrap_or(false);
-        if !is_user_voice {
-            if let Some(last) = self.last_global_emit {
-                if now.duration_since(last) < GLOBAL_SPEECH_COOLDOWN {
-                    return None;
-                }
-            }
+        if !is_user_voice
+            && let Some(last) = self.last_global_emit
+            && now.duration_since(last) < GLOBAL_SPEECH_COOLDOWN
+        {
+            return None;
         }
 
         // Limpa itens de baixa prioridade que ficaram velhos durante uma teamfight

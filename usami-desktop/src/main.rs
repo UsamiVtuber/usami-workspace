@@ -53,6 +53,7 @@ struct UsamiApp {
     input_active: bool,
     caret_on: bool,
     status_text: SharedString,
+    #[allow(dead_code)]
     character_name: SharedString,
     character_credit: SharedString,
     last_reply: SharedString,

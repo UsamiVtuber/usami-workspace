@@ -67,7 +67,7 @@ pub enum ProbeResult {
     /// Porta 2999 respondeu 404 ou payload ainda sem partida iniciada (`gameTime <= 0`).
     Loading,
     /// Partida ativa com payload completo.
-    Active(AllGameData),
+    Active(Box<AllGameData>),
 }
 
 pub struct LiveClientPoller {
@@ -105,7 +105,7 @@ impl LiveClientPoller {
 
         match response.json::<AllGameData>().await {
             Ok(data) if data.game_data.game_time > 0.0 && !data.all_players.is_empty() => {
-                ProbeResult::Active(data)
+                ProbeResult::Active(Box::new(data))
             }
             Ok(_) => ProbeResult::Loading,
             Err(_) => ProbeResult::Loading,
@@ -152,7 +152,7 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
                     last_game_time,
                     snapshot: GameSnapshot::default(),
                 },
-                Some(data),
+                Some(*data),
             )
         }
         (PollerState::LoadingScreen { .. }, ProbeResult::Closed) => (
@@ -175,7 +175,7 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
                     last_game_time,
                     snapshot: GameSnapshot::default(),
                 },
-                Some(data),
+                Some(*data),
             )
         }
         (PollerState::InMatch { .. }, ProbeResult::Closed) => (PollerState::MatchEnded, None),
@@ -201,12 +201,12 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
         ) => {
             let game_ended_event = data.events.events.iter().any(|e| e.event_name == "GameEnd");
             if game_ended_event {
-                return (PollerState::MatchEnded, Some(data));
+                return (PollerState::MatchEnded, Some(*data));
             }
-            if champion_name.is_empty() {
-                if let Some(p) = crate::lol::state_diff::resolve_active_player(&data) {
-                    champion_name = p.champion_name.clone();
-                }
+            if champion_name.is_empty()
+                && let Some(p) = crate::lol::state_diff::resolve_active_player(&data)
+            {
+                champion_name = p.champion_name.clone();
             }
             let last_game_time = data.game_data.game_time;
             (
@@ -215,7 +215,7 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
                     last_game_time,
                     snapshot,
                 },
-                Some(data),
+                Some(*data),
             )
         }
         (PollerState::MatchEnded, _) => (
@@ -252,10 +252,7 @@ impl CircuitBreaker {
     /// Retorna falso se o circuito estiver aberto e o tempo de retry nao
     /// expirou. Em caso afirmativo, o caller deve pular o poll deste ciclo.
     pub fn should_poll(&self, now: Instant) -> bool {
-        match self.retry_after {
-            Some(deadline) if now < deadline => false,
-            _ => true,
-        }
+        !matches!(self.retry_after, Some(deadline) if now < deadline)
     }
 
     /// Registra uma falha na sonda. Abre o circuito quando o limite e
@@ -318,7 +315,7 @@ mod tests {
         let (s2, _) = advance_state(s1, ProbeResult::Loading);
         assert!(s2.is_loading());
 
-        let (s3, data) = advance_state(s2, ProbeResult::Active(active_payload()));
+        let (s3, data) = advance_state(s2, ProbeResult::Active(Box::new(active_payload())));
         assert!(s3.is_in_match());
         assert!(data.is_some());
 

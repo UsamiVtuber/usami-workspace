@@ -205,7 +205,10 @@ impl DataDragonStore {
         if !self.patch.is_empty() {
             ctx.push_str(&format!("Patch atual: {} (pt-BR).\n", self.patch));
         }
-        ctx.push_str(&format!("Posição/Role atual na partida: {}.\n", role.label_pt()));
+        ctx.push_str(&format!(
+            "Posição/Role atual na partida: {}.\n",
+            role.label_pt()
+        ));
 
         let lower = champion.trim().to_ascii_lowercase();
         if lower == "sett" {
@@ -310,29 +313,51 @@ fn matchup_tip(my_champ: &str, role: PlayerRole, enemy: &str) -> Option<&'static
     if role == PlayerRole::Support && my_champ == "malzahar" {
         match enemy {
             "nautilus" | "blitzcrank" | "pyke" | "thresh" => {
-                return Some("Sua passiva bloqueia o grab principal deles; fique na frente do seu ADC para absorver o puxão e pokeie com Q para silenciá-los quando tentarem avançar.");
+                return Some(
+                    "Sua passiva bloqueia o grab principal deles; fique na frente do seu ADC para absorver o puxão e pokeie com Q para silenciá-los quando tentarem avançar.",
+                );
             }
             "leona" | "rell" => {
-                return Some("Guarde o Q para silenciar o follow-up do all-in e no nível 6 trave o ADC deles com R assim que o suporte entrar.");
+                return Some(
+                    "Guarde o Q para silenciar o follow-up do all-in e no nível 6 trave o ADC deles com R assim que o suporte entrar.",
+                );
             }
             "caitlyn" | "lux" | "senna" => {
-                return Some("Cuidado com o range longo de poke que quebra sua passiva de longe; use Q nas esquinas e espere gank do seu jungler com seu R.");
+                return Some(
+                    "Cuidado com o range longo de poke que quebra sua passiva de longe; use Q nas esquinas e espere gank do seu jungler com seu R.",
+                );
             }
             "samira" | "kaisa" | "lucian" => {
-                return Some("Eles precisam pular em cima para dar dano; o seu R cancela imediatamente a ult da Samira e o dash deles!");
+                return Some(
+                    "Eles precisam pular em cima para dar dano; o seu R cancela imediatamente a ult da Samira e o dash deles!",
+                );
             }
             _ => {}
         }
     }
 
     match (my_champ, enemy) {
-        ("sett", "darius") => Some("Trocas curtas no lvl 1–2 com E+Q; nunca deixe ele estacar 5 hemorragias antes do seu W estar pronto."),
-        ("sett", "mordekaiser") => Some("Guarde o R para cancelar o E dele ou ganhar tempo dentro do Reino da Morte; evite Q isolado dele."),
-        ("sett", "aatrox") => Some("Entre dentro do Q1/Q2 dele com Q/Stridebreaker para negar o sweetspot e corte cura cedo."),
-        ("sett", "vayne") | ("sett", "teemo") | ("sett", "quinn") => Some("Respeite lvl 1–3, use Ventos Revigorantes + Escudo de Doran e busque Quebrapassos / Flash+E."),
-        ("malzahar", "syndra") | ("malzahar", "orianna") => Some("Farme seguro com E até Capítulo Perdido; sua passiva segura poke/stun, mas não desperdice W na frente de Q/W delas."),
-        ("malzahar", "zed") | ("malzahar", "yasuo") | ("malzahar", "yone") => Some("Controle a wave perto da sua torre pré-6, guarde R para quando eles entrarem debaixo da torre ou no gank do jungler."),
-        ("malzahar", "sylas") => Some("Cuidado ao deixar ele roubar seu R; compre Orbe do Oblívio cedo se ele estiver crescendo."),
+        ("sett", "darius") => Some(
+            "Trocas curtas no lvl 1–2 com E+Q; nunca deixe ele estacar 5 hemorragias antes do seu W estar pronto.",
+        ),
+        ("sett", "mordekaiser") => Some(
+            "Guarde o R para cancelar o E dele ou ganhar tempo dentro do Reino da Morte; evite Q isolado dele.",
+        ),
+        ("sett", "aatrox") => Some(
+            "Entre dentro do Q1/Q2 dele com Q/Stridebreaker para negar o sweetspot e corte cura cedo.",
+        ),
+        ("sett", "vayne") | ("sett", "teemo") | ("sett", "quinn") => Some(
+            "Respeite lvl 1–3, use Ventos Revigorantes + Escudo de Doran e busque Quebrapassos / Flash+E.",
+        ),
+        ("malzahar", "syndra") | ("malzahar", "orianna") => Some(
+            "Farme seguro com E até Capítulo Perdido; sua passiva segura poke/stun, mas não desperdice W na frente de Q/W delas.",
+        ),
+        ("malzahar", "zed") | ("malzahar", "yasuo") | ("malzahar", "yone") => Some(
+            "Controle a wave perto da sua torre pré-6, guarde R para quando eles entrarem debaixo da torre ou no gank do jungler.",
+        ),
+        ("malzahar", "sylas") => Some(
+            "Cuidado ao deixar ele roubar seu R; compre Orbe do Oblívio cedo se ele estiver crescendo.",
+        ),
         _ => None,
     }
 }
@@ -351,13 +376,14 @@ mod tests {
         assert!(sett_ctx.contains("Quebrapassos"));
         assert!(sett_ctx.contains("Darius"));
 
-        let malz_mid_ctx = store.build_tactical_context("Malzahar", PlayerRole::Mid, &["Zed".into()]);
+        let malz_mid_ctx =
+            store.build_tactical_context("Malzahar", PlayerRole::Mid, &["Zed".into()]);
         assert!(malz_mid_ctx.contains("Aperto Ínfero"));
         assert!(malz_mid_ctx.contains("Zed"));
 
-        let malz_sup_ctx = store.build_tactical_context("Malzahar", PlayerRole::Support, &["Nautilus".into()]);
+        let malz_sup_ctx =
+            store.build_tactical_context("Malzahar", PlayerRole::Support, &["Nautilus".into()]);
         assert!(malz_sup_ctx.contains("Suporte / Bot Lane"));
         assert!(malz_sup_ctx.contains("Zaz'Zak"));
     }
 }
-

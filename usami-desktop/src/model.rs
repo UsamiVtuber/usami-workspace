@@ -57,7 +57,9 @@ pub(crate) struct ChatMessage {
 
 pub(crate) fn current_phone_time() -> String {
     let now = std::time::SystemTime::now();
-    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let duration = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let total_secs = duration.as_secs();
     let local_secs = total_secs.saturating_sub(3 * 3600);
     let hours = (local_secs / 3600) % 24;
@@ -137,4 +139,3 @@ pub(crate) fn chat_message_from_stored(turn: storage::StoredTurn) -> Option<Chat
         media,
     })
 }
-

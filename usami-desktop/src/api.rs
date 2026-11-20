@@ -1172,12 +1172,13 @@ impl UsamiApiClient {
                 {
                     return Err(format!("Erro {status}: {msg}"));
                 }
-                return Err(format!("O servidor local respondeu com erro {}.", status.as_u16()));
+                return Err(format!(
+                    "O servidor local respondeu com erro {}.",
+                    status.as_u16()
+                ));
             }
 
-            res.json::<ChatResponse>()
-                .await
-                .map_err(map_request_error)
+            res.json::<ChatResponse>().await.map_err(map_request_error)
         })
         .await
     }
@@ -2873,7 +2874,10 @@ mod tests {
         );
         let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
         let result = poll_outside_tokio(client.transcribe(b"RIFF....WAVE".to_vec()));
-        assert_eq!(result.expect("transcribe fora do tokio"), "oi fora do tokio");
+        assert_eq!(
+            result.expect("transcribe fora do tokio"),
+            "oi fora do tokio"
+        );
     }
 
     #[test]

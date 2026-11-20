@@ -20,7 +20,10 @@ mod win32 {
         };
         unsafe {
             let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if HAS_SAVED_STYLE.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if HAS_SAVED_STYLE
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 SAVED_EX_STYLE.store(current, Ordering::SeqCst);
             }
 
@@ -72,4 +75,3 @@ mod win32 {
 pub fn apply_overlay_styles(overlay_active: bool, click_through: bool) {
     win32::apply_overlay_styles(overlay_active, click_through);
 }
-

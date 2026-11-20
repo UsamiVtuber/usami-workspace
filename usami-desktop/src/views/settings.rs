@@ -2,6 +2,7 @@
 //!
 //! Reúne abas de Perfil, Memória, Personalidade, Proatividade, Sistema e Avançado.
 
+use crate::UsamiApp;
 use crate::model::SettingsTab;
 use crate::storage;
 use crate::theme;
@@ -9,7 +10,6 @@ use crate::ui::widgets::{
     settings_code, settings_danger_button, settings_dl_row, settings_h3, settings_hint,
     settings_list_item, settings_p,
 };
-use crate::UsamiApp;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -61,8 +61,6 @@ fn render_settings_category<E: IntoElement>(
         )
         .child(content)
 }
-
-
 
 impl UsamiApp {
     fn render_settings_section(
@@ -1175,10 +1173,7 @@ impl UsamiApp {
                             .mt(px(sp.s2))
                             .text_size(px(ty.sm))
                             .text_color(c.pearl)
-                            .child(SharedString::from(format!(
-                                "• Fonte: {}",
-                                source_str
-                            ))),
+                            .child(SharedString::from(format!("• Fonte: {}", source_str))),
                     )
                     .when_some(last_timing, |parent, timing| {
                         parent
@@ -1197,7 +1192,10 @@ impl UsamiApp {
                                         .mt(px(sp.s1))
                                         .text_size(px(ty.sm))
                                         .text_color(c.pearl)
-                                        .child(SharedString::from(format!("• Superfície: {} ms", ms))),
+                                        .child(SharedString::from(format!(
+                                            "• Superfície: {} ms",
+                                            ms
+                                        ))),
                                 )
                             })
                             .when_some(timing.total_ms, |p, ms| {
@@ -1217,7 +1215,9 @@ impl UsamiApp {
                             .text_color(c.pearl)
                             .child(SharedString::from(format!(
                                 "• Vínculo no servidor: {} (estágio: {})",
-                                server_affinity.map(|a| format!("{}/100", a)).unwrap_or_else(|| "—".into()),
+                                server_affinity
+                                    .map(|a| format!("{}/100", a))
+                                    .unwrap_or_else(|| "—".into()),
                                 stage_str
                             ))),
                     ),
@@ -1228,33 +1228,34 @@ impl UsamiApp {
                 msg_count
             ))))
             .child(
-                div()
-                    .flex()
-                    .child(
-                        div()
-                            .id("clear-session-history-btn")
-                            .cursor_pointer()
-                            .px(px(14.0))
-                            .py(px(8.0))
-                            .rounded(px(r.sm))
-                            .bg(c.surface_soft)
-                            .border_1()
-                            .border_color(c.line)
-                            .text_size(px(ty.sm))
-                            .text_color(c.pearl)
-                            .hover(|s| s.bg(c.line_strong))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.chat_history.clear();
-                                this.persist_history();
-                                this.show_bubble = false;
-                                cx.notify();
-                            }))
-                            .child("Limpar histórico da conversa"),
-                    ),
+                div().flex().child(
+                    div()
+                        .id("clear-session-history-btn")
+                        .cursor_pointer()
+                        .px(px(14.0))
+                        .py(px(8.0))
+                        .rounded(px(r.sm))
+                        .bg(c.surface_soft)
+                        .border_1()
+                        .border_color(c.line)
+                        .text_size(px(ty.sm))
+                        .text_color(c.pearl)
+                        .hover(|s| s.bg(c.line_strong))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.chat_history.clear();
+                            this.persist_history();
+                            this.show_bubble = false;
+                            cx.notify();
+                        }))
+                        .child("Limpar histórico da conversa"),
+                ),
             )
     }
 
-    pub(crate) fn render_settings_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn render_settings_page(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let t = theme::theme();
         let c = t.color;
         let sp = t.space;
@@ -1295,12 +1296,9 @@ impl UsamiApp {
                             .child("Ajustes"),
                     )
                     .child(
-                        div()
-                            .text_size(px(ty.sm))
-                            .text_color(c.muted)
-                            .child(
-                                "Voz, memória, jeito de ser e integrações — tudo no mesmo lugar.",
-                            ),
+                        div().text_size(px(ty.sm)).text_color(c.muted).child(
+                            "Voz, memória, jeito de ser e integrações — tudo no mesmo lugar.",
+                        ),
                     ),
             )
             .child(render_settings_category(
@@ -1417,7 +1415,11 @@ impl UsamiApp {
             (SettingsTab::Voice, "Voz & Áudio", "settings-tab-voice"),
             (SettingsTab::Avatar, "Avatar", "settings-tab-avatar"),
             (SettingsTab::Memory, "Memória", "settings-tab-memory"),
-            (SettingsTab::Personality, "Personalidade", "settings-tab-personality"),
+            (
+                SettingsTab::Personality,
+                "Personalidade",
+                "settings-tab-personality",
+            ),
             (SettingsTab::About, "Sistema", "settings-tab-about"),
         ];
 

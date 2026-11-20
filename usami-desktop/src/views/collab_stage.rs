@@ -3,8 +3,8 @@
 //! Exibe participantes federados (`did:key`), estado do `FloorLease`
 //! (`Falando` / `PRE_YIELD` / `Na fila`) e slots agendados em Zero-Knowledge.
 
-use crate::theme;
 use crate::UsamiApp;
+use crate::theme;
 use gpui::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

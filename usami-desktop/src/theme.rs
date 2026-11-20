@@ -35,7 +35,10 @@ pub fn font_character_italic() -> Font {
 /// japonês como fallback para os glifos que ela não possui.
 pub fn font_with_jp(family: &'static str) -> Font {
     let mut font = gpui::font(family);
-    font.fallbacks = Some(FontFallbacks::from_fonts(vec![FONT_JP.into(), "Segoe UI Symbol".into()]));
+    font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+        FONT_JP.into(),
+        "Segoe UI Symbol".into(),
+    ]));
     font
 }
 

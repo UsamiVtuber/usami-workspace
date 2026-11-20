@@ -365,80 +365,91 @@ impl UsamiApp {
                                 ),
                         ),
                 )
-                    .when(!win.minimized, |parent| {
-                        parent.child(
-                            div()
-                                .id(SharedString::from(format!("os-scroll-{win_id}")))
-                                .h(px(body_h))
-                                .overflow_y_scroll()
-                                .p(px(sp.s3))
-                                .flex()
-                                .flex_col()
-                                .gap(px(sp.s2))
-                                .when_some(connector_status.clone(), |el, note| {
-                                    el.child(
-                                        div()
-                                            .w(px(win.width - 36.0))
-                                            .px(px(sp.s2_5))
-                                            .py(px(sp.s2))
-                                            .rounded(px(8.0))
-                                            .bg(c.surface_soft)
-                                            .border_1()
-                                            .border_color(c.accent)
-                                            .text_size(px(ty.xs))
-                                            .text_color(c.pearl)
-                                            .child(note),
-                                    )
-                                })
-                                .children(connectors.iter().cloned().map(|conn| {
-                                    let conn_id = conn.id.clone();
-                                    let pill_bg = if conn.enabled { c.accent } else { c.surface_soft };
+                .when(!win.minimized, |parent| {
+                    parent.child(
+                        div()
+                            .id(SharedString::from(format!("os-scroll-{win_id}")))
+                            .h(px(body_h))
+                            .overflow_y_scroll()
+                            .p(px(sp.s3))
+                            .flex()
+                            .flex_col()
+                            .gap(px(sp.s2))
+                            .when_some(connector_status.clone(), |el, note| {
+                                el.child(
                                     div()
                                         .w(px(win.width - 36.0))
-                                        .p(px(sp.s2_5))
-                                        .rounded(px(10.0))
+                                        .px(px(sp.s2_5))
+                                        .py(px(sp.s2))
+                                        .rounded(px(8.0))
                                         .bg(c.surface_soft)
                                         .border_1()
-                                        .border_color(c.line)
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .gap(px(sp.s2))
-                                        .child(
-                                            div()
-                                                .w(px(win.width - 130.0))
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(2.0))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(ty.sm))
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(c.pearl)
-                                                        .child(conn.name),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(ty.xs))
-                                                        .text_color(c.muted)
-                                                        .child(format!(
-                                                            "{} · {}",
-                                                            if conn.connected { "Conectado" } else { "Não conectado" },
-                                                            conn.description
-                                                        )),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .id(SharedString::from(format!("conn-toggle-{conn_id}")))
-                                                .px(px(10.0))
-                                                .py(px(4.0))
-                                                .rounded_full()
-                                                .bg(pill_bg)
-                                                .cursor_pointer()
-                                                .text_size(px(ty.xs))
-                                                .text_color(c.pearl)
-                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        .border_color(c.accent)
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.pearl)
+                                        .child(note),
+                                )
+                            })
+                            .children(connectors.iter().cloned().map(|conn| {
+                                let conn_id = conn.id.clone();
+                                let pill_bg = if conn.enabled {
+                                    c.accent
+                                } else {
+                                    c.surface_soft
+                                };
+                                div()
+                                    .w(px(win.width - 36.0))
+                                    .p(px(sp.s2_5))
+                                    .rounded(px(10.0))
+                                    .bg(c.surface_soft)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(sp.s2))
+                                    .child(
+                                        div()
+                                            .w(px(win.width - 130.0))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.0))
+                                            .child(
+                                                div()
+                                                    .text_size(px(ty.sm))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(c.pearl)
+                                                    .child(conn.name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(ty.xs))
+                                                    .text_color(c.muted)
+                                                    .child(format!(
+                                                        "{} · {}",
+                                                        if conn.connected {
+                                                            "Conectado"
+                                                        } else {
+                                                            "Não conectado"
+                                                        },
+                                                        conn.description
+                                                    )),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "conn-toggle-{conn_id}"
+                                            )))
+                                            .px(px(10.0))
+                                            .py(px(4.0))
+                                            .rounded_full()
+                                            .bg(pill_bg)
+                                            .cursor_pointer()
+                                            .text_size(px(ty.xs))
+                                            .text_color(c.pearl)
+                                            .on_click(cx.listener(
+                                                move |this, _: &ClickEvent, _, cx| {
                                                     this.handle_connector_click(&conn_id, cx);
                                                 },
                                             ))

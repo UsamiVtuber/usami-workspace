@@ -1,11 +1,11 @@
 //! Ciclo de vida da aplicacao: observadores de janela, ausencia/retorno, despedida e ociosidade.
 
-use crate::model::{ActiveDrawer, current_phone_time, ChatMessage, Sender};
-use crate::storage;
 use crate::UsamiApp;
+use crate::model::{ActiveDrawer, ChatMessage, Sender, current_phone_time};
+use crate::storage;
 use gpui::*;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 fn window_minimized_or_hidden() -> bool {
@@ -147,7 +147,8 @@ impl UsamiApp {
         self.status_text = self.default_status();
         #[cfg(target_os = "windows")]
         {
-            if let Some(restore) = crate::mascot::enter(window.scale_factor(), self.last_normal_rect)
+            if let Some(restore) =
+                crate::mascot::enter(window.scale_factor(), self.last_normal_rect)
             {
                 self.last_normal_rect = Some(restore);
             }
@@ -189,10 +190,8 @@ impl UsamiApp {
             // Mesmo motivo do enter: ressincroniza o viewport depois de
             // devolver estilo e geometria da janela. No caso maximizado o
             // maximize é assíncrono e emite o próprio WM_SIZE.
-            if !restored_maximized {
-                if let Some(saved) = self.prefs.window {
-                    window.resize(size(px(saved.width), px(saved.height)));
-                }
+            if !restored_maximized && let Some(saved) = self.prefs.window {
+                window.resize(size(px(saved.width), px(saved.height)));
             }
         }
         #[cfg(not(target_os = "windows"))]

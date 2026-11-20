@@ -176,9 +176,9 @@ impl LolEvent {
             | Self::MatchEnded { .. }
             | Self::DragonKilled { .. }
             | Self::ChampionKill { .. } => 4,
-            Self::ItemPurchased { .. } | Self::HeraldKilled { .. } | Self::TurretDestroyed { .. } => {
-                3
-            }
+            Self::ItemPurchased { .. }
+            | Self::HeraldKilled { .. }
+            | Self::TurretDestroyed { .. } => 3,
             Self::MinionCSThreshold { .. } | Self::MatchLoading { .. } => 2,
             Self::LevelUp { .. } => 1,
         }
@@ -372,4 +372,3 @@ pub struct LeagueEntryDto {
     pub wins: i32,
     pub losses: i32,
 }
-

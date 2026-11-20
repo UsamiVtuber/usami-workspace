@@ -2387,7 +2387,9 @@ impl UsamiApp {
         let line = bond
             .map(|b| b.summary.line.clone())
             .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "Cada dia ao seu lado vira uma página nova no meu diário.".to_string());
+            .unwrap_or_else(|| {
+                "Cada dia ao seu lado vira uma página nova no meu diário.".to_string()
+            });
         let entries = collect_diary_entries(bond, memory);
         let total_entries = entries.len();
         let per_page = 4usize;

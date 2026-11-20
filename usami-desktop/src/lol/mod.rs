@@ -15,19 +15,21 @@ pub mod types;
 
 use crate::api::UsamiApiClient;
 use crate::lol::brain::{EventPriorityQueue, build_llm_prompt, parse_companion_reply};
-use crate::ollama::OllamaClient;
 use crate::lol::ddragon::DataDragonStore;
 use crate::lol::ipc::{LolControlMsg, LolUiCommand, LolUiEndpoint, create_ipc_channels};
-use crate::lol::live_client::{CircuitBreaker, LiveClientPoller, PollerState, ProbeResult, advance_state};
+use crate::lol::live_client::{
+    CircuitBreaker, LiveClientPoller, PollerState, ProbeResult, advance_state,
+};
 use crate::lol::provider::{GameProvider, NullProvider};
 use crate::lol::riot_cloud::RiotCloudClient;
 use crate::lol::state_diff::resolve_active_player;
 use crate::lol::types::{LolEvent, LolExpression, PlayerRole};
+use crate::ollama::OllamaClient;
 use gpui_vrm::VrmController;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, mpsc};
 
 /// Restaura a trava de geração ao ser descartado, mesmo que a tarefa LLM
 /// panique. Evita que o worker fique permanentemente travado e cesse de
@@ -94,7 +96,14 @@ pub fn start(
     };
 
     crate::api::tokio_runtime().spawn(async move {
-        run_worker(bridge, api_client, vrm_controller, worker_shutdown, provider).await;
+        run_worker(
+            bridge,
+            api_client,
+            vrm_controller,
+            worker_shutdown,
+            provider,
+        )
+        .await;
     });
 
     (LolCompanionHandle { ctrl_tx, shutdown }, endpoint)
@@ -129,9 +138,9 @@ async fn run_worker(
     };
 
     if !provider.is_enabled() {
-        let _ = bridge.ui_tx.send(LolUiCommand::PollerStatus(
-            "Provedor desativado".into(),
-        ));
+        let _ = bridge
+            .ui_tx
+            .send(LolUiCommand::PollerStatus("Provedor desativado".into()));
     }
 
     let mut riot_cloud = RiotCloudClient::from_env();

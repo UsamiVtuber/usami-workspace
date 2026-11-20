@@ -58,4 +58,3 @@ pub fn create_ipc_channels() -> (LolIpcBridge, LolUiEndpoint) {
         LolUiEndpoint { ui_rx, ctrl_tx },
     )
 }
-

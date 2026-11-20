@@ -31,7 +31,7 @@ use windows_sys::Win32::System::Registry::{
     RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_U,
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey, VK_U,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -227,45 +227,10 @@ fn run(app: isize, ready: Sender<Result<Ready, String>>) {
     TRAY_ICON.store(icon as isize, Ordering::SeqCst);
     let tray = add_tray_icon(hidden);
 
-    let hotkey = unsafe {
-        let ok = RegisterHotKey(
-            hidden,
-            HOTKEY_ID,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            VK_U as u32,
-        );
-        if ok == 0 {
-            let err = windows_sys::Win32::Foundation::GetLastError();
-            eprintln!("[Usami Presence] Falha ao registrar hotkey principal (RegisterHotKey): erro {}", err);
-        }
-        ok != 0
-    };
-    let _lol_hotkey = unsafe {
-        let ok = RegisterHotKey(
-            hidden,
-            HOTKEY_LOL_OVERLAY_ID,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            VK_L_KEY,
-        );
-        if ok == 0 {
-            let err = windows_sys::Win32::Foundation::GetLastError();
-            eprintln!("[Usami Presence] Falha ao registrar hotkey LoL overlay (RegisterHotKey): erro {}", err);
-        }
-        ok != 0
-    };
-    let _mascot_hotkey = unsafe {
-        let ok = RegisterHotKey(
-            hidden,
-            HOTKEY_MASCOT_ID,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            VK_M_KEY,
-        );
-        if ok == 0 {
-            let err = windows_sys::Win32::Foundation::GetLastError();
-            eprintln!("[Usami Presence] Falha ao registrar hotkey mascote (RegisterHotKey): erro {}", err);
-        }
-        ok != 0
-    };
+    // Tenta registrar hotkeys com fallback: Ctrl+Alt -> Ctrl+Shift -> Alt
+    let hotkey = register_hotkey_with_fallback(hidden, HOTKEY_ID, VK_U as u32);
+    let _lol_hotkey = register_hotkey_with_fallback(hidden, HOTKEY_LOL_OVERLAY_ID, VK_L_KEY);
+    let _mascot_hotkey = register_hotkey_with_fallback(hidden, HOTKEY_MASCOT_ID, VK_M_KEY);
 
     unsafe {
         TASKBAR_CREATED.store(
@@ -847,6 +812,31 @@ fn reg_delete_value(subkey: &str, value: &str) -> Result<(), String> {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
+}
+
+/// Tenta registrar hotkey com fallback de modificadores:
+/// 1. Ctrl+Alt (padrão)
+/// 2. Ctrl+Shift
+/// 3. Alt apenas
+/// Retorna true se algum registrar com sucesso.
+fn register_hotkey_with_fallback(hwnd: HWND, id: i32, vk: u32) -> bool {
+    const MODS: &[(u32, &str)] = &[
+        (MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, "Ctrl+Alt"),
+        (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, "Ctrl+Shift"),
+        (MOD_ALT | MOD_NOREPEAT, "Alt"),
+    ];
+
+    for (mods, label) in MODS {
+        let ok = unsafe { RegisterHotKey(hwnd, id, *mods, vk) };
+        if ok != 0 {
+            eprintln!("[Usami Presence] Hotkey id={} registrado com {}", id, label);
+            return true;
+        }
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        eprintln!("[Usami Presence] Hotkey id={} falhou com {} (erro {}); tentando fallback...", id, label, err);
+    }
+    eprintln!("[Usami Presence] Hotkey id={} FALHOU em todos os fallbacks", id);
+    false
 }
 
 #[cfg(test)]

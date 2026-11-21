@@ -65,13 +65,6 @@ fn render_settings_category<E: IntoElement>(
 impl UsamiApp {
     #[inline(never)]
     fn render_game_connectors_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    fn render_vrm_avatar_card(
-        &mut self,
-        idx: usize,
-        model_path: std::path::PathBuf,
-        is_active: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
         let t = theme::theme();
         let c = t.color;
         let sp = t.space;
@@ -358,6 +351,34 @@ impl UsamiApp {
                                 .text_color(c.muted)
                                 .child(descriptor.subtitle),
                         ),
+                );
+            }
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .child(settings_h3("CONECTORES DE JOGOS (NO-CODE)"))
+            .child(settings_p(
+                "Ative ou configure integrações de jogos sem editar arquivos .env. Novos jogos seguem o contrato GameProvider.",
+            ))
+            .child(cards)
+            .into_any_element()
+    }
+
+    #[inline(never)]
+    fn render_vrm_avatar_card(
+        &mut self,
+        idx: usize,
+        model_path: std::path::PathBuf,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
         let display_name = crate::assets::vrm_display_name(&model_path);
         let file_name = model_path
             .file_name()
@@ -441,17 +462,29 @@ impl UsamiApp {
 
         let mut row = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s3));
         for (idx, (tag, label)) in emotions.into_iter().enumerate() {
-            let is_selected = active_emotion == tag || (tag == "neutral" && active_emotion.is_empty());
+            let is_selected =
+                active_emotion == tag || (tag == "neutral" && active_emotion.is_empty());
             row = row.child(
                 div()
-                    .id(ElementId::NamedInteger("vrm-emotion-btn".into(), idx as u64))
+                    .id(ElementId::NamedInteger(
+                        "vrm-emotion-btn".into(),
+                        idx as u64,
+                    ))
                     .cursor_pointer()
                     .px(px(11.0))
                     .py(px(6.0))
                     .rounded(px(r.sm))
-                    .bg(if is_selected { c.accent_tint } else { c.card_bg })
+                    .bg(if is_selected {
+                        c.accent_tint
+                    } else {
+                        c.card_bg
+                    })
                     .border_1()
-                    .border_color(if is_selected { c.primary } else { c.line_strong })
+                    .border_color(if is_selected {
+                        c.primary
+                    } else {
+                        c.line_strong
+                    })
                     .text_size(px(ty.xs))
                     .font_weight(if is_selected {
                         FontWeight::SEMIBOLD
@@ -529,13 +562,6 @@ impl UsamiApp {
         div()
             .flex()
             .flex_col()
-            .child(settings_h3("CONECTORES DE JOGOS (NO-CODE)"))
-            .child(settings_p(
-                "Ative ou configure integrações de jogos sem editar arquivos .env. Novos jogos seguem o contrato GameProvider.",
-            ))
-            .child(cards)
-            .into_any_element()
-    }
             .child(settings_h3("CATÁLOGO DE ANIMAÇÕES (.VRMA)"))
             .child(settings_p(
                 "Clipes detectados automaticamente na pasta de animações. Clique para executar no avatar.",
@@ -570,7 +596,11 @@ impl UsamiApp {
                     .px(px(11.0))
                     .py(px(6.0))
                     .rounded(px(r.sm))
-                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .bg(if is_active {
+                        c.accent_tint
+                    } else {
+                        c.surface_soft
+                    })
                     .border_1()
                     .border_color(if is_active { c.primary } else { c.line })
                     .text_size(px(ty.xs))
@@ -599,7 +629,11 @@ impl UsamiApp {
                     .px(px(10.0))
                     .py(px(5.0))
                     .rounded(px(r.sm))
-                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .bg(if is_active {
+                        c.accent_tint
+                    } else {
+                        c.surface_soft
+                    })
                     .border_1()
                     .border_color(if is_active { c.primary } else { c.line })
                     .text_size(px(ty.xs))

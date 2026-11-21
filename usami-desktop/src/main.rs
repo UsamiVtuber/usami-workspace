@@ -293,9 +293,9 @@ impl UsamiApp {
         let mut available_vrms = assets::discover_vrm_models();
         if let Some(ref current) = vrm_path {
             let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
-            let already_listed = available_vrms.iter().any(|p| {
-                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
-            });
+            let already_listed = available_vrms
+                .iter()
+                .any(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon);
             if !already_listed {
                 available_vrms.push(current.clone());
             }
@@ -930,6 +930,9 @@ impl UsamiApp {
             handle.send_control(lol::ipc::LolControlMsg::RefreshDataDragon);
             self.lol_status = "Atualizando cache DataDragon...".into();
         }
+        cx.notify();
+    }
+
     /// Re-escaneia as pastas conhecidas de modelos `.vrm`, mantendo o modelo
     /// customizado ativo na lista caso esteja fora das pastas padrão.
     pub(crate) fn refresh_vrm_catalog(&mut self, cx: &mut Context<Self>) {
@@ -937,9 +940,9 @@ impl UsamiApp {
         let mut models = assets::discover_vrm_models();
         if let Some(ref current) = self.current_vrm_path {
             let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
-            let already_listed = models.iter().any(|p| {
-                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
-            });
+            let already_listed = models
+                .iter()
+                .any(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon);
             if !already_listed && current.exists() {
                 models.push(current.clone());
             }
@@ -981,13 +984,7 @@ impl UsamiApp {
 
         self.vrm_loading = true;
         self.vrm_error = None;
-        self.vrm_status = Some(
-            format!(
-                "Carregando {}...",
-                assets::vrm_display_name(&path)
-            )
-            .into(),
-        );
+        self.vrm_status = Some(format!("Carregando {}...", assets::vrm_display_name(&path)).into());
         cx.notify();
 
         let vrma_dir = self.vrma_dir.clone();
@@ -1049,10 +1046,7 @@ impl UsamiApp {
                                     );
                                     view.vrm_status = None;
                                     view.vrm_error = Some(
-                                        format!(
-                                            "Não foi possível carregar o modelo: {err}"
-                                        )
-                                        .into(),
+                                        format!("Não foi possível carregar o modelo: {err}").into(),
                                     );
                                 }
                             }
@@ -1112,11 +1106,7 @@ impl UsamiApp {
         cx.notify();
     }
 
-    pub(crate) fn apply_vrm_camera_preset(
-        &mut self,
-        preset: &'static str,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn apply_vrm_camera_preset(&mut self, preset: &'static str, cx: &mut Context<Self>) {
         self.touch_ui(cx);
         self.vrm_controller.reset_camera();
         match preset {
@@ -1142,7 +1132,8 @@ impl UsamiApp {
         if tag == "neutral" {
             self.vrm_controller.clear_expressions();
         } else {
-            self.vrm_controller.set_emotion_with_options(tag, 6.0, false);
+            self.vrm_controller
+                .set_emotion_with_options(tag, 6.0, false);
         }
         cx.notify();
     }

@@ -96,10 +96,6 @@ pub struct UiPrefs {
     /// Role preferida no LoL (`auto`, `top`, `jungle`, `mid`, `adc`, `support`).
     #[serde(default = "default_lol_role")]
     pub lol_preferred_role: String,
-}
-
-fn default_lol_role() -> String {
-    "auto".to_string()
     /// Caminho do modelo `.vrm` selecionado pelo usuário (None = padrão).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vrm_path: Option<String>,
@@ -109,6 +105,10 @@ fn default_lol_role() -> String {
     /// Abertura lateral dos braços em graus (0..=45) para evitar colisão com saias/mangas.
     #[serde(default = "default_arm_clearance_deg")]
     pub vrm_arm_clearance_deg: f32,
+}
+
+fn default_lol_role() -> String {
+    "auto".to_string()
 }
 
 fn default_arm_clearance_deg() -> f32 {

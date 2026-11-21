@@ -235,10 +235,8 @@ mod tests {
 
     #[test]
     fn discover_vrm_models_prioritizes_shiro_and_ignores_backups() {
-        let dir = std::env::temp_dir().join(format!(
-            "usami-desktop-vrm-discover-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("usami-desktop-vrm-discover-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("cria diretório temporário");
         std::fs::write(dir.join("companion-b.vrm"), b"b").unwrap();
         std::fs::write(dir.join("shiro.vrm"), b"s").unwrap();
@@ -251,7 +249,10 @@ mod tests {
             .iter()
             .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
             .collect();
-        assert_eq!(names, vec!["shiro.vrm", "companion-a.vrm", "companion-b.vrm"]);
+        assert_eq!(
+            names,
+            vec!["shiro.vrm", "companion-a.vrm", "companion-b.vrm"]
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

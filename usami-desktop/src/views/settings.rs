@@ -367,6 +367,201 @@ impl UsamiApp {
     }
 
     #[inline(never)]
+    fn render_character_card_and_presets_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+        let active_char = self.api_client.character_id();
+        let activate_on_import = self.card_activate_on_import;
+
+        let presets: [(&'static str, &'static str, &'static str); 4] = [
+            (
+                "classic",
+                "Usami Clássica",
+                "Equilíbrio padrão (50/50/50/50)",
+            ),
+            (
+                "cohost",
+                "Co-Host Energética",
+                "Mais animada e curiosa para jogos/lives",
+            ),
+            (
+                "focus",
+                "Foco & Estudo",
+                "Direta, objetiva e sem distrações",
+            ),
+            ("calm", "Modo Calmo", "Calorosa e suave para companhia"),
+        ];
+
+        let mut preset_row = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s3));
+        for (idx, (preset_id, label, desc)) in presets.into_iter().enumerate() {
+            preset_row = preset_row.child(
+                div()
+                    .id(ElementId::NamedInteger(
+                        "personality-preset-btn".into(),
+                        idx as u64,
+                    ))
+                    .cursor_pointer()
+                    .px(px(11.0))
+                    .py(px(7.0))
+                    .rounded(px(r.sm))
+                    .bg(c.card_bg)
+                    .border_1()
+                    .border_color(c.line_strong)
+                    .hover(|s| s.border_color(c.primary).bg(c.surface_soft))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.apply_personality_preset(preset_id, label, cx);
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(ty.xs))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.pearl)
+                            .child(label),
+                    )
+                    .child(div().text_size(px(10.0)).text_color(c.faint).child(desc)),
+            );
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .mb(px(sp.s3))
+            .child(settings_h3("PRESETS RÁPIDOS (NO-CODE)"))
+            .child(settings_hint(
+                "Aplique um perfil pronto em 1 clique — você ainda pode ajustar os traços abaixo.",
+            ))
+            .child(preset_row)
+            .child(settings_h3("CARTÃO DE COMPANHEIRA (PNG / JSON)"))
+            .child(
+                div()
+                    .p(px(sp.s3))
+                    .rounded(px(r.md))
+                    .bg(c.card_bg)
+                    .border_1()
+                    .border_color(c.line)
+                    .flex()
+                    .flex_col()
+                    .gap(px(sp.s2))
+                    .child(
+                        div()
+                            .text_size(px(ty.xs))
+                            .text_color(c.muted)
+                            .child(SharedString::from(format!(
+                                "Companheira ativa: {active_char} · Compatível com cards Usami v1 e PNG chara (YuriOS / SillyTavern)."
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .id("toggle-card-activate-on-import")
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .py(px(2.0))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.card_activate_on_import = !this.card_activate_on_import;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .px(px(7.0))
+                                    .py(px(2.0))
+                                    .rounded(px(4.0))
+                                    .bg(if activate_on_import {
+                                        c.accent_tint
+                                    } else {
+                                        c.surface_soft
+                                    })
+                                    .border_1()
+                                    .border_color(if activate_on_import {
+                                        c.primary
+                                    } else {
+                                        c.line
+                                    })
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c.pearl)
+                                    .child(if activate_on_import { "SIM" } else { "NÃO" }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.pearl)
+                                    .child("Ativar companheira automaticamente ao importar"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(sp.s2))
+                            .child(
+                                div()
+                                    .id("import-character-card-btn")
+                                    .cursor_pointer()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(r.sm))
+                                    .bg(c.accent_tint)
+                                    .border_1()
+                                    .border_color(c.primary)
+                                    .text_size(px(ty.xs))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c.pearl)
+                                    .hover(|s| s.bg(c.primary).text_color(c.deep))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.pick_character_card_prompt(cx);
+                                    }))
+                                    .child("Importar Cartão (.png / .json)"),
+                            )
+                            .child(
+                                div()
+                                    .id("export-character-card-png-btn")
+                                    .cursor_pointer()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(r.sm))
+                                    .bg(c.surface_soft)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.pearl)
+                                    .hover(|s| s.bg(c.line_strong))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.export_active_character_card("png", cx);
+                                    }))
+                                    .child("Exportar PNG"),
+                            )
+                            .child(
+                                div()
+                                    .id("export-character-card-json-btn")
+                                    .cursor_pointer()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(r.sm))
+                                    .bg(c.surface_soft)
+                                    .border_1()
+                                    .border_color(c.line)
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.pearl)
+                                    .hover(|s| s.bg(c.line_strong))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.export_active_character_card("json", cx);
+                                    }))
+                                    .child("Exportar JSON"),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    #[inline(never)]
     fn render_vrm_avatar_card(
         &mut self,
         idx: usize,
@@ -1628,6 +1823,8 @@ impl UsamiApp {
                                 .child(SharedString::from(st)),
                         );
                     }
+
+                    view = view.child(self.render_character_card_and_presets_section(cx));
 
                     if let Some(p) = p_opt {
                         view = view.child(settings_hint(

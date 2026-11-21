@@ -4,7 +4,10 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let icon_path = manifest_dir.join("assets").join("icons").join("app-icon.ico");
+    let icon_path = manifest_dir
+        .join("assets")
+        .join("icons")
+        .join("app-icon.ico");
 
     println!("cargo:rerun-if-changed={}", icon_path.display());
     println!("cargo:rerun-if-changed=build.rs");
@@ -23,7 +26,9 @@ fn main() {
         res.set("ProductName", "Usami Desktop");
         res.set("FileDescription", "Usami Desktop Companion");
         if let Err(e) = res.compile() {
-            eprintln!("cargo:warning=Não foi possível compilar recursos do Windows com winres: {e}");
+            eprintln!(
+                "cargo:warning=Não foi possível compilar recursos do Windows com winres: {e}"
+            );
         }
     } else {
         eprintln!(

@@ -53,6 +53,7 @@ struct UsamiApp {
     input_active: bool,
     caret_on: bool,
     status_text: SharedString,
+    #[allow(dead_code)]
     character_name: SharedString,
     character_credit: SharedString,
     last_reply: SharedString,
@@ -781,8 +782,10 @@ impl UsamiApp {
                                 GetAsyncKeyState, VK_XBUTTON1, VK_XBUTTON2,
                             };
                             let v_down = (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0;
-                            let x1_down = (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
-                            let x2_down = (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
+                            let x1_down =
+                                (GetAsyncKeyState(VK_XBUTTON1 as i32) as u16 & 0x8000) != 0;
+                            let x2_down =
+                                (GetAsyncKeyState(VK_XBUTTON2 as i32) as u16 & 0x8000) != 0;
                             v_down || x1_down || x2_down
                         };
                         gate.set_ptt_down(ptt_down);
@@ -1629,7 +1632,8 @@ impl UsamiApp {
                 } else {
                     self.lol_manual_overlay = !self.lol_manual_overlay;
                     self.lol_overlay_active = self.lol_manual_overlay;
-                    let gamer_mode = self.lol_manual_overlay || self.lol_in_match || self.lol_loading;
+                    let gamer_mode =
+                        self.lol_manual_overlay || self.lol_in_match || self.lol_loading;
                     self.mic_gate.set_gamer_mode(gamer_mode);
                     // Se estamos ouvindo e o modo gamer mudou, reiniciar detecção PTT
                     if self.is_listening {

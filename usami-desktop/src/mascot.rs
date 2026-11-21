@@ -5,8 +5,8 @@
 //! flag atômico, consumido pelo tick da UI. Toda a cirurgia de estilo/geometria
 //! é Win32 porque o GPUI 0.2.2 não troca decoração em runtime no Windows.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::JoinHandle;
 
 /// Retângulo físico de janela: (x, y, largura, altura), em pixels de tela.
@@ -161,11 +161,10 @@ mod win32 {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
         GetWindowRect, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
-        SM_CXSCREEN, SM_CYSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, SetWindowLongPtrW, SetWindowPos,
-        ShowWindow, ShowWindowAsync,
-        WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-        WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+        SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MAXIMIZE, SW_RESTORE, SW_SHOW, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos,
+        ShowWindow, ShowWindowAsync, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
     static SAVED_STYLE: AtomicIsize = AtomicIsize::new(0);
@@ -251,7 +250,8 @@ mod win32 {
 
             let frameless = style & !(FRAME_STYLES as isize);
             SetWindowLongPtrW(hwnd, GWL_STYLE, frameless);
-            let mascot_ex = ((ex_style as u32) | WS_EX_TOPMOST | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
+            let mascot_ex =
+                ((ex_style as u32) | WS_EX_TOPMOST | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, mascot_ex as isize);
             refresh_taskbar(hwnd);
 
@@ -290,10 +290,7 @@ mod win32 {
             }
             refresh_taskbar(hwnd);
 
-            let restore = SAVED_RECT
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .take();
+            let restore = SAVED_RECT.lock().unwrap_or_else(|p| p.into_inner()).take();
             let was_maximized = SAVED_MAXIMIZED.swap(false, Ordering::SeqCst);
             let Some((x, y, width, height)) = restore else {
                 return false;
@@ -381,7 +378,6 @@ mod win32 {
             );
         }
     }
-
 }
 
 #[cfg(target_os = "windows")]
@@ -503,10 +499,7 @@ mod tests {
 
     #[test]
     fn gaze_clamps_outside_the_window_and_survives_zero_size() {
-        assert_eq!(
-            normalize_gaze(9999, -9999, 100, 200, 380, 560),
-            (1.0, 1.0)
-        );
+        assert_eq!(normalize_gaze(9999, -9999, 100, 200, 380, 560), (1.0, 1.0));
         let (nx, ny) = normalize_gaze(10, 10, 0, 0, 0, 0);
         assert_eq!((nx, ny), (1.0, -1.0));
     }

@@ -205,7 +205,10 @@ pub fn save_media_file(filename: &str, _mime_type: &str, bytes: &[u8]) -> Option
     match fs::write(&path, bytes) {
         Ok(()) => Some(format!("media/{file_name}")),
         Err(error) => {
-            eprintln!("[Usami Storage] falha ao gravar mídia {}: {error}", path.display());
+            eprintln!(
+                "[Usami Storage] falha ao gravar mídia {}: {error}",
+                path.display()
+            );
             None
         }
     }

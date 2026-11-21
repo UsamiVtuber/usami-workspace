@@ -188,7 +188,8 @@ impl GameSnapshot {
         // 2. Compras de itens relevantes (ignora trinkets/consumíveis baratos < 400g)
         let current_items: HashSet<i64> = me.items.iter().map(|i| i.item_id).collect();
         for item in &me.items {
-            if !self.owned_items.contains(&item.item_id) && is_notable_item(item.item_id, item.price)
+            if !self.owned_items.contains(&item.item_id)
+                && is_notable_item(item.item_id, item.price)
             {
                 events.push(LolEvent::ItemPurchased {
                     champion: champion.clone(),
@@ -238,16 +239,20 @@ impl GameSnapshot {
 pub fn detect_player_role(player: &Player) -> PlayerRole {
     // 1. Verificação por itens de suporte da season 14 (World Atlas / Atlas Mundial e evoluções)
     let has_support_item = player.items.iter().any(|i| {
-        matches!(i.item_id, 3865 | 3866 | 3867 | 3869 | 3870 | 3871 | 3876 | 3877)
+        matches!(
+            i.item_id,
+            3865 | 3866 | 3867 | 3869 | 3870 | 3871 | 3876 | 3877
+        )
     });
     if has_support_item {
         return PlayerRole::Support;
     }
 
     // 2. Verificação por itens de selva
-    let has_jungle_item = player.items.iter().any(|i| {
-        matches!(i.item_id, 1101 | 1102 | 1103)
-    });
+    let has_jungle_item = player
+        .items
+        .iter()
+        .any(|i| matches!(i.item_id, 1101 | 1102 | 1103));
     if has_jungle_item {
         return PlayerRole::Jungle;
     }
@@ -368,7 +373,9 @@ mod tests {
         // Primeiro tick -> MatchStarted
         let d0 = sample_game_data(12.0);
         let ev0 = snap.diff(&d0);
-        assert!(matches!(ev0.as_slice(), [LolEvent::MatchStarted { champion, .. }] if champion == "Sett"));
+        assert!(
+            matches!(ev0.as_slice(), [LolEvent::MatchStarted { champion, .. }] if champion == "Sett")
+        );
 
         // Segundo tick -> PlayerDied + ItemPurchased + CS 5 min
         let mut d1 = sample_game_data(305.0);
@@ -390,9 +397,25 @@ mod tests {
         });
 
         let ev1 = snap.diff(&d1);
-        assert!(ev1.iter().any(|e| matches!(e, LolEvent::PlayerDied { deaths_total: 1, .. })));
-        assert!(ev1.iter().any(|e| matches!(e, LolEvent::ItemPurchased { item_id: 6631, .. })));
-        assert!(ev1.iter().any(|e| matches!(e, LolEvent::MinionCSThreshold { minute_mark: 5, cs: 38, .. })));
+        assert!(ev1.iter().any(|e| matches!(
+            e,
+            LolEvent::PlayerDied {
+                deaths_total: 1,
+                ..
+            }
+        )));
+        assert!(
+            ev1.iter()
+                .any(|e| matches!(e, LolEvent::ItemPurchased { item_id: 6631, .. }))
+        );
+        assert!(ev1.iter().any(|e| matches!(
+            e,
+            LolEvent::MinionCSThreshold {
+                minute_mark: 5,
+                cs: 38,
+                ..
+            }
+        )));
 
         // Terceiro tick idêntico não deve reemitir nada
         let ev2 = snap.diff(&d1);
@@ -410,7 +433,9 @@ mod tests {
         d1.all_players[0].position = "UTILITY".into();
         d1.all_players[0].scores.creep_score = 12; // Pouco CS de suporte
         let ev1 = snap.diff(&d1);
-        assert!(!ev1.iter().any(|e| matches!(e, LolEvent::MinionCSThreshold { .. })));
+        assert!(
+            !ev1.iter()
+                .any(|e| matches!(e, LolEvent::MinionCSThreshold { .. }))
+        );
     }
 }
-

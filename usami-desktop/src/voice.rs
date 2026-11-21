@@ -1,8 +1,8 @@
 //! Controle de voz: microfone, gravação STT, chamadas de áudio e modo sono/companhia.
 
+use crate::UsamiApp;
 use crate::recorder;
 use crate::speech::is_duplicate_utterance;
-use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
 use std::time::Instant;

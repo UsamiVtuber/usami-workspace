@@ -74,7 +74,10 @@ pub(crate) fn settings_danger_button(label: &'static str) -> impl IntoElement {
         .child(label)
 }
 
-pub(crate) fn settings_dl_row(key: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
+pub(crate) fn settings_dl_row(
+    key: &'static str,
+    value: impl Into<SharedString>,
+) -> impl IntoElement {
     let t = theme::theme();
     div()
         .flex()

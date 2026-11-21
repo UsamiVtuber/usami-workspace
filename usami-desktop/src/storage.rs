@@ -90,6 +90,19 @@ pub struct UiPrefs {
     /// No modo mascote, a cabeça e os olhos acompanham o cursor pela tela.
     #[serde(default)]
     pub mascot_follow: bool,
+    /// Caminho do modelo `.vrm` selecionado pelo usuário (None = padrão).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vrm_path: Option<String>,
+    /// Simulação de física de cabelo/roupa (SpringBones) no motor WeebUI.
+    #[serde(default = "default_true")]
+    pub vrm_spring_bones: bool,
+    /// Abertura lateral dos braços em graus (0..=45) para evitar colisão com saias/mangas.
+    #[serde(default = "default_arm_clearance_deg")]
+    pub vrm_arm_clearance_deg: f32,
+}
+
+fn default_arm_clearance_deg() -> f32 {
+    8.0
 }
 
 impl Default for UiPrefs {
@@ -100,6 +113,9 @@ impl Default for UiPrefs {
             mascot: false,
             mascot_enabled: true,
             mascot_follow: false,
+            vrm_path: None,
+            vrm_spring_bones: true,
+            vrm_arm_clearance_deg: default_arm_clearance_deg(),
         }
     }
 }

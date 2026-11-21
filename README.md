@@ -207,4 +207,5 @@ NVIDIA direta) e o veredito é postado como comentário na PR. O merge continua 
   para OBS (`index-live.html`).
 - Monitor com suíte de testes (pytest) e variante `nyarch` operando no notebook
   Linux, atrás de túnel SSH.
+
 # CI/CODEOWNERS PR

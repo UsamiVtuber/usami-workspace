@@ -140,6 +140,14 @@ struct UsamiApp {
     audio_player: Option<Arc<AudioPlayer>>,
     vrm_controller: VrmController,
     vrm_view: Option<Entity<VrmView>>,
+    vrma_dir: Option<PathBuf>,
+    current_vrm_path: Option<PathBuf>,
+    available_vrms: Vec<PathBuf>,
+    available_vrmas: Vec<PathBuf>,
+    vrm_camera_preset: &'static str,
+    vrm_loading: bool,
+    vrm_status: Option<SharedString>,
+    vrm_error: Option<SharedString>,
     last_source: Option<SharedString>,
     last_timing: Option<api::ChatTiming>,
     server_affinity: Option<i32>,
@@ -263,7 +271,14 @@ impl UsamiApp {
             Some(asset_path("../usami/public/background.png")),
         ]);
 
+        let pref_vrm_path = prefs
+            .vrm_path
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|p| p.exists());
+
         let vrm_path = first_existing([
+            pref_vrm_path,
             env_path("USAMI_VRM_PATH"),
             Some(asset_path("../usami/public/models/shiro.vrm")),
             Some(asset_path("assets/shiro.vrm")),
@@ -275,7 +290,22 @@ impl UsamiApp {
             Some(asset_path("assets/vrma")),
         ]);
 
+        let mut available_vrms = assets::discover_vrm_models();
+        if let Some(ref current) = vrm_path {
+            let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
+            let already_listed = available_vrms.iter().any(|p| {
+                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
+            });
+            if !already_listed {
+                available_vrms.push(current.clone());
+            }
+        }
+
+        let available_vrmas = assets::discover_vrma_clips(vrma_dir.as_deref());
+
         let vrm_controller = VrmController::new();
+        vrm_controller.set_spring_bone_enabled(prefs.vrm_spring_bones);
+        vrm_controller.set_arm_clearance_deg(prefs.vrm_arm_clearance_deg);
         vrm_controller.set_emotion_with_options("tsundere", 4.5, false);
         crate::mascot::set_follow(prefs.mascot_follow);
         crate::mascot::start_gaze_loop(vrm_controller.clone());
@@ -312,16 +342,16 @@ impl UsamiApp {
         })
         .detach();
 
-        let vrm_view =
-            vrm_path.and_then(
-                |path| match VrmView::new(&path, vrma_dir, vrm_controller.clone()) {
-                    Ok(v) => Some(cx.new(|_cx| v)),
-                    Err(e) => {
-                        eprintln!("[gpui-vrm] Falha ao inicializar VrmView: {:?}", e);
-                        None
-                    }
-                },
-            );
+        let vrm_view = vrm_path.as_ref().and_then(|path| {
+            match VrmView::new(path, vrma_dir.clone(), vrm_controller.clone()) {
+                Ok(v) => Some(cx.new(|_cx| v)),
+                Err(e) => {
+                    eprintln!("[gpui-vrm] Falha ao inicializar VrmView: {:?}", e);
+                    None
+                }
+            }
+        });
+        let current_vrm_path = vrm_path;
 
         // O marcador de sessão precisa ser lido antes de gravar o novo: só assim
         // a abertura seguinte sabe se o processo anterior morreu sem fechar.
@@ -627,6 +657,14 @@ impl UsamiApp {
             audio_player: player,
             vrm_controller,
             vrm_view,
+            vrma_dir,
+            current_vrm_path,
+            available_vrms,
+            available_vrmas,
+            vrm_camera_preset: "full",
+            vrm_loading: false,
+            vrm_status: None,
+            vrm_error: None,
             last_source: None,
             last_timing: None,
             server_affinity: None,
@@ -810,6 +848,236 @@ impl UsamiApp {
         self.prefs.muted = self.is_muted;
         storage::save_prefs(&self.prefs);
         self.last_prefs_save = Instant::now();
+    }
+
+    /// Re-escaneia as pastas conhecidas de modelos `.vrm`, mantendo o modelo
+    /// customizado ativo na lista caso esteja fora das pastas padrão.
+    pub(crate) fn refresh_vrm_catalog(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        let mut models = assets::discover_vrm_models();
+        if let Some(ref current) = self.current_vrm_path {
+            let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
+            let already_listed = models.iter().any(|p| {
+                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
+            });
+            if !already_listed && current.exists() {
+                models.push(current.clone());
+            }
+        }
+        self.available_vrms = models;
+        self.available_vrmas = assets::discover_vrma_clips(self.vrma_dir.as_deref());
+        self.vrm_status = Some(
+            format!(
+                "Catálogo atualizado ({} modelos, {} animações).",
+                self.available_vrms.len(),
+                self.available_vrmas.len()
+            )
+            .into(),
+        );
+        self.vrm_error = None;
+        cx.notify();
+    }
+
+    /// Troca o modelo 3D VRM em tempo de execução sem congelar a interface:
+    /// o carregamento WGPU + texturas roda em background e só substitui a
+    /// `Entity<VrmView>` na UI thread ao concluir.
+    pub(crate) fn select_vrm_model(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        if self.vrm_loading {
+            return;
+        }
+        if !path.exists() {
+            self.vrm_error = Some(format!("Arquivo não encontrado: {}", path.display()).into());
+            self.vrm_status = None;
+            cx.notify();
+            return;
+        }
+        if !assets::is_supported_vrm_path(&path) {
+            self.vrm_error = Some("Selecione um arquivo com extensão .vrm ou .glb.".into());
+            self.vrm_status = None;
+            cx.notify();
+            return;
+        }
+
+        self.vrm_loading = true;
+        self.vrm_error = None;
+        self.vrm_status = Some(
+            format!(
+                "Carregando {}...",
+                assets::vrm_display_name(&path)
+            )
+            .into(),
+        );
+        cx.notify();
+
+        let vrma_dir = self.vrma_dir.clone();
+        let controller = self.vrm_controller.clone();
+        let target_path = path.clone();
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let load_path = target_path.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { VrmView::new(&load_path, vrma_dir, controller) })
+                    .await;
+
+                let _ = cx.update(|cx: &mut App| {
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |view, cx| {
+                            view.vrm_loading = false;
+                            match result {
+                                Ok(new_view) => {
+                                    let display_name = assets::vrm_display_name(&target_path);
+                                    let title = new_view.model_title().trim().to_string();
+                                    view.vrm_view = Some(cx.new(|_cx| new_view));
+                                    view.current_vrm_path = Some(target_path.clone());
+                                    view.vrm_controller
+                                        .set_spring_bone_enabled(view.prefs.vrm_spring_bones);
+                                    view.vrm_controller
+                                        .set_arm_clearance_deg(view.prefs.vrm_arm_clearance_deg);
+
+                                    let target_canon = std::fs::canonicalize(&target_path)
+                                        .unwrap_or_else(|_| target_path.clone());
+                                    let already_listed = view.available_vrms.iter().any(|p| {
+                                        std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())
+                                            == target_canon
+                                    });
+                                    if !already_listed {
+                                        view.available_vrms.push(target_path.clone());
+                                    }
+
+                                    if !title.is_empty() {
+                                        view.character_credit = title.into();
+                                    } else {
+                                        view.character_credit = display_name.clone().into();
+                                    }
+
+                                    view.prefs.vrm_path =
+                                        Some(target_path.to_string_lossy().to_string());
+                                    storage::save_prefs(&view.prefs);
+                                    view.vrm_error = None;
+                                    view.vrm_status =
+                                        Some(format!("Avatar ativo: {display_name}.").into());
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "[gpui-vrm] Falha ao carregar {}: {:?}",
+                                        target_path.display(),
+                                        err
+                                    );
+                                    view.vrm_status = None;
+                                    view.vrm_error = Some(
+                                        format!(
+                                            "Não foi possível carregar o modelo: {err}"
+                                        )
+                                        .into(),
+                                    );
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Abre o seletor nativo do sistema para escolher qualquer arquivo `.vrm` ou `.glb`.
+    pub(crate) fn pick_custom_vrm_prompt(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Selecione um avatar 3D (.vrm ou .glb)".into()),
+        });
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(Ok(Some(paths))) = receiver.await {
+                    if let Some(path) = paths.into_iter().next() {
+                        let _ = cx.update(|cx: &mut App| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |view, cx| {
+                                    view.select_vrm_model(path, cx);
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn toggle_vrm_spring_bones(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        self.prefs.vrm_spring_bones = !self.prefs.vrm_spring_bones;
+        self.vrm_controller
+            .set_spring_bone_enabled(self.prefs.vrm_spring_bones);
+        storage::save_prefs(&self.prefs);
+        cx.notify();
+    }
+
+    pub(crate) fn reset_vrm_camera(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        self.vrm_controller.reset_camera();
+        self.vrm_camera_preset = "full";
+        self.vrm_status = Some("Câmera restaurada para o enquadramento padrão.".into());
+        self.vrm_error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn apply_vrm_camera_preset(
+        &mut self,
+        preset: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.touch_ui(cx);
+        self.vrm_controller.reset_camera();
+        match preset {
+            "closeup" => self.vrm_controller.orbit_camera(0.0, 0.14, -2.5),
+            "bust" => self.vrm_controller.orbit_camera(0.0, 0.06, -1.4),
+            _ => {}
+        }
+        self.vrm_camera_preset = preset;
+        cx.notify();
+    }
+
+    pub(crate) fn set_vrm_arm_clearance_deg(&mut self, deg: f32, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        let clamped = deg.clamp(0.0, 45.0);
+        self.prefs.vrm_arm_clearance_deg = clamped;
+        self.vrm_controller.set_arm_clearance_deg(clamped);
+        storage::save_prefs(&self.prefs);
+        cx.notify();
+    }
+
+    pub(crate) fn preview_vrm_emotion(&mut self, tag: &'static str, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        if tag == "neutral" {
+            self.vrm_controller.clear_expressions();
+        } else {
+            self.vrm_controller.set_emotion_with_options(tag, 6.0, false);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn play_vrm_animation(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        let label = assets::vrma_display_name(&path);
+        let is_loop = label.eq_ignore_ascii_case("Idle")
+            || label.eq_ignore_ascii_case("Relax")
+            || label.eq_ignore_ascii_case("Talking");
+        self.vrm_controller
+            .play_vrma(path.to_string_lossy().to_string(), is_loop);
+        self.vrm_status = Some(format!("Animação disparada: {label}.").into());
+        self.vrm_error = None;
+        cx.notify();
     }
 
     pub(crate) fn attach_file_prompt(&mut self, cx: &mut Context<Self>) {

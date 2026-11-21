@@ -293,9 +293,9 @@ impl UsamiApp {
         let mut available_vrms = assets::discover_vrm_models();
         if let Some(ref current) = vrm_path {
             let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
-            let already_listed = available_vrms.iter().any(|p| {
-                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
-            });
+            let already_listed = available_vrms
+                .iter()
+                .any(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon);
             if !already_listed {
                 available_vrms.push(current.clone());
             }
@@ -531,15 +531,29 @@ impl UsamiApp {
         vrm_controller.set_portrait_enabled(true);
 
         let api_client = Arc::new(UsamiApiClient::from_env());
-        let lol_enabled = std::env::var("USAMI_LOL_ENABLED")
-            .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
-            .unwrap_or(true);
-        let (lol_handle, lol_endpoint) = if lol_enabled {
+        let lol_env_disabled = std::env::var("USAMI_LOL_ENABLED")
+            .map(|v| matches!(v.as_str(), "0" | "false" | "no"))
+            .unwrap_or(false);
+        let initial_lol_enabled = prefs.lol_enabled && !lol_env_disabled;
+        let (lol_handle, lol_endpoint) = {
             let (handle, endpoint) = lol::start(Arc::clone(&api_client), vrm_controller.clone());
+            if !initial_lol_enabled {
+                handle.send_control(lol::ipc::LolControlMsg::SetEnabled(false));
+            }
             (Some(handle), Some(endpoint))
+        };
+        let initial_lol_role = match prefs.lol_preferred_role.as_str() {
+            "top" => lol::types::PlayerRole::Top,
+            "jungle" => lol::types::PlayerRole::Jungle,
+            "mid" => lol::types::PlayerRole::Mid,
+            "adc" => lol::types::PlayerRole::Adc,
+            "support" => lol::types::PlayerRole::Support,
+            _ => lol::types::PlayerRole::Unknown,
+        };
+        let initial_lol_status: SharedString = if initial_lol_enabled {
+            "Aguardando partida do League of Legends...".into()
         } else {
-            eprintln!("[Usami.GG] Módulo LoL desativado via USAMI_LOL_ENABLED=false");
-            (None, None)
+            "Conector pausado nos Ajustes.".into()
         };
 
         if let Some(mut lol_endpoint) = lol_endpoint {
@@ -733,13 +747,13 @@ impl UsamiApp {
             lol_in_match: false,
             lol_loading: false,
             lol_champion: None,
-            lol_role: lol::types::PlayerRole::Unknown,
+            lol_role: initial_lol_role,
             lol_patch: None,
             lol_game_time: 0.0,
             lol_kda: (0, 0, 0),
             lol_cs: 0,
             lol_last_expression: lol::types::LolExpression::Neutral,
-            lol_status: "Aguardando LoL".into(),
+            lol_status: initial_lol_status,
             last_overlay_notify: None,
             #[cfg(target_os = "windows")]
             presence_subscription: None,
@@ -850,6 +864,75 @@ impl UsamiApp {
         self.last_prefs_save = Instant::now();
     }
 
+    pub(crate) fn toggle_lol_connector(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        let next = !self.prefs.lol_enabled;
+        self.prefs.lol_enabled = next;
+        storage::save_prefs(&self.prefs);
+        if let Some(ref handle) = self.lol_handle {
+            handle.send_control(lol::ipc::LolControlMsg::SetEnabled(next));
+        }
+        if !next {
+            self.lol_manual_overlay = false;
+            self.lol_overlay_active = false;
+            self.lol_in_match = false;
+            self.lol_loading = false;
+            lol::overlay_win32::apply_overlay_styles(false, false);
+            self.lol_status = "Conector pausado nos Ajustes.".into();
+        } else {
+            self.lol_status = "Aguardando partida do League of Legends...".into();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_lol_preferred_role(
+        &mut self,
+        role_key: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.touch_ui(cx);
+        self.prefs.lol_preferred_role = role_key.to_string();
+        storage::save_prefs(&self.prefs);
+        if !self.lol_in_match {
+            self.lol_role = match role_key {
+                "top" => lol::types::PlayerRole::Top,
+                "jungle" => lol::types::PlayerRole::Jungle,
+                "mid" => lol::types::PlayerRole::Mid,
+                "adc" => lol::types::PlayerRole::Adc,
+                "support" => lol::types::PlayerRole::Support,
+                _ => lol::types::PlayerRole::Unknown,
+            };
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_lol_manual_overlay(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        if !self.prefs.lol_enabled {
+            return;
+        }
+        self.lol_manual_overlay = !self.lol_manual_overlay;
+        self.lol_overlay_active = self.lol_in_match || self.lol_loading || self.lol_manual_overlay;
+        lol::overlay_win32::apply_overlay_styles(self.lol_overlay_active, self.lol_click_through);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_lol_click_through(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        self.lol_click_through = !self.lol_click_through;
+        lol::overlay_win32::apply_overlay_styles(self.lol_overlay_active, self.lol_click_through);
+        cx.notify();
+    }
+
+    pub(crate) fn refresh_lol_ddragon(&mut self, cx: &mut Context<Self>) {
+        self.touch_ui(cx);
+        if let Some(ref handle) = self.lol_handle {
+            handle.send_control(lol::ipc::LolControlMsg::RefreshDataDragon);
+            self.lol_status = "Atualizando cache DataDragon...".into();
+        }
+        cx.notify();
+    }
+
     /// Re-escaneia as pastas conhecidas de modelos `.vrm`, mantendo o modelo
     /// customizado ativo na lista caso esteja fora das pastas padrão.
     pub(crate) fn refresh_vrm_catalog(&mut self, cx: &mut Context<Self>) {
@@ -857,9 +940,9 @@ impl UsamiApp {
         let mut models = assets::discover_vrm_models();
         if let Some(ref current) = self.current_vrm_path {
             let current_canon = std::fs::canonicalize(current).unwrap_or_else(|_| current.clone());
-            let already_listed = models.iter().any(|p| {
-                std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon
-            });
+            let already_listed = models
+                .iter()
+                .any(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == current_canon);
             if !already_listed && current.exists() {
                 models.push(current.clone());
             }
@@ -901,13 +984,7 @@ impl UsamiApp {
 
         self.vrm_loading = true;
         self.vrm_error = None;
-        self.vrm_status = Some(
-            format!(
-                "Carregando {}...",
-                assets::vrm_display_name(&path)
-            )
-            .into(),
-        );
+        self.vrm_status = Some(format!("Carregando {}...", assets::vrm_display_name(&path)).into());
         cx.notify();
 
         let vrma_dir = self.vrma_dir.clone();
@@ -969,10 +1046,7 @@ impl UsamiApp {
                                     );
                                     view.vrm_status = None;
                                     view.vrm_error = Some(
-                                        format!(
-                                            "Não foi possível carregar o modelo: {err}"
-                                        )
-                                        .into(),
+                                        format!("Não foi possível carregar o modelo: {err}").into(),
                                     );
                                 }
                             }
@@ -1032,11 +1106,7 @@ impl UsamiApp {
         cx.notify();
     }
 
-    pub(crate) fn apply_vrm_camera_preset(
-        &mut self,
-        preset: &'static str,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn apply_vrm_camera_preset(&mut self, preset: &'static str, cx: &mut Context<Self>) {
         self.touch_ui(cx);
         self.vrm_controller.reset_camera();
         match preset {
@@ -1062,7 +1132,8 @@ impl UsamiApp {
         if tag == "neutral" {
             self.vrm_controller.clear_expressions();
         } else {
-            self.vrm_controller.set_emotion_with_options(tag, 6.0, false);
+            self.vrm_controller
+                .set_emotion_with_options(tag, 6.0, false);
         }
         cx.notify();
     }

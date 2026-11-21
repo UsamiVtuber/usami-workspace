@@ -64,6 +64,309 @@ fn render_settings_category<E: IntoElement>(
 
 impl UsamiApp {
     #[inline(never)]
+    fn render_game_connectors_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+
+        let lol_enabled = self.prefs.lol_enabled;
+        let lol_role_pref = self.prefs.lol_preferred_role.clone();
+        let lol_status = self.lol_status.clone();
+        let lol_patch = self.lol_patch.clone();
+        let lol_manual_overlay = self.lol_manual_overlay;
+        let lol_click_through = self.lol_click_through;
+        let lol_in_match = self.lol_in_match;
+
+        let mut cards = div().flex().flex_col().gap(px(sp.s2_5));
+
+        for descriptor in crate::lol::provider::default_game_connectors() {
+            if descriptor.id == "lol" {
+                let roles: [(&'static str, &'static str); 6] = [
+                    ("auto", "Auto"),
+                    ("top", "Top"),
+                    ("jungle", "Jungle"),
+                    ("mid", "Mid"),
+                    ("adc", "ADC"),
+                    ("support", "Suporte"),
+                ];
+
+                let mut role_chips = div().flex().flex_wrap().gap(px(sp.s1_5));
+                for (idx, (key, label)) in roles.into_iter().enumerate() {
+                    let is_selected = lol_role_pref == key;
+                    role_chips = role_chips.child(
+                        div()
+                            .id(ElementId::NamedInteger("lol-role-chip".into(), idx as u64))
+                            .cursor_pointer()
+                            .px(px(10.0))
+                            .py(px(5.0))
+                            .rounded(px(r.sm))
+                            .bg(if is_selected {
+                                c.accent_tint
+                            } else {
+                                c.surface_soft
+                            })
+                            .border_1()
+                            .border_color(if is_selected { c.primary } else { c.line })
+                            .text_size(px(ty.xs))
+                            .font_weight(if is_selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(c.pearl)
+                            .hover(|s| s.border_color(c.primary))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.set_lol_preferred_role(key, cx);
+                            }))
+                            .child(label),
+                    );
+                }
+
+                let patch_text = lol_patch
+                    .as_deref()
+                    .map(|p| format!("Patch DataDragon: {p}"))
+                    .unwrap_or_else(|| "Patch DataDragon: sincronização automática".to_string());
+
+                cards = cards.child(
+                    div()
+                        .p(px(sp.s3))
+                        .rounded(px(r.md))
+                        .bg(c.card_bg)
+                        .border_1()
+                        .border_color(if lol_enabled { c.primary } else { c.line })
+                        .flex()
+                        .flex_col()
+                        .gap(px(sp.s2))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(ty.xs))
+                                        .font_family(theme::FONT_DISPLAY)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c.primary)
+                                        .child(descriptor.title),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(6.0))
+                                        .py(px(2.0))
+                                        .rounded(px(4.0))
+                                        .bg(if lol_enabled {
+                                            theme::Palette::emerald_soft()
+                                        } else {
+                                            rgba(0x88888822)
+                                        })
+                                        .border_1()
+                                        .border_color(if lol_enabled {
+                                            theme::Palette::emerald_border()
+                                        } else {
+                                            rgba(0x88888866)
+                                        })
+                                        .text_size(px(ty.xs))
+                                        .text_color(if lol_enabled {
+                                            theme::Palette::emerald()
+                                        } else {
+                                            rgb(0x888888)
+                                        })
+                                        .child(if lol_in_match {
+                                            "EM PARTIDA"
+                                        } else if lol_enabled {
+                                            "ATIVADO"
+                                        } else {
+                                            "DESATIVADO"
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(ty.sm))
+                                .text_color(c.pearl)
+                                .child(descriptor.subtitle),
+                        )
+                        .child(div().text_size(px(ty.xs)).text_color(c.muted).child(
+                            SharedString::from(format!("Status: {} | {}", lol_status, patch_text)),
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(
+                                    div().text_size(px(ty.xs)).text_color(c.faint).child(
+                                        "Role preferida (quando não detectada automaticamente)",
+                                    ),
+                                )
+                                .child(role_chips),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(sp.s2))
+                                .mt(px(sp.s1))
+                                .child(
+                                    div()
+                                        .id("toggle-lol-connector-btn")
+                                        .cursor_pointer()
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(r.sm))
+                                        .bg(if lol_enabled {
+                                            c.surface_soft
+                                        } else {
+                                            c.primary
+                                        })
+                                        .border_1()
+                                        .border_color(if lol_enabled { c.line } else { c.primary })
+                                        .text_size(px(ty.xs))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(if lol_enabled { c.pearl } else { c.deep })
+                                        .hover(|s| s.opacity(0.9))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.toggle_lol_connector(cx);
+                                        }))
+                                        .child(if lol_enabled {
+                                            "Desativar conector"
+                                        } else {
+                                            "Ativar conector"
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("toggle-lol-overlay-preview-btn")
+                                        .cursor_pointer()
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(r.sm))
+                                        .bg(if lol_manual_overlay {
+                                            c.accent_tint
+                                        } else {
+                                            c.surface_soft
+                                        })
+                                        .border_1()
+                                        .border_color(if lol_manual_overlay {
+                                            c.primary
+                                        } else {
+                                            c.line
+                                        })
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.pearl)
+                                        .hover(|s| s.bg(c.line_strong))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.toggle_lol_manual_overlay(cx);
+                                        }))
+                                        .child(if lol_manual_overlay {
+                                            "Fechar overlay de teste"
+                                        } else {
+                                            "Pré-visualizar overlay"
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("toggle-lol-clickthrough-btn")
+                                        .cursor_pointer()
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(r.sm))
+                                        .bg(c.surface_soft)
+                                        .border_1()
+                                        .border_color(c.line)
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.pearl)
+                                        .hover(|s| s.bg(c.line_strong))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.toggle_lol_click_through(cx);
+                                        }))
+                                        .child(if lol_click_through {
+                                            "Click-through: Ativo"
+                                        } else {
+                                            "Click-through: Interativo"
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("refresh-lol-ddragon-btn")
+                                        .cursor_pointer()
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(r.sm))
+                                        .bg(c.surface_soft)
+                                        .border_1()
+                                        .border_color(c.line)
+                                        .text_size(px(ty.xs))
+                                        .text_color(c.pearl)
+                                        .hover(|s| s.bg(c.line_strong))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.refresh_lol_ddragon(cx);
+                                        }))
+                                        .child("Atualizar DataDragon"),
+                                ),
+                        ),
+                );
+            } else {
+                cards = cards.child(
+                    div()
+                        .p(px(sp.s3))
+                        .rounded(px(r.md))
+                        .bg(c.card_bg)
+                        .border_1()
+                        .border_color(c.line)
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(ty.sm))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c.pearl)
+                                        .child(descriptor.title),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(6.0))
+                                        .py(px(2.0))
+                                        .rounded(px(4.0))
+                                        .bg(c.surface_soft)
+                                        .border_1()
+                                        .border_color(c.line)
+                                        .text_size(px(10.0))
+                                        .text_color(c.faint)
+                                        .child("EM BREVE"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(ty.xs))
+                                .text_color(c.muted)
+                                .child(descriptor.subtitle),
+                        ),
+                );
+            }
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .child(settings_h3("CONECTORES DE JOGOS (NO-CODE)"))
+            .child(settings_p(
+                "Ative ou configure integrações de jogos sem editar arquivos .env. Novos jogos seguem o contrato GameProvider.",
+            ))
+            .child(cards)
+            .into_any_element()
+    }
+
+    #[inline(never)]
     fn render_vrm_avatar_card(
         &mut self,
         idx: usize,
@@ -159,17 +462,29 @@ impl UsamiApp {
 
         let mut row = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s3));
         for (idx, (tag, label)) in emotions.into_iter().enumerate() {
-            let is_selected = active_emotion == tag || (tag == "neutral" && active_emotion.is_empty());
+            let is_selected =
+                active_emotion == tag || (tag == "neutral" && active_emotion.is_empty());
             row = row.child(
                 div()
-                    .id(ElementId::NamedInteger("vrm-emotion-btn".into(), idx as u64))
+                    .id(ElementId::NamedInteger(
+                        "vrm-emotion-btn".into(),
+                        idx as u64,
+                    ))
                     .cursor_pointer()
                     .px(px(11.0))
                     .py(px(6.0))
                     .rounded(px(r.sm))
-                    .bg(if is_selected { c.accent_tint } else { c.card_bg })
+                    .bg(if is_selected {
+                        c.accent_tint
+                    } else {
+                        c.card_bg
+                    })
                     .border_1()
-                    .border_color(if is_selected { c.primary } else { c.line_strong })
+                    .border_color(if is_selected {
+                        c.primary
+                    } else {
+                        c.line_strong
+                    })
                     .text_size(px(ty.xs))
                     .font_weight(if is_selected {
                         FontWeight::SEMIBOLD
@@ -281,7 +596,11 @@ impl UsamiApp {
                     .px(px(11.0))
                     .py(px(6.0))
                     .rounded(px(r.sm))
-                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .bg(if is_active {
+                        c.accent_tint
+                    } else {
+                        c.surface_soft
+                    })
                     .border_1()
                     .border_color(if is_active { c.primary } else { c.line })
                     .text_size(px(ty.xs))
@@ -310,7 +629,11 @@ impl UsamiApp {
                     .px(px(10.0))
                     .py(px(5.0))
                     .rounded(px(r.sm))
-                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .bg(if is_active {
+                        c.accent_tint
+                    } else {
+                        c.surface_soft
+                    })
                     .border_1()
                     .border_color(if is_active { c.primary } else { c.line })
                     .text_size(px(ty.xs))
@@ -765,6 +1088,7 @@ impl UsamiApp {
                                     ),
                             ),
                     )
+                    .child(self.render_game_connectors_section(cx))
             }
             SettingsTab::Voice => {
                 let has_token = self.api_client.has_token();
@@ -1873,7 +2197,7 @@ impl UsamiApp {
             ))
             .child(render_settings_category(
                 "Integrações",
-                "Conexão com o backend e proatividade.",
+                "Conexão com o backend, proatividade e conectores de jogos.",
                 integrations,
             ))
             .child(render_settings_category(

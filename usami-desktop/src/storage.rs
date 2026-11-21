@@ -90,6 +90,12 @@ pub struct UiPrefs {
     /// No modo mascote, a cabeça e os olhos acompanham o cursor pela tela.
     #[serde(default)]
     pub mascot_follow: bool,
+    /// Conector de League of Legends (Usami.GG) habilitado pela interface No-Code.
+    #[serde(default = "default_true")]
+    pub lol_enabled: bool,
+    /// Role preferida no LoL (`auto`, `top`, `jungle`, `mid`, `adc`, `support`).
+    #[serde(default = "default_lol_role")]
+    pub lol_preferred_role: String,
     /// Caminho do modelo `.vrm` selecionado pelo usuário (None = padrão).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vrm_path: Option<String>,
@@ -99,6 +105,10 @@ pub struct UiPrefs {
     /// Abertura lateral dos braços em graus (0..=45) para evitar colisão com saias/mangas.
     #[serde(default = "default_arm_clearance_deg")]
     pub vrm_arm_clearance_deg: f32,
+}
+
+fn default_lol_role() -> String {
+    "auto".to_string()
 }
 
 fn default_arm_clearance_deg() -> f32 {
@@ -113,6 +123,8 @@ impl Default for UiPrefs {
             mascot: false,
             mascot_enabled: true,
             mascot_follow: false,
+            lol_enabled: true,
+            lol_preferred_role: default_lol_role(),
             vrm_path: None,
             vrm_spring_bones: true,
             vrm_arm_clearance_deg: default_arm_clearance_deg(),

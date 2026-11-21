@@ -133,12 +133,7 @@ pub fn group_skills_by_state(skills: &[AgentSkill]) -> (Vec<SkillStateBucket>, V
 /// Extrai motivos reais de ativação/dependência ou erros de manifesto sem duplicatas.
 pub fn collect_skill_reasons(skill: &AgentSkill) -> Vec<String> {
     let mut out = Vec::new();
-    for item in skill
-        .activation
-        .reasons
-        .iter()
-        .chain(skill.errors.iter())
-    {
+    for item in skill.activation.reasons.iter().chain(skill.errors.iter()) {
         let trimmed = item.trim();
         if trimmed.is_empty() {
             continue;
@@ -222,19 +217,16 @@ pub fn format_execution_time(iso: &str) -> String {
         let _year = date_segs.next();
         let month = date_segs.next();
         let day = date_segs.next();
-        let time_core = rest
-            .split(['.', 'Z', '+', '-'])
-            .next()
-            .unwrap_or(rest);
-        if let (Some(m), Some(d)) = (month, day) {
-            if time_core.len() >= 5 {
-                let hhmmss = if time_core.len() >= 8 {
-                    &time_core[..8]
-                } else {
-                    time_core
-                };
-                return format!("{d}/{m} {hhmmss}");
-            }
+        let time_core = rest.split(['.', 'Z', '+', '-']).next().unwrap_or(rest);
+        if let (Some(m), Some(d)) = (month, day)
+            && time_core.len() >= 5
+        {
+            let hhmmss = if time_core.len() >= 8 {
+                &time_core[..8]
+            } else {
+                time_core
+            };
+            return format!("{d}/{m} {hhmmss}");
         }
     }
     trimmed.to_string()
@@ -303,10 +295,7 @@ pub fn pending_confirmations_count(
         }
     }
     for proposal in proposals {
-        if proposal.status == "pending"
-            && !pending_skill_ids
-                .iter()
-                .any(|id| *id == proposal.skill_id.as_str())
+        if proposal.status == "pending" && !pending_skill_ids.contains(&proposal.skill_id.as_str())
         {
             pending_skill_ids.push(proposal.skill_id.as_str());
         }
@@ -482,7 +471,10 @@ mod tests {
             "skill desativada".into(),
             "ferramenta ausente: planner.sync".into(),
         ];
-        skill.errors = vec!["ferramenta ausente: planner.sync".into(), "erro extra".into()];
+        skill.errors = vec![
+            "ferramenta ausente: planner.sync".into(),
+            "erro extra".into(),
+        ];
         assert_eq!(
             collect_skill_reasons(&skill),
             vec![
@@ -509,13 +501,11 @@ mod tests {
         assert_eq!(unverified_ok.label, "Falhou");
 
         assert_eq!(
-            classify_execution_status(&make_exec("denied", false, Some("negada")))
-                .tone,
+            classify_execution_status(&make_exec("denied", false, Some("negada"))).tone,
             ExecutionTone::Warn
         );
         assert_eq!(
-            classify_execution_status(&make_exec("timeout", false, Some("tempo esgotado")))
-                .label,
+            classify_execution_status(&make_exec("timeout", false, Some("tempo esgotado"))).label,
             "Tempo esgotado"
         );
     }
@@ -659,4 +649,3 @@ mod tests {
         assert!(!is_quiet_hours_at(8, 30));
     }
 }
-

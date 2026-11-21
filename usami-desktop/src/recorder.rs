@@ -738,7 +738,8 @@ mod tests {
         // 25 quadros de 20ms = 500ms
         assert!(feed(&mut vad, &speech_frame(), 25).is_none());
         // 30 quadros de silêncio encerram no modo gamer
-        let utterance = feed(&mut vad, &silence_frame(), 31).expect("silêncio encerra no modo gamer");
+        let utterance =
+            feed(&mut vad, &silence_frame(), 31).expect("silêncio encerra no modo gamer");
         assert!(utterance.len() >= (RATE as usize * 400 / 1000)); // >= 400ms
     }
 }

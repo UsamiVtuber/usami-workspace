@@ -1,10 +1,10 @@
 //! Polling e apresentação de eventos proativos da Usami, além do controle de gavetas (drawers).
 
+use crate::UsamiApp;
 use crate::api::tokio_runtime;
-use crate::model::{current_phone_time, ActiveDrawer, ChatMessage, Sender};
+use crate::model::{ActiveDrawer, ChatMessage, Sender, current_phone_time};
 use crate::speech::sanitize_speech_text;
 use crate::storage;
-use crate::UsamiApp;
 use gpui::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

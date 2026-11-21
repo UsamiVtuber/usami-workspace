@@ -71,7 +71,8 @@ const MENU_EXIT: usize = 5;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Usami Desktop";
 
-static ORIGINAL_WNDPROC: OnceLock<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT> = OnceLock::new();
+static ORIGINAL_WNDPROC: OnceLock<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT> =
+    OnceLock::new();
 static APP_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static HIDDEN_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TRAY_ICON: AtomicIsize = AtomicIsize::new(0);
@@ -109,16 +110,22 @@ pub fn start(window: &Window) {
         let orig = SetWindowLongPtrW(
             app,
             GWLP_WNDPROC,
-            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as isize,
+            mascot_wndproc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT
+                as isize,
         );
         if orig == 0 {
             let err = windows_sys::Win32::Foundation::GetLastError();
-            eprintln!("[Usami Presence] Falha ao subclassear janela (SetWindowLongPtrW): erro {}", err);
+            eprintln!(
+                "[Usami Presence] Falha ao subclassear janela (SetWindowLongPtrW): erro {}",
+                err
+            );
         } else {
             let orig_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
                 std::mem::transmute(orig);
             let _ = ORIGINAL_WNDPROC.set(orig_proc);
-            println!("[Usami Presence] WndProc subclasseado com sucesso para interceptar minimizar");
+            println!(
+                "[Usami Presence] WndProc subclasseado com sucesso para interceptar minimizar"
+            );
         }
     }
     let app_id = app as isize;
@@ -337,9 +344,11 @@ unsafe extern "system" fn mascot_wndproc(
         return 0;
     }
     if let Some(&orig_proc) = ORIGINAL_WNDPROC.get() {
-        return orig_proc(hwnd, msg, wparam, lparam);
+        // SAFETY: orig_proc is a valid WNDPROC function pointer
+        return unsafe { orig_proc(hwnd, msg, wparam, lparam) };
     }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    // SAFETY: DefWindowProcW is a valid Win32 API function
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 fn app_window() -> HWND {
@@ -349,11 +358,7 @@ fn app_window() -> HWND {
 /// Expõe o HWND da janela principal para o módulo de overlay click-through.
 pub(crate) fn app_hwnd() -> Option<HWND> {
     let hwnd = app_window();
-    if hwnd.is_null() {
-        None
-    } else {
-        Some(hwnd)
-    }
+    if hwnd.is_null() { None } else { Some(hwnd) }
 }
 
 /// `true` quando a janela principal está minimizada ou escondida na bandeja.
@@ -621,7 +626,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let mascot_label = wide("Modo mascote (Ctrl+Alt+M)");
     let mascot_flags = MF_STRING
         | if mascot_active { MF_CHECKED } else { 0 }
-        | if crate::mascot::is_enabled() { 0 } else { MF_GRAYED };
+        | if crate::mascot::is_enabled() {
+            0
+        } else {
+            MF_GRAYED
+        };
     unsafe { AppendMenuW(menu, mascot_flags, MENU_MASCOT, mascot_label.as_ptr()) };
 
     let topmost_label = wide("Sempre no topo");
@@ -868,8 +877,14 @@ mod tests {
         assert_eq!(categorize_emotion("casual_angry"), ("angry", "Brava"));
         assert_eq!(categorize_emotion("tsundere"), ("angry", "Brava"));
         assert_eq!(categorize_emotion("casual_sad"), ("sad", "Triste"));
-        assert_eq!(categorize_emotion("casual_embarrassed"), ("awkward", "Sem jeito"));
-        assert_eq!(categorize_emotion("casual_surprise"), ("surprised", "Surpresa"));
+        assert_eq!(
+            categorize_emotion("casual_embarrassed"),
+            ("awkward", "Sem jeito")
+        );
+        assert_eq!(
+            categorize_emotion("casual_surprise"),
+            ("surprised", "Surpresa")
+        );
         assert_eq!(categorize_emotion("casual_worried"), ("doubt", "Pensativa"));
         assert_eq!(categorize_emotion("neutral"), ("neutral", "Normal"));
         assert_eq!(categorize_emotion("unknown_xyz"), ("neutral", "Normal"));

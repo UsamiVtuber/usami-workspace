@@ -65,6 +65,13 @@ fn render_settings_category<E: IntoElement>(
 impl UsamiApp {
     #[inline(never)]
     fn render_game_connectors_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_vrm_avatar_card(
+        &mut self,
+        idx: usize,
+        model_path: std::path::PathBuf,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let t = theme::theme();
         let c = t.color;
         let sp = t.space;
@@ -351,6 +358,170 @@ impl UsamiApp {
                                 .text_color(c.muted)
                                 .child(descriptor.subtitle),
                         ),
+        let display_name = crate::assets::vrm_display_name(&model_path);
+        let file_name = model_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("modelo.vrm")
+            .to_string();
+
+        div()
+            .id(ElementId::NamedInteger("vrm-card".into(), idx as u64))
+            .cursor_pointer()
+            .w(px(190.0))
+            .p(px(sp.s3))
+            .rounded(px(r.md))
+            .bg(if is_active { c.accent_tint } else { c.card_bg })
+            .border_1()
+            .border_color(if is_active { c.primary } else { c.line_strong })
+            .hover(|s| s.border_color(c.primary).bg(c.surface_soft))
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if !is_active && !this.vrm_loading {
+                    this.select_vrm_model(model_path.clone(), cx);
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(ty.sm))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.pearl)
+                            .child(SharedString::from(display_name)),
+                    )
+                    .when(is_active, |row| {
+                        row.child(
+                            div()
+                                .px(px(6.0))
+                                .py(px(1.5))
+                                .rounded(px(4.0))
+                                .bg(c.primary)
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(c.deep)
+                                .child("ATIVO"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(ty.xs))
+                    .text_color(c.faint)
+                    .child(SharedString::from(file_name)),
+            )
+            .into_any_element()
+    }
+
+    #[inline(never)]
+    fn render_vrm_emotions_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+        let active_emotion = self.vrm_controller.active_emotion().to_ascii_lowercase();
+
+        let emotions: [(&'static str, &'static str); 8] = [
+            ("neutral", "Neutra"),
+            ("happy", "Feliz"),
+            ("tsundere", "Tsundere"),
+            ("shy", "Tímida"),
+            ("surprised", "Surpresa"),
+            ("sad", "Triste"),
+            ("sleepy", "Sonolenta"),
+            ("angry", "Brava"),
+        ];
+
+        let mut row = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s3));
+        for (idx, (tag, label)) in emotions.into_iter().enumerate() {
+            let is_selected = active_emotion == tag || (tag == "neutral" && active_emotion.is_empty());
+            row = row.child(
+                div()
+                    .id(ElementId::NamedInteger("vrm-emotion-btn".into(), idx as u64))
+                    .cursor_pointer()
+                    .px(px(11.0))
+                    .py(px(6.0))
+                    .rounded(px(r.sm))
+                    .bg(if is_selected { c.accent_tint } else { c.card_bg })
+                    .border_1()
+                    .border_color(if is_selected { c.primary } else { c.line_strong })
+                    .text_size(px(ty.xs))
+                    .font_weight(if is_selected {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(c.pearl)
+                    .hover(|s| s.border_color(c.primary).bg(c.surface_soft))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.preview_vrm_emotion(tag, cx);
+                    }))
+                    .child(label),
+            );
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .child(settings_h3("TESTADOR DE EXPRESSÕES FACIAIS"))
+            .child(settings_p(
+                "Dispare uma expressão para validar os blendshapes do modelo ativo.",
+            ))
+            .child(row)
+            .into_any_element()
+    }
+
+    #[inline(never)]
+    fn render_vrm_animations_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+        let clips = self.available_vrmas.clone();
+        let active_vrma = self.vrm_controller.active_vrma().to_ascii_lowercase();
+
+        let mut chips = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s3));
+        if clips.is_empty() {
+            chips = chips.child(settings_hint(
+                "Nenhum arquivo .vrma encontrado na pasta de animações.",
+            ));
+        } else {
+            for (idx, clip_path) in clips.into_iter().enumerate() {
+                let label = crate::assets::vrma_display_name(&clip_path);
+                let file_stem = clip_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let is_active = !active_vrma.is_empty()
+                    && (active_vrma == label.to_ascii_lowercase()
+                        || active_vrma == file_stem
+                        || active_vrma.ends_with(&file_stem));
+                chips = chips.child(
+                    div()
+                        .id(ElementId::NamedInteger("vrm-anim-btn".into(), idx as u64))
+                        .cursor_pointer()
+                        .px(px(11.0))
+                        .py(px(6.0))
+                        .rounded(px(r.sm))
+                        .bg(if is_active { c.accent_tint } else { c.card_bg })
+                        .border_1()
+                        .border_color(if is_active { c.primary } else { c.line_strong })
+                        .text_size(px(ty.xs))
+                        .text_color(c.pearl)
+                        .hover(|s| s.border_color(c.primary).bg(c.surface_soft))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.play_vrm_animation(clip_path.clone(), cx);
+                        }))
+                        .child(SharedString::from(label)),
                 );
             }
         }
@@ -364,6 +535,385 @@ impl UsamiApp {
             ))
             .child(cards)
             .into_any_element()
+    }
+            .child(settings_h3("CATÁLOGO DE ANIMAÇÕES (.VRMA)"))
+            .child(settings_p(
+                "Clipes detectados automaticamente na pasta de animações. Clique para executar no avatar.",
+            ))
+            .child(chips)
+            .into_any_element()
+    }
+
+    #[inline(never)]
+    fn render_vrm_camera_and_arms_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+        let preset = self.vrm_camera_preset;
+        let arm_deg = self.prefs.vrm_arm_clearance_deg;
+
+        let presets: [(&'static str, &'static str); 3] = [
+            ("closeup", "Close-up (Rosto)"),
+            ("bust", "Busto"),
+            ("full", "Corpo Inteiro"),
+        ];
+
+        let mut preset_row = div().flex().flex_wrap().gap(px(sp.s2)).mb(px(sp.s2_5));
+        for (idx, (key, label)) in presets.into_iter().enumerate() {
+            let is_active = preset == key;
+            preset_row = preset_row.child(
+                div()
+                    .id(ElementId::NamedInteger("vrm-cam-preset".into(), idx as u64))
+                    .cursor_pointer()
+                    .px(px(11.0))
+                    .py(px(6.0))
+                    .rounded(px(r.sm))
+                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .border_1()
+                    .border_color(if is_active { c.primary } else { c.line })
+                    .text_size(px(ty.xs))
+                    .font_weight(if is_active {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(c.pearl)
+                    .hover(|s| s.border_color(c.primary))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.apply_vrm_camera_preset(key, cx);
+                    }))
+                    .child(label),
+            );
+        }
+
+        let arm_presets: [f32; 5] = [0.0, 8.0, 16.0, 24.0, 32.0];
+        let mut arm_row = div().flex().flex_wrap().items_center().gap(px(sp.s2));
+        for (idx, deg) in arm_presets.into_iter().enumerate() {
+            let is_active = (arm_deg - deg).abs() < 0.5;
+            arm_row = arm_row.child(
+                div()
+                    .id(ElementId::NamedInteger("vrm-arm-deg".into(), idx as u64))
+                    .cursor_pointer()
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded(px(r.sm))
+                    .bg(if is_active { c.accent_tint } else { c.surface_soft })
+                    .border_1()
+                    .border_color(if is_active { c.primary } else { c.line })
+                    .text_size(px(ty.xs))
+                    .text_color(c.pearl)
+                    .hover(|s| s.border_color(c.primary))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.set_vrm_arm_clearance_deg(deg, cx);
+                    }))
+                    .child(SharedString::from(format!("{:.0}°", deg))),
+            );
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .p(px(sp.s3))
+                    .mb(px(sp.s2))
+                    .rounded(px(r.md))
+                    .bg(c.card_bg)
+                    .border_1()
+                    .border_color(c.line)
+                    .flex()
+                    .flex_col()
+                    .gap(px(sp.s2))
+                    .child(
+                        div()
+                            .text_size(px(ty.sm))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.pearl)
+                            .child("Enquadramento da câmera"),
+                    )
+                    .child(preset_row),
+            )
+            .child(
+                div()
+                    .p(px(sp.s3))
+                    .mb(px(sp.s3))
+                    .rounded(px(r.md))
+                    .bg(c.card_bg)
+                    .border_1()
+                    .border_color(c.line)
+                    .flex()
+                    .flex_col()
+                    .gap(px(sp.s2))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(ty.sm))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c.pearl)
+                                    .child(SharedString::from(format!(
+                                        "Abertura lateral dos braços ({:.0}°)",
+                                        arm_deg
+                                    ))),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.faint)
+                                    .child("Evita que braços atravessem saias ou mangas largas em avatares customizados."),
+                            ),
+                    )
+                    .child(arm_row),
+            )
+            .into_any_element()
+    }
+
+    #[inline(never)]
+    fn render_settings_avatar(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = theme::theme();
+        let c = t.color;
+        let sp = t.space;
+        let r = t.radius;
+        let ty = t.text;
+
+        let available_vrms = self.available_vrms.clone();
+        let current_vrm_canon = self
+            .current_vrm_path
+            .as_ref()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
+        let current_model_label = self
+            .current_vrm_path
+            .as_ref()
+            .map(|p| {
+                let name = crate::assets::vrm_display_name(p);
+                let file = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("desconhecido");
+                format!("{name} ({file})")
+            })
+            .unwrap_or_else(|| "Nenhum modelo carregado".to_string());
+        let vrm_loading = self.vrm_loading;
+        let vrm_status = self.vrm_status.clone();
+        let vrm_error = self.vrm_error.clone();
+        let spring_bones_enabled = self.prefs.vrm_spring_bones;
+
+        let mut cards_row = div().flex().flex_wrap().gap(px(sp.s2_5)).mb(px(sp.s3));
+        if available_vrms.is_empty() {
+            cards_row = cards_row.child(settings_hint(
+                "Nenhum arquivo .vrm encontrado nas pastas padrão. Use o botão abaixo para carregar do disco.",
+            ));
+        } else {
+            for (idx, model_path) in available_vrms.into_iter().enumerate() {
+                let path_canon =
+                    std::fs::canonicalize(&model_path).unwrap_or_else(|_| model_path.clone());
+                let is_active = current_vrm_canon
+                    .as_ref()
+                    .is_some_and(|cur| cur == &path_canon);
+                let card = self.render_vrm_avatar_card(idx, model_path, is_active, cx);
+                cards_row = cards_row.child(card);
+            }
+        }
+
+        let actions_bar = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(sp.s2))
+            .mb(px(sp.s3))
+            .child(
+                div()
+                    .id("vrm-pick-custom-btn")
+                    .cursor_pointer()
+                    .px(px(12.0))
+                    .py(px(7.0))
+                    .rounded(px(r.sm))
+                    .bg(c.primary)
+                    .text_size(px(ty.xs))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c.deep)
+                    .hover(|s| s.opacity(0.9))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if !this.vrm_loading {
+                            this.pick_custom_vrm_prompt(cx);
+                        }
+                    }))
+                    .child(if vrm_loading {
+                        "Carregando modelo..."
+                    } else {
+                        "Carregar arquivo .vrm"
+                    }),
+            )
+            .child(
+                div()
+                    .id("vrm-refresh-catalog-btn")
+                    .cursor_pointer()
+                    .px(px(12.0))
+                    .py(px(7.0))
+                    .rounded(px(r.sm))
+                    .bg(c.surface_soft)
+                    .border_1()
+                    .border_color(c.line)
+                    .text_size(px(ty.xs))
+                    .text_color(c.pearl)
+                    .hover(|s| s.bg(c.line_strong))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.refresh_vrm_catalog(cx);
+                    }))
+                    .child("Atualizar lista"),
+            )
+            .into_any_element();
+
+        let physics_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .p(px(sp.s3))
+            .mb(px(sp.s2))
+            .rounded(px(r.md))
+            .bg(c.card_bg)
+            .border_1()
+            .border_color(c.line)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(ty.sm))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.pearl)
+                            .child("Física de cabelo e roupa (SpringBones)"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(ty.xs))
+                            .text_color(c.faint)
+                            .child("Simulação Verlet em tempo real para cabelos, fitas e saias."),
+                    ),
+            )
+            .child(
+                div()
+                    .id("vrm-toggle-spring-bones-btn")
+                    .cursor_pointer()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .rounded(px(r.sm))
+                    .bg(if spring_bones_enabled {
+                        c.accent_tint
+                    } else {
+                        c.surface_soft
+                    })
+                    .border_1()
+                    .border_color(if spring_bones_enabled {
+                        c.primary
+                    } else {
+                        c.line_strong
+                    })
+                    .text_size(px(ty.xs))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c.pearl)
+                    .hover(|s| s.border_color(c.primary))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.toggle_vrm_spring_bones(cx);
+                    }))
+                    .child(if spring_bones_enabled {
+                        "Ativada"
+                    } else {
+                        "Desativada"
+                    }),
+            )
+            .into_any_element();
+
+        let camera_row = div()
+            .flex()
+            .gap(px(sp.s2))
+            .mb(px(sp.s3))
+            .child(
+                div()
+                    .id("vrm-reset-camera-btn")
+                    .cursor_pointer()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .rounded(px(r.sm))
+                    .bg(c.surface_soft)
+                    .border_1()
+                    .border_color(c.line)
+                    .text_size(px(ty.xs))
+                    .text_color(c.pearl)
+                    .hover(|s| s.bg(c.line_strong))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.reset_vrm_camera(cx);
+                    }))
+                    .child("Resetar enquadramento da câmera"),
+            )
+            .into_any_element();
+
+        let mut view = div()
+            .flex()
+            .flex_col()
+            .child(settings_h3("GALERIA DE AVATARES 3D (.VRM)"))
+            .child(settings_p(
+                "Clique em um avatar para trocar em tempo real no motor WeebUI ou carregue qualquer arquivo .vrm do seu computador.",
+            ))
+            .child(cards_row.into_any_element())
+            .child(actions_bar);
+
+        if let Some(status) = vrm_status {
+            view = view.child(
+                div()
+                    .mb(px(sp.s2_5))
+                    .p(px(sp.s2))
+                    .rounded(px(r.sm))
+                    .bg(c.surface_soft)
+                    .border_1()
+                    .border_color(c.line)
+                    .text_size(px(ty.xs))
+                    .text_color(c.pearl)
+                    .child(status)
+                    .into_any_element(),
+            );
+        }
+
+        if let Some(err) = vrm_error {
+            view = view.child(
+                div()
+                    .mb(px(sp.s2_5))
+                    .p(px(sp.s2))
+                    .rounded(px(r.sm))
+                    .bg(c.danger_muted_bg)
+                    .border_1()
+                    .border_color(c.danger_muted_border)
+                    .text_size(px(ty.xs))
+                    .text_color(rgb(0xff8a8a))
+                    .child(err)
+                    .into_any_element(),
+            );
+        }
+
+        let emotions_section = self.render_vrm_emotions_section(cx);
+        let animations_section = self.render_vrm_animations_section(cx);
+        let camera_arms_section = self.render_vrm_camera_and_arms_section(cx);
+
+        view.child(emotions_section)
+            .child(animations_section)
+            .child(settings_h3("FÍSICA E CÂMERA (WEEBUI)"))
+            .child(physics_row)
+            .child(camera_arms_section)
+            .child(camera_row)
+            .child(settings_h3("RENDERIZADOR 3D NATIVO"))
+            .child(settings_dl_row("Motor", "WeebUI (gpui-vrm / WGPU 60 FPS)"))
+            .child(settings_dl_row("Formato", "VRM 0.x / 1.0 e glTF 2.0"))
+            .child(settings_dl_row("Modelo ativo", current_model_label))
+            .child(settings_dl_row("Janela", "Transparência nativa + Drag"))
+            .child(settings_hint(
+                "A escolha do avatar e da física fica salva localmente e é restaurada ao abrir o app.",
+            ))
     }
 
     fn render_settings_section(
@@ -568,21 +1118,7 @@ impl UsamiApp {
                         "A chave da API Gemini permanece exclusivamente no servidor local.",
                     ))
             }
-            SettingsTab::Avatar => div()
-                .flex()
-                .flex_col()
-                .child(settings_h3("RENDERIZADOR 3D NATIVO"))
-                .child(settings_dl_row("Formato", "VRM 1.0 (GLTF Estendido)"))
-                .child(settings_dl_row("Modelo", "白ー (shiro)"))
-                .child(settings_dl_row("Renderizador", "WGPU 60 FPS (Nativo)"))
-                .child(settings_dl_row("Janela", "Transparência nativa + Drag"))
-                .child(settings_hint(
-                    "A renderização gráfica opera via WGPU com aceleração de hardware nativa.",
-                ))
-                .child(settings_h3("CENÁRIO E ANIMAÇÕES"))
-                .child(settings_p(
-                    "O app desktop foca na presença direta da Usami na área de trabalho. Cenários completos e controle de ossos pertencem à versão web.",
-                )),
+            SettingsTab::Avatar => self.render_settings_avatar(cx),
             SettingsTab::Memory => {
                 let has_token = self.api_client.has_token();
                 let loading = self.memory_loading;

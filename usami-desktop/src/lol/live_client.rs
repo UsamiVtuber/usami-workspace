@@ -199,11 +199,7 @@ pub fn advance_state(state: PollerState, probe: ProbeResult) -> (PollerState, Op
             },
             ProbeResult::Active(data),
         ) => {
-            let game_ended_event = data
-                .events
-                .events
-                .iter()
-                .any(|e| e.event_name == "GameEnd");
+            let game_ended_event = data.events.events.iter().any(|e| e.event_name == "GameEnd");
             if game_ended_event {
                 return (PollerState::MatchEnded, Some(data));
             }
@@ -315,7 +311,9 @@ mod tests {
     fn state_machine_transitions_cleanly() {
         let s0 = PollerState::default();
         let (s1, _) = advance_state(s0, ProbeResult::Closed);
-        assert!(matches!(s1, PollerState::GameClosed { backoff } if backoff == Duration::from_secs(4)));
+        assert!(
+            matches!(s1, PollerState::GameClosed { backoff } if backoff == Duration::from_secs(4))
+        );
 
         let (s2, _) = advance_state(s1, ProbeResult::Loading);
         assert!(s2.is_loading());

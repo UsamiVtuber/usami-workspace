@@ -100,6 +100,19 @@ pub struct UiPrefs {
 
 fn default_lol_role() -> String {
     "auto".to_string()
+    /// Caminho do modelo `.vrm` selecionado pelo usuário (None = padrão).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vrm_path: Option<String>,
+    /// Simulação de física de cabelo/roupa (SpringBones) no motor WeebUI.
+    #[serde(default = "default_true")]
+    pub vrm_spring_bones: bool,
+    /// Abertura lateral dos braços em graus (0..=45) para evitar colisão com saias/mangas.
+    #[serde(default = "default_arm_clearance_deg")]
+    pub vrm_arm_clearance_deg: f32,
+}
+
+fn default_arm_clearance_deg() -> f32 {
+    8.0
 }
 
 impl Default for UiPrefs {
@@ -112,6 +125,9 @@ impl Default for UiPrefs {
             mascot_follow: false,
             lol_enabled: true,
             lol_preferred_role: default_lol_role(),
+            vrm_path: None,
+            vrm_spring_bones: true,
+            vrm_arm_clearance_deg: default_arm_clearance_deg(),
         }
     }
 }
@@ -201,7 +217,10 @@ pub fn save_media_file(filename: &str, _mime_type: &str, bytes: &[u8]) -> Option
     match fs::write(&path, bytes) {
         Ok(()) => Some(format!("media/{file_name}")),
         Err(error) => {
-            eprintln!("[Usami Storage] falha ao gravar mídia {}: {error}", path.display());
+            eprintln!(
+                "[Usami Storage] falha ao gravar mídia {}: {error}",
+                path.display()
+            );
             None
         }
     }

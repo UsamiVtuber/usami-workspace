@@ -3,7 +3,7 @@ use gpui::*;
 
 use crate::text_input::tokenize_text_spans;
 use crate::theme;
-use crate::{icon, ActiveDrawer, UsamiApp};
+use crate::{ActiveDrawer, UsamiApp, icon};
 
 impl UsamiApp {
     pub(crate) fn render_bottom_controls(
@@ -23,7 +23,8 @@ impl UsamiApp {
         let is_muted = self.is_muted;
         let is_companion = self.is_companion_mode;
         let live_transcript = self.live_transcript.clone();
-        let user_speaking_turn = is_calling && is_listening && !is_busy && !live_transcript.is_empty();
+        let user_speaking_turn =
+            is_calling && is_listening && !is_busy && !live_transcript.is_empty();
         let show_bubble = self.show_bubble || user_speaking_turn;
         let caption_text: SharedString = if user_speaking_turn {
             format!("🎙 {live_transcript}").into()

@@ -31,12 +31,12 @@ fn read_token_from_env_file(path: &Path) -> Option<String> {
         if trimmed.starts_with('#') || !trimmed.starts_with("USAMI_API_TOKEN") {
             continue;
         }
-        if let Some((key, val)) = trimmed.split_once('=') {
-            if key.trim() == "USAMI_API_TOKEN" {
-                let token = val.trim().trim_matches('"').trim_matches('\'').trim();
-                if !token.is_empty() {
-                    return Some(token.to_string());
-                }
+        if let Some((key, val)) = trimmed.split_once('=')
+            && key.trim() == "USAMI_API_TOKEN"
+        {
+            let token = val.trim().trim_matches('"').trim_matches('\'').trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
             }
         }
     }
@@ -63,10 +63,10 @@ pub fn api_token_from_env() -> Option<String> {
     ];
 
     for candidate in candidates {
-        if candidate.is_file() {
-            if let Some(token) = read_token_from_env_file(&candidate) {
-                return Some(token);
-            }
+        if candidate.is_file()
+            && let Some(token) = read_token_from_env_file(&candidate)
+        {
+            return Some(token);
         }
     }
 
@@ -941,7 +941,7 @@ pub struct MediaAnalyzeResponse {
 
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
         let b1 = chunk.get(1).copied().unwrap_or(0);
@@ -1172,12 +1172,13 @@ impl UsamiApiClient {
                 {
                     return Err(format!("Erro {status}: {msg}"));
                 }
-                return Err(format!("O servidor local respondeu com erro {}.", status.as_u16()));
+                return Err(format!(
+                    "O servidor local respondeu com erro {}.",
+                    status.as_u16()
+                ));
             }
 
-            res.json::<ChatResponse>()
-                .await
-                .map_err(map_request_error)
+            res.json::<ChatResponse>().await.map_err(map_request_error)
         })
         .await
     }
@@ -1668,10 +1669,10 @@ impl UsamiApiClient {
         let res = req.send().await.map_err(map_request_error)?;
         let status = res.status();
         if !status.is_success() {
-            if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                    return Err(msg.to_string());
-                }
+            if let Ok(err_json) = res.json::<serde_json::Value>().await
+                && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+            {
+                return Err(msg.to_string());
             }
             return Err(format!("Falha ao consultar skills (HTTP {status})."));
         }
@@ -1695,10 +1696,10 @@ impl UsamiApiClient {
         let res = req.send().await.map_err(map_request_error)?;
         let status = res.status();
         if !status.is_success() {
-            if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                    return Err(msg.to_string());
-                }
+            if let Ok(err_json) = res.json::<serde_json::Value>().await
+                && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+            {
+                return Err(msg.to_string());
             }
             return Err(format!("Falha ao consultar execuções (HTTP {status})."));
         }
@@ -1725,10 +1726,10 @@ impl UsamiApiClient {
             let res = req.send().await.map_err(map_request_error)?;
             let status = res.status();
             if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
+                if let Ok(err_json) = res.json::<serde_json::Value>().await
+                    && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+                {
+                    return Err(msg.to_string());
                 }
                 return Err(format!("Falha ao atualizar skill (HTTP {status})."));
             }
@@ -1756,10 +1757,10 @@ impl UsamiApiClient {
             let res = req.send().await.map_err(map_request_error)?;
             let status = res.status();
             if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
+                if let Ok(err_json) = res.json::<serde_json::Value>().await
+                    && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+                {
+                    return Err(msg.to_string());
                 }
                 return Err(format!("{fallback_err} (HTTP {status})."));
             }
@@ -1786,10 +1787,10 @@ impl UsamiApiClient {
             let res = req.send().await.map_err(map_request_error)?;
             let status = res.status();
             if !status.is_success() {
-                if let Ok(err_json) = res.json::<serde_json::Value>().await {
-                    if let Some(msg) = err_json.get("error").and_then(|v| v.as_str()) {
-                        return Err(msg.to_string());
-                    }
+                if let Ok(err_json) = res.json::<serde_json::Value>().await
+                    && let Some(msg) = err_json.get("error").and_then(|v| v.as_str())
+                {
+                    return Err(msg.to_string());
                 }
                 return Err(format!("{fallback_err} (HTTP {status})."));
             }
@@ -2873,7 +2874,10 @@ mod tests {
         );
         let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
         let result = poll_outside_tokio(client.transcribe(b"RIFF....WAVE".to_vec()));
-        assert_eq!(result.expect("transcribe fora do tokio"), "oi fora do tokio");
+        assert_eq!(
+            result.expect("transcribe fora do tokio"),
+            "oi fora do tokio"
+        );
     }
 
     #[test]

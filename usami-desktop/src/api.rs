@@ -527,6 +527,25 @@ pub struct PersonalityUpdateRequest {
     pub reset: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalityPresetApplyResponse {
+    pub ok: bool,
+    #[serde(rename = "presetId", default)]
+    pub preset_id: String,
+    pub personality: PersonalityData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterCardImportResponse {
+    pub ok: bool,
+    #[serde(rename = "characterId")]
+    pub character_id: String,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub activated: bool,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1655,6 +1674,113 @@ impl UsamiApiClient {
             .await?;
         self.set_character_id(&res.character_id);
         Ok(res)
+    }
+
+    pub async fn apply_personality_preset(
+        &self,
+        preset_id: &str,
+    ) -> Result<PersonalityPresetApplyResponse, String> {
+        let client = self.client.clone();
+        let url = format!("{}/api/personality/preset", self.base_url);
+        let token = self.token.clone();
+        let char_id = self.character_id();
+        let payload = serde_json::json!({ "presetId": preset_id });
+
+        run_on_tokio(async move {
+            let mut req = client
+                .post(url)
+                .header("x-character-id", char_id)
+                .json(&payload);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+                return Err(format!("Erro HTTP {status} ao aplicar preset: {err_text}"));
+            }
+            res.json::<PersonalityPresetApplyResponse>()
+                .await
+                .map_err(map_request_error)
+        })
+        .await
+    }
+
+    pub async fn import_character_card(
+        &self,
+        bytes: Vec<u8>,
+        is_png: bool,
+        activate: bool,
+    ) -> Result<CharacterCardImportResponse, String> {
+        let client = self.client.clone();
+        let url = format!(
+            "{}/api/characters/import-card?activate={}",
+            self.base_url,
+            if activate { "true" } else { "false" }
+        );
+        let token = self.token.clone();
+        let content_type = if is_png {
+            "image/png"
+        } else {
+            "application/json"
+        };
+
+        let res: CharacterCardImportResponse = run_on_tokio(async move {
+            let mut req = client
+                .post(url)
+                .header("Content-Type", content_type)
+                .body(bytes);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+                return Err(format!("Erro HTTP {status} ao importar cartão: {err_text}"));
+            }
+            res.json::<CharacterCardImportResponse>()
+                .await
+                .map_err(map_request_error)
+        })
+        .await?;
+
+        if res.activated && !res.character_id.is_empty() {
+            self.set_character_id(&res.character_id);
+        }
+        Ok(res)
+    }
+
+    pub async fn export_character_card(
+        &self,
+        character_id: &str,
+        format: &str,
+    ) -> Result<Vec<u8>, String> {
+        let client = self.client.clone();
+        let url = format!(
+            "{}/api/characters/{}/export-card?format={}",
+            self.base_url, character_id, format
+        );
+        let token = self.token.clone();
+
+        run_on_tokio(async move {
+            let mut req = client.get(url);
+            if let Some(ref t) = token {
+                req = req.header("x-usami-token", t);
+            }
+            let res = req.send().await.map_err(map_request_error)?;
+            let status = res.status();
+            if !status.is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+                return Err(format!("Erro HTTP {status} ao exportar cartão: {err_text}"));
+            }
+            res.bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(map_request_error)
+        })
+        .await
     }
 
     pub async fn get_agent_skills(&self) -> Result<AgentSkillsResponse, String> {
@@ -2891,5 +3017,42 @@ mod tests {
         let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
         let result = poll_outside_tokio(client.send_chat("oi por voz", false));
         assert_eq!(result.expect("send_chat fora do tokio").reply, "hmph, oi!");
+    }
+
+    #[test]
+    fn personality_preset_and_character_card_work_outside_tokio_reactor() {
+        let (base_url, requests) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"presetId":"cohost","personality":{"traits":{"warmth":75,"curiosity":85,"playfulness":85,"pride":35},"customPrompt":"ok"}}"#,
+        );
+        let client = UsamiApiClient::with_token(base_url, Some("tok".into()));
+        let res = poll_outside_tokio(client.apply_personality_preset("cohost"))
+            .expect("apply_personality_preset fora do tokio");
+        assert!(res.ok);
+        assert_eq!(res.preset_id, "cohost");
+        assert_eq!(res.personality.traits.playfulness, 85);
+        assert_eq!(requests.recv().unwrap().path, "/api/personality/preset");
+
+        let (base_url2, requests2) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"characterId":"luna-card","format":"usami_card_v1","activated":true}"#,
+        );
+        let client2 = UsamiApiClient::with_token(base_url2, Some("tok".into()));
+        let imported = poll_outside_tokio(client2.import_character_card(
+            b"{\"name\":\"Luna\"}".to_vec(),
+            false,
+            true,
+        ))
+        .expect("import_character_card fora do tokio");
+        assert_eq!(imported.character_id, "luna-card");
+        assert_eq!(client2.character_id(), "luna-card");
+        assert_eq!(
+            requests2.recv().unwrap().path,
+            "/api/characters/import-card?activate=true"
+        );
     }
 }

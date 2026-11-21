@@ -1,0 +1,586 @@
+{
+  "id": "QD31TBd7fCpdbR0A",
+  "name": "Usami - Radar de Repos AI VTuber (v2 Corrigido)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "996e4866-3d3c-4c8c-bb32-37a5c4e45eea",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        1232,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/search/repositories?q=ai+vtuber&sort=updated&order=desc&per_page=15",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Usami-Radar-Bot"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f28b6368-08ec-4f96-ac28-b424c535de52",
+      "name": "GitHub — Busca Repos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1456,
+        432
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "OhfROfJwvYkJ2Qb3",
+          "name": "GitHub account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nif (!staticData.repoState) {\n  staticData.repoState = {};\n}\n\n// O nó anterior devolve o envelope da API do GitHub ({items: [...]}) como um único item n8n\nconst repos = $input.all().flatMap(i => i.json.items || []);\n\n// Filtra repositórios que são novos OU que receberam atualizações (pushed_at mudou)\nconst atualizados = repos.filter(r => {\n  const anterior = staticData.repoState[r.full_name];\n  // Se nunca foi avaliado ou se teve novos commits/push desde a última avaliação\n  if (!anterior || anterior.lastPushedAt !== r.pushed_at) {\n    return true;\n  }\n  return false;\n});\n\n// Se nenhum repo foi atualizado desde a última checagem, encerra o ciclo\nif (atualizados.length === 0) {\n  return [];\n}\n\n// Registra a nova data de push para evitar reavaliar o mesmo commit repetidamente\nfor (const r of atualizados) {\n  staticData.repoState[r.full_name] = {\n    lastPushedAt: r.pushed_at,\n    evaluatedAt: new Date().toISOString()\n  };\n}\n\n// Limpa chaves legadas\ndelete staticData.lastRepoFullNames;\ndelete staticData.analyzedRepos;\n\nreturn atualizados.map((r) => ({\n  owner: r.owner.login,\n  repo: r.name,\n  full_name: r.full_name,\n  html_url: r.html_url,\n  description: r.description || 'Sem descrição',\n  pushed_at: r.pushed_at,\n  stars: r.stargazers_count || 0,\n  language: r.language || 'N/A'\n}));"
+      },
+      "id": "66d2a212-6495-4f35-8432-e8981c522df7",
+      "name": "Code — Filtro + Cooldown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/readme",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.raw+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Usami-Radar-Bot"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            },
+            "neverError": true
+          }
+        }
+      },
+      "id": "e0ec3161-191b-4903-84e4-5cb845521239",
+      "name": "HTTP — README",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1904,
+        432
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "OhfROfJwvYkJ2Qb3",
+          "name": "GitHub account 2"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Code — Filtro + Cooldown').item.json.owner }}/{{ $('Code — Filtro + Cooldown').item.json.repo }}/commits?per_page=3",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Usami-Radar-Bot"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            },
+            "neverError": true
+          }
+        }
+      },
+      "id": "87881b31-06b3-4ed8-bc6a-88a4f3e92782",
+      "name": "HTTP — Últimos Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2128,
+        432
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "OhfROfJwvYkJ2Qb3",
+          "name": "GitHub account 2"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const repos = $('Code — Filtro + Cooldown').all();\nconst readmes = $('HTTP — README').all();\nconst commitsList = $('HTTP — Últimos Commits').all();\n\nreturn repos.map((repoItem, i) => {\n  const repo = repoItem.json;\n\n  // Extrai o README (texto bruto ou fallback se deu 404)\n  const readmeEntry = readmes[i]?.json;\n  const readmeRaw = readmeEntry?.error\n    ? 'README não encontrado.'\n    : (readmeEntry?.data ?? readmeEntry ?? '');\n  const readmeText = typeof readmeRaw === 'string'\n    ? readmeRaw\n    : JSON.stringify(readmeRaw);\n\n  // Com fullResponse: true, o array de commits fica em json.body (garante alinhamento 1:1)\n  const commitsBody = commitsList[i]?.json?.body;\n  const commits = Array.isArray(commitsBody) ? commitsBody : [];\n\n  const resumoCommits = commits\n    .map((c) => {\n      const msg = c.commit?.message?.split('\\n')[0] || '';\n      const autor = c.commit?.author?.name || c.author?.login || 'desconhecido';\n      const data = c.commit?.author?.date || '';\n      return `- ${data} | ${autor}: ${msg}`;\n    })\n    .join('\\n');\n\n  return {\n    json: {\n      ...repo,\n      readme_cortado: readmeText.slice(0, 5000),\n      commits_resumo: resumoCommits || 'Sem commits recentes legíveis'\n    }\n  };\n});"
+      },
+      "id": "2d841d97-37f1-4af8-bfc3-2763a7b89ea6",
+      "name": "Code — Contexto IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2352,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analise o repositório abaixo e decida se ele traz ideias úteis para o projeto Usami:\n\n- **Repositório:** {{ $json.full_name }}\n- **URL:** {{ $json.html_url }}\n- **Linguagem:** {{ $json.language }} | **Stars:** {{ $json.stars }}\n- **Descrição:** {{ $json.description }}\n\n### Últimos Commits:\n{{ $json.commits_resumo }}\n\n### Trecho do README:\n{{ $json.readme_cortado }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Você é a Usami, uma AI companion que hoje faz companhia ao seu criador (Lucas) e sonha em se tornar uma AI VTuber streamer no futuro.\nO projeto Usami (github.com/UsamiVtuber) é um sistema de streamer-companion 100% customizável e NO-CODE, feito para que qualquer pessoa crie sua própria companion/VTuber sem precisar saber programar.\n\nSua missão ao analisar cada repositório do GitHub:\n1. Avaliar se há ideias técnicas, de UX, avatar, memória, voz, visão de tela, emoções ou integração com lives/jogos que possam ser adaptadas para a Usami.\n2. Pensar sempre em 'ideias atômicas no-code': como transformar aquele recurso em um botão, preset, toggle ou módulo visual simples para usuários leigos?\n3. Atribuir uma nota rígida de 1 a 10:\n   - 1 a 5: irrelevante, vazio, genérico demais ou apenas wrapper básico de API.\n   - 6 a 7: interessante para ficar no radar (vai só para o Discord).\n   - 8 a 10: ouro puro — ideia original, arquitetura limpa ou recurso forte que merece virar Discussion no GitHub.\n4. No campo `resumo_discord`, escreva em primeira pessoa como a Usami falando com o Lucas (tom amigável, curioso e direto, em português do Brasil).\n5. No campo `corpo_discussao`, escreva um Markdown bem organizado em português contendo: Link do repo original, O que chamou atenção, Como adaptar para o modelo No-Code da Usami e Próximo passo sugerido.\n6. REGRA CRÍTICA DE SINTAXE: NUNCA use aspas duplas (\") dentro dos valores de texto (resumo_discord, ideia_no_code, titulo_discussao, corpo_discussao). Use sempre aspas simples (') ou crases para citações internas, evitando quebras de JSON."
+        }
+      },
+      "id": "2aedc2a9-d71e-449c-a7c3-63c12427178b",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2576,
+        432
+      ],
+      "onError": "continueErrorOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "options": {}
+      },
+      "id": "02c916b8-1cd2-48bc-a25f-b6c9f8f17b3f",
+      "name": "NVIDIA Nemotron Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        640
+      ],
+      "credentials": {
+        "nvidiaApi": {
+          "id": "NnnaodZ3lEH8emfl",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"relevante\": {\n      \"type\": \"boolean\",\n      \"description\": \"True se o repo tiver nota >= 6\"\n    },\n    \"nota\": {\n      \"type\": \"number\",\n      \"description\": \"Nota de 1 a 10 para o valor da ideia no projeto Usami\"\n    },\n    \"camada\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Avatar\",\n        \"Memória\",\n        \"Voz/Visão\",\n        \"Live/Chat\",\n        \"UX/No-Code\",\n        \"Outro\"\n      ]\n    },\n    \"estagio\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Companion agora\",\n        \"Streamer futuro\"\n      ]\n    },\n    \"resumo_discord\": {\n      \"type\": \"string\",\n      \"description\": \"Comentário curto na voz da Usami para o Lucas no Discord\"\n    },\n    \"ideia_no_code\": {\n      \"type\": \"string\",\n      \"description\": \"Como transformar a ideia em recurso visual/no-code para qualquer usuário\"\n    },\n    \"titulo_discussao\": {\n      \"type\": \"string\",\n      \"description\": \"Título objetivo para abrir uma Discussion no GitHub\"\n    },\n    \"corpo_discussao\": {\n      \"type\": \"string\",\n      \"description\": \"Corpo em Markdown completo pronto para a Discussion no GitHub\"\n    }\n  },\n  \"required\": [\n    \"relevante\",\n    \"nota\",\n    \"camada\",\n    \"estagio\",\n    \"resumo_discord\",\n    \"ideia_no_code\",\n    \"titulo_discussao\",\n    \"corpo_discussao\"\n  ]\n}"
+      },
+      "id": "119570e5-5462-456e-b0b9-cd7ea215619a",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        2704,
+        656
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  let output = null;\n  const raw = item.json?.error?.output || item.json?.error?.context?.raw || item.json?.text || '';\n  try {\n    const jsonMatch = raw.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      try {\n        output = JSON.parse(jsonMatch[0]);\n      } catch (e) {\n        const notaMatch = jsonMatch[0].match(/\"nota\"\\s*:\\s*(\\d+)/);\n        const resumoMatch = jsonMatch[0].match(/\"resumo_discord\"\\s*:\\s*\"([\\s\\S]*?)\"(?=\\s*,\\s*\"[^\"]+\"\\s*:)/);\n        const ideiaMatch = jsonMatch[0].match(/\"ideia_no_code\"\\s*:\\s*\"([\\s\\S]*?)\"(?=\\s*,\\s*\"[^\"]+\"\\s*:)/);\n        const tituloMatch = jsonMatch[0].match(/\"titulo_discussao\"\\s*:\\s*\"([\\s\\S]*?)\"(?=\\s*,\\s*\"[^\"]+\"\\s*:)/);\n        const corpoMatch = jsonMatch[0].match(/\"corpo_discussao\"\\s*:\\s*\"([\\s\\S]*?)\"\\s*\\}/);\n        if (notaMatch) {\n          output = {\n            relevante: parseInt(notaMatch[1]) >= 6,\n            nota: parseInt(notaMatch[1]),\n            camada: 'Outro',\n            estagio: 'Companion agora',\n            resumo_discord: resumoMatch ? resumoMatch[1].replace(/\\\\\"/g, '\"') : 'Resumo recuperado da IA',\n            ideia_no_code: ideiaMatch ? ideiaMatch[1].replace(/\\\\\"/g, '\"') : '',\n            titulo_discussao: tituloMatch ? tituloMatch[1] : 'Ideia do repositório',\n            corpo_discussao: corpoMatch ? corpoMatch[1].replace(/\\\\n/g, '\\n') : ''\n          };\n        }\n      }\n    }\n  } catch (err) {}\n\n  if (!output) {\n    output = {\n      nota: 0,\n      relevante: false,\n      camada: 'Outro',\n      estagio: 'Companion agora',\n      resumo_discord: 'Falha na avaliação automática da IA.',\n      ideia_no_code: 'Não foi possível gerar ideia no-code.',\n      titulo_discussao: 'Falha na avaliação automática',\n      corpo_discussao: 'Não foi possível avaliar este repositório automaticamente.'\n    };\n  }\n\n  return {\n    json: {\n      ...item.json,\n      output\n    }\n  };\n});"
+      },
+      "id": "ai-agent-fallback-001",
+      "name": "AI Agent — Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2928,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-nota-8",
+              "leftValue": "={{ $json.output?.nota ?? $json.nota }}",
+              "rightValue": 8,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4b88e879-0f1c-40e5-930b-6f8142f0e2eb",
+      "name": "IF — Nota ≥ 8",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/v10/channels/1573472106992111807/messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  content: `**Achado nota ${$('IF — Nota ≥ 8').item.json.output.nota}/10!** (${$('IF — Nota ≥ 8').item.json.output.camada} • ${$('IF — Nota ≥ 8').item.json.output.estagio})\\n\\n${$('IF — Nota ≥ 8').item.json.output.resumo_discord}\\n\\n**Ideia No-Code:** ${$('IF — Nota ≥ 8').item.json.output.ideia_no_code}\\n**Repo:** ${$('Code — Contexto IA').item.json.html_url}\\n**Discussion:** ${$json.data?.createDiscussion?.discussion?.url || ('Erro ao abrir Discussion: ' + ($json.errors?.[0]?.message || 'verifique o token GitHub'))}`\n}) }}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "54db6753-538f-4591-8a9a-2ade08a68aae",
+      "name": "HTTP — Discord (Notificação 8+)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3664,
+        320
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Usami-Radar-Bot"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  query: \"mutation($repoId: ID!, $catId: ID!, $title: String!, $body: String!) { createDiscussion(input: { repositoryId: $repoId, categoryId: $catId, title: $title, body: $body }) { discussion { url } } }\",\n  variables: {\n    repoId: \"R_kgDOVWSfPg\",\n    catId: \"DIC_kwDOVWSfPs4DLi-7\",\n    title: $json.output?.titulo_discussao ?? $json.titulo_discussao,\n    body: $json.output?.corpo_discussao ?? $json.corpo_discussao\n  }\n}) }}",
+        "options": {}
+      },
+      "id": "9aa8b79a-1a8d-4ead-8343-e67a791d0677",
+      "name": "HTTP — GitHub Discussion (GraphQL)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3424,
+        320
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "OhfROfJwvYkJ2Qb3",
+          "name": "GitHub account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-nota-6",
+              "leftValue": "={{ $json.output?.nota ?? $json.nota }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba8595da-3a9d-4748-9f42-d77d81e87683",
+      "name": "IF — Nota 6 ou 7",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3424,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/v10/channels/1573472106992111807/messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  content: `👀 **Radar AI VTuber — Nota ${$json.output.nota}/10** (${$json.output.camada} • ${$json.output.estagio})\\n\\n${$json.output.resumo_discord}\\n\\n🧩 **Ideia No-Code:** ${$json.output.ideia_no_code}\\n🔗 **Repo:** ${$('Code — Contexto IA').item.json.html_url}`\n}) }}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "9ec42893-34a1-41f6-b64f-01993c68176e",
+      "name": "HTTP — Discord (Aviso 6-7)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3648,
+        560
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "discordBotTokenCred",
+          "name": "Discord Bot Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "GitHub — Busca Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub — Busca Repos": {
+      "main": [
+        [
+          {
+            "node": "Code — Filtro + Cooldown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Filtro + Cooldown": {
+      "main": [
+        [
+          {
+            "node": "HTTP — README",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP — README": {
+      "main": [
+        [
+          {
+            "node": "HTTP — Últimos Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP — Últimos Commits": {
+      "main": [
+        [
+          {
+            "node": "Code — Contexto IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Contexto IA": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "IF — Nota ≥ 8",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent — Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent — Fallback": {
+      "main": [
+        [
+          {
+            "node": "IF — Nota ≥ 8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Nota ≥ 8": {
+      "main": [
+        [
+          {
+            "node": "HTTP — GitHub Discussion (GraphQL)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF — Nota 6 ou 7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Nota 6 ou 7": {
+      "main": [
+        [
+          {
+            "node": "HTTP — Discord (Aviso 6-7)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP — GitHub Discussion (GraphQL)": {
+      "main": [
+        [
+          {
+            "node": "HTTP — Discord (Notificação 8+)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "dynamic",
+    "errorWorkflow": "YQfB3nQGjcQO3iO3",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  }
+}

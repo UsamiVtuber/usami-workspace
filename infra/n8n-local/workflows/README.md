@@ -188,3 +188,14 @@ Credenciais necessárias no n8n após importar os JSONs:
 - **Webhook do Discord:** o nó `Notificar Discord` usa `{{ $env.DISCORD_VAGAS_WEBHOOK_URL }}`. Defina a URL em `~/n8n/.env` e recrie o container (`docker compose up -d n8n`); variável vazia faz o nó falhar com erro visível na observabilidade, em vez de sumir em silêncio.
 - **Segurança & Idempotência:** Não realiza submissões/candidaturas automáticas (apenas triagem e notificação informativa). Idempotência garantida pelo nó nativo `rowNotExists` que impede alertas repetidos ou re-cadastro de IDs já processados.
 
+## Usami - Radar de Repos AI VTuber (v2 Corrigido)
+- **Arquivo:** `Usami - Radar de Repos AI VTuber (v2 Corrigido).json` (id `QD31TBd7fCpdbR0A`).
+- **Gatilho:** Schedule Trigger a cada **2 horas**.
+- **Nós:** Schedule → HTTP Request (`GitHub — Busca Repos`) → Code (`Code — Filtro + Cooldown`) → HTTP Request (`HTTP — README`) → HTTP Request (`HTTP — Últimos Commits`) → Code (`Code — Contexto IA`) → AI Agent (`NVIDIA Nemotron Chat Model` + `Structured Output Parser` + `AI Agent — Fallback`) → If (`IF — Nota ≥ 8`) → GraphQL (`HTTP — GitHub Discussion`) + Discord (`8+`) · ou If (`IF — Nota 6 ou 7`) → Discord (`6-7`).
+- **Cooldown e Idempotência:** `Code — Filtro + Cooldown` normaliza `full_name` em minúsculas, deduplica o lote atual, aplica **cooldown mínimo de 7 dias** por repositório (mesmo se `pushed_at` mudar no mesmo dia), ignora repositórios sem novos pushes após o cooldown e poda entradas com mais de 90 dias no `staticData`.
+- **Observabilidade do Fallback:** `AI Agent — Fallback` usa extração por bloco markdown e varredura balanceada de chaves JSON antes do fallback por regex, registrando `console.warn('[radar-ai-fallback]', ...)` e contadores em `staticData.aiFallbackStats`.
+- **Permissão do PAT GitHub (erro `Resource not accessible by personal access token`):** a mutação GraphQL `createDiscussion` em `UsamiVtuber/Usami-Core` exige que a credencial `GitHub account 2` no n8n use um token com permissão de escrita em Discussions:
+  - **Fine-grained PAT:** repositório `UsamiVtuber/Usami-Core` com **Discussions: Read and write** (e Contents: Read-only para busca/README).
+  - **Classic PAT:** escopo `repo` (ou `public_repo`) + `write:discussion`.
+- **Publicação:** lembre-se de reimportar/atualizar o JSON atualizado na instância do Nyarch (`http://10.42.0.1:5678`), pois versionar o export aqui não publica automaticamente no n8n.
+

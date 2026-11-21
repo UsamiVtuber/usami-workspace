@@ -3055,4 +3055,77 @@ mod tests {
             "/api/characters/import-card?activate=true"
         );
     }
+
+    #[test]
+    fn personality_preset_and_character_card_handle_errors_and_activate_false() {
+        // 1. Token invalido (401) em apply_personality_preset
+        let (base_url_401, _) = spawn_server(
+            "401 Unauthorized",
+            "application/json",
+            "",
+            br#"{"error":"Token invalido"}"#,
+        );
+        let client_401 = UsamiApiClient::with_token(base_url_401, Some("bad-tok".into()));
+        let err_401 = poll_outside_tokio(client_401.apply_personality_preset("cohost"))
+            .expect_err("esperava erro 401");
+        assert!(err_401.contains("401"));
+
+        // 2. Payload invalido (400) em import_character_card
+        let (base_url_400, _) = spawn_server(
+            "400 Bad Request",
+            "application/json",
+            "",
+            br#"{"error":"Cartao invalido"}"#,
+        );
+        let client_400 = UsamiApiClient::with_token(base_url_400, Some("tok".into()));
+        let err_400 =
+            poll_outside_tokio(client_400.import_character_card(b"not-valid".to_vec(), true, true))
+                .expect_err("esperava erro 400");
+        assert!(err_400.contains("400"));
+
+        // 3. import_character_card com activate=false nao troca character_id ativo
+        let (base_url_noact, requests_noact) = spawn_server(
+            "200 OK",
+            "application/json",
+            "",
+            br#"{"ok":true,"characterId":"secondary-card","format":"usami_card_v1","activated":false}"#,
+        );
+        let client_noact = UsamiApiClient::with_token(base_url_noact, Some("tok".into()));
+        let initial_id = client_noact.character_id();
+        let res_noact = poll_outside_tokio(client_noact.import_character_card(
+            b"{\"name\":\"Secondary\"}".to_vec(),
+            false,
+            false,
+        ))
+        .expect("import com activate=false");
+        assert!(!res_noact.activated);
+        assert_eq!(client_noact.character_id(), initial_id);
+        assert_eq!(
+            requests_noact.recv().unwrap().path,
+            "/api/characters/import-card?activate=false"
+        );
+
+        // 4. export_character_card: 404 para character_id inexistente + 200 retornando bytes
+        let (base_url_404, _) = spawn_server(
+            "404 Not Found",
+            "application/json",
+            "",
+            br#"{"error":"Manifesto nao encontrado"}"#,
+        );
+        let client_404 = UsamiApiClient::with_token(base_url_404, Some("tok".into()));
+        let err_404 = poll_outside_tokio(client_404.export_character_card("ghost-id", "png"))
+            .expect_err("esperava erro 404");
+        assert!(err_404.contains("404"));
+
+        let (base_url_png, requests_png) =
+            spawn_server("200 OK", "image/png", "", b"\x89PNG\r\n\x1a\nFAKE");
+        let client_png = UsamiApiClient::with_token(base_url_png, Some("tok".into()));
+        let bytes = poll_outside_tokio(client_png.export_character_card("usami-classic", "png"))
+            .expect("export png");
+        assert_eq!(bytes, b"\x89PNG\r\n\x1a\nFAKE");
+        assert_eq!(
+            requests_png.recv().unwrap().path,
+            "/api/characters/usami-classic/export-card?format=png"
+        );
+    }
 }

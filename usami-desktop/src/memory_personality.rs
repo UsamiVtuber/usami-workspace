@@ -398,6 +398,7 @@ impl UsamiApp {
         }
 
         let is_png = ext == "png";
+        let activate_on_import = self.card_activate_on_import;
         self.personality_loading = true;
         self.personality_error = None;
         self.personality_status = Some("Importando cartão de companheira...".into());
@@ -412,7 +413,10 @@ impl UsamiApp {
                     .spawn(async move { std::fs::read(&path).map_err(|e| e.to_string()) })
                     .await;
                 let res = match bytes_res {
-                    Ok(bytes) => api.import_character_card(bytes, is_png, true).await,
+                    Ok(bytes) => {
+                        api.import_character_card(bytes, is_png, activate_on_import)
+                            .await
+                    }
                     Err(err) => Err(format!("Falha ao ler arquivo: {err}")),
                 };
 
@@ -422,15 +426,22 @@ impl UsamiApp {
                             view.personality_loading = false;
                             match res {
                                 Ok(imported) => {
-                                    view.personality_status = Some(
+                                    let status_msg = if imported.activated {
                                         format!(
                                             "Cartão '{}' importado ({}) e ativado!",
                                             imported.character_id, imported.format
                                         )
-                                        .into(),
-                                    );
+                                    } else {
+                                        format!(
+                                            "Cartão '{}' importado ({}) na biblioteca (sem ativar).",
+                                            imported.character_id, imported.format
+                                        )
+                                    };
+                                    view.personality_status = Some(status_msg.into());
                                     view.personality_error = None;
-                                    view.fetch_personality(cx);
+                                    if imported.activated {
+                                        view.fetch_personality(cx);
+                                    }
                                 }
                                 Err(err) => {
                                     view.personality_error = Some(err.into());
@@ -470,8 +481,7 @@ impl UsamiApp {
                 let res = api.export_character_card(&char_id, format).await;
                 let write_res = match res {
                     Ok(bytes) => {
-                        let out_dir = std::env::var_os("USERPROFILE")
-                            .map(|p| std::path::PathBuf::from(p).join("Downloads"))
+                        let out_dir = dirs::download_dir()
                             .filter(|p| p.exists())
                             .unwrap_or_else(std::env::temp_dir);
                         let filename = format!("{char_id}.card.{format}");

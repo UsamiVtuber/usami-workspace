@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cpal = "0.18.2"
+dirs = "6"
 gpui = "0.2.2"
 gpui-vrm = { git = "https://github.com/Rukafuu/weebui", rev = "a663b5055c79ee347428e466ed29e6e0683c6f24" }
 reqwest = { version = "0.13.5", features = ["json", "multipart", "stream"] }

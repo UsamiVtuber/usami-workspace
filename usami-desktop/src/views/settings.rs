@@ -374,6 +374,7 @@ impl UsamiApp {
         let r = t.radius;
         let ty = t.text;
         let active_char = self.api_client.character_id();
+        let activate_on_import = self.card_activate_on_import;
 
         let presets: [(&'static str, &'static str, &'static str); 4] = [
             (
@@ -454,6 +455,46 @@ impl UsamiApp {
                             .child(SharedString::from(format!(
                                 "Companheira ativa: {active_char} · Compatível com cards Usami v1 e PNG chara (YuriOS / SillyTavern)."
                             ))),
+                    )
+                    .child(
+                        div()
+                            .id("toggle-card-activate-on-import")
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .py(px(2.0))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.card_activate_on_import = !this.card_activate_on_import;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .px(px(7.0))
+                                    .py(px(2.0))
+                                    .rounded(px(4.0))
+                                    .bg(if activate_on_import {
+                                        c.accent_tint
+                                    } else {
+                                        c.surface_soft
+                                    })
+                                    .border_1()
+                                    .border_color(if activate_on_import {
+                                        c.primary
+                                    } else {
+                                        c.line
+                                    })
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c.pearl)
+                                    .child(if activate_on_import { "SIM" } else { "NÃO" }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(ty.xs))
+                                    .text_color(c.pearl)
+                                    .child("Ativar companheira automaticamente ao importar"),
+                            ),
                     )
                     .child(
                         div()

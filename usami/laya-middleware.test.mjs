@@ -1,6 +1,9 @@
 // Testes para usami/laya-middleware.mjs
 import { strict as assert } from "node:assert";
 
+// Reduzir o timeout do laya-serve para tornar o teste de timeout rapido.
+process.env.LAYA_REQUEST_TIMEOUT_MS = "300";
+
 let fetchImpl = null;
 const calls = [];
 
